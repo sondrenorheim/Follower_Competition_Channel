@@ -1,21 +1,28 @@
 """
 Instagram API Integration Module
 Handles fetching followers and profile images from Instagram Graph API
+Also supports web scraping via Instaloader as an alternative
 Falls back to offline mode if API is unavailable
+
+⚠️ WARNING: Web scraping violates Instagram's Terms of Service
+   and may result in account suspension. Use at your own risk.
 """
 
 import requests
 from PIL import Image
 import io
 import random
+import os
 from typing import List, Dict, Optional
 import config
 
 
 class InstagramAPI:
     """
-    Handles Instagram Graph API integration for fetching followers
-    Provides offline mode with placeholder data if API is unavailable
+    Handles Instagram data fetching via multiple methods:
+    1. Official Instagram Graph API (recommended, requires business account)
+    2. Web scraping via Instaloader (⚠️ violates ToS, account risk)
+    3. Offline mode with placeholder data (safe, no authentication)
     """
 
     def __init__(self, access_token: str = "", user_id: str = ""):
@@ -29,10 +36,13 @@ class InstagramAPI:
         self.access_token = access_token or config.INSTAGRAM_ACCESS_TOKEN
         self.user_id = user_id or config.INSTAGRAM_USER_ID
         self.base_url = "https://graph.instagram.com"
+        self.scraper_mode = getattr(config, 'USE_INSTALOADER_SCRAPER', False)
+        self.insta_username = getattr(config, 'INSTAGRAM_USERNAME', '')
+        self.insta_password = getattr(config, 'INSTAGRAM_PASSWORD', '')
 
     def fetch_followers(self, count: int = 500) -> List[Dict[str, any]]:
         """
-        Fetch followers from Instagram API or generate placeholder data
+        Fetch followers using configured method (API, Scraper, or Offline)
 
         Args:
             count: Number of followers to fetch/generate
@@ -40,25 +50,36 @@ class InstagramAPI:
         Returns:
             List of follower dictionaries with 'id', 'username', and 'avatar' keys
         """
-        # Check if we should use offline mode
-        if config.USE_OFFLINE_MODE or not self.access_token or not self.user_id:
-            print(f"Running in OFFLINE MODE - Generating {count} placeholder followers")
-            return self._generate_placeholder_followers(count)
-
-        # Try to fetch from Instagram API
-        try:
-            print(f"Attempting to fetch followers from Instagram API...")
-            followers = self._fetch_from_api(count)
-            if followers:
-                print(f"Successfully fetched {len(followers)} followers from API")
-                return followers
-            else:
-                print("API returned no data, falling back to offline mode")
+        # Priority 1: Use Instaloader scraper if enabled
+        if self.scraper_mode and self.insta_username:
+            print(f"⚠️  Using INSTALOADER SCRAPER (violates Instagram ToS)")
+            try:
+                followers = self._fetch_via_instaloader(count)
+                if followers:
+                    print(f"✅ Successfully scraped {len(followers)} followers")
+                    return followers
+            except Exception as e:
+                print(f"❌ Scraper failed: {e}")
+                print(f"Falling back to offline mode")
                 return self._generate_placeholder_followers(count)
-        except Exception as e:
-            print(f"API fetch failed: {e}")
-            print(f"Falling back to offline mode")
-            return self._generate_placeholder_followers(count)
+
+        # Priority 2: Use official API if credentials available
+        if not config.USE_OFFLINE_MODE and self.access_token and self.user_id:
+            try:
+                print(f"Attempting to fetch followers from Instagram Graph API...")
+                followers = self._fetch_from_api(count)
+                if followers:
+                    print(f"✅ Successfully fetched {len(followers)} followers from API")
+                    return followers
+                else:
+                    print("API returned no data, falling back to offline mode")
+            except Exception as e:
+                print(f"❌ API fetch failed: {e}")
+                print(f"Falling back to offline mode")
+
+        # Priority 3: Offline mode (default, safe)
+        print(f"Running in OFFLINE MODE - Generating {count} placeholder followers")
+        return self._generate_placeholder_followers(count)
 
     def _fetch_from_api(self, count: int) -> Optional[List[Dict[str, any]]]:
         """
@@ -128,6 +149,135 @@ class InstagramAPI:
             return img.convert("RGBA")
         except Exception as e:
             print(f"Failed to download avatar from {url}: {e}")
+            return None
+
+    def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, any]]]:
+        """
+        Fetch followers using Instaloader web scraping library
+
+        ⚠️ WARNING: This violates Instagram's Terms of Service!
+        - Your account may be banned or suspended
+        - Use a burner account if possible
+        - Don't run this frequently (Instagram has rate limits)
+        - Two-factor authentication must be disabled or handled manually
+
+        Args:
+            count: Number of followers to fetch
+
+        Returns:
+            List of follower data or None if failed
+        """
+        try:
+            import instaloader
+        except ImportError:
+            print("❌ Instaloader not installed. Run: pip install instaloader")
+            return None
+
+        print(f"Initializing Instaloader...")
+        L = instaloader.Instaloader(
+            download_pictures=True,
+            download_videos=False,
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False,
+            quiet=True  # Suppress verbose output
+        )
+
+        # Login (required to access follower lists)
+        try:
+            print(f"Logging in as @{self.insta_username}...")
+
+            # Try to load existing session first
+            session_file = f".instaloader_session_{self.insta_username}"
+            try:
+                L.load_session_from_file(self.insta_username, session_file)
+                print("✅ Loaded existing session")
+            except FileNotFoundError:
+                # No existing session, need to login
+                if not self.insta_password:
+                    print("❌ No password provided and no existing session found")
+                    return None
+
+                L.login(self.insta_username, self.insta_password)
+                L.save_session_to_file(session_file)
+                print("✅ Login successful, session saved")
+
+        except instaloader.exceptions.TwoFactorAuthRequiredException:
+            print("❌ Two-factor authentication required!")
+            print("   Please disable 2FA temporarily or handle it manually")
+            return None
+        except instaloader.exceptions.BadCredentialsException:
+            print("❌ Invalid username or password")
+            return None
+        except Exception as e:
+            print(f"❌ Login failed: {e}")
+            return None
+
+        # Get target username (use logged-in user's followers)
+        target_username = getattr(config, 'INSTAGRAM_TARGET_USERNAME', self.insta_username)
+
+        try:
+            print(f"Fetching profile for @{target_username}...")
+            profile = instaloader.Profile.from_username(L.context, target_username)
+
+            print(f"Found @{target_username}: {profile.full_name}")
+            print(f"Total followers: {profile.followers}")
+            print(f"Fetching up to {count} followers (this may take a while)...")
+
+            followers = []
+
+            # Iterate through followers
+            for i, follower in enumerate(profile.get_followers()):
+                if i >= count:
+                    break
+
+                # Progress indicator
+                if (i + 1) % 50 == 0:
+                    print(f"   Scraped {i + 1}/{count} followers...")
+
+                # Download profile picture
+                avatar_img = None
+                try:
+                    # Download profile picture to memory
+                    L.download_profilepic(follower, target=f".temp_avatar_{follower.username}")
+
+                    # Find the downloaded image
+                    import glob
+                    avatar_files = glob.glob(f".temp_avatar_{follower.username}/*")
+                    if avatar_files:
+                        avatar_img = Image.open(avatar_files[0]).convert("RGBA")
+
+                        # Clean up temporary files
+                        import shutil
+                        shutil.rmtree(f".temp_avatar_{follower.username}")
+                except Exception as e:
+                    # If profile pic download fails, continue without it
+                    pass
+
+                follower_data = {
+                    "id": str(follower.userid),
+                    "username": follower.username,
+                    "avatar": avatar_img
+                }
+                followers.append(follower_data)
+
+                # Be nice to Instagram's servers (rate limiting)
+                import time
+                time.sleep(0.5)  # 500ms delay between each follower
+
+            print(f"✅ Successfully scraped {len(followers)} followers")
+            return followers
+
+        except instaloader.exceptions.ProfileNotExistsException:
+            print(f"❌ Profile @{target_username} does not exist")
+            return None
+        except instaloader.exceptions.LoginRequiredException:
+            print("❌ Login required but session expired")
+            return None
+        except Exception as e:
+            print(f"❌ Error fetching followers: {e}")
             return None
 
     def _generate_placeholder_followers(self, count: int) -> List[Dict[str, any]]:

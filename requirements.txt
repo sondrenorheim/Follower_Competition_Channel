@@ -3,3 +3,4 @@ requests>=2.31.0
 Pillow>=10.0.0
 moviepy>=1.0.3
 numpy>=1.24.0
+instaloader>=4.10.0

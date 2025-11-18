@@ -44,7 +44,7 @@ Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
 ## 🎯 Usage
 
-### Quick Start (Offline Mode)
+### Quick Start (Offline Mode - Recommended)
 
 Run the game without Instagram API credentials:
 
@@ -54,7 +54,7 @@ python main.py
 
 This will generate 500 placeholder followers with random colored avatars.
 
-### Using Instagram API
+### Option 1: Using Instagram Graph API (Safe, Official)
 
 1. Get Instagram Graph API credentials:
    - Create a Facebook Developer account
@@ -72,6 +72,25 @@ This will generate 500 placeholder followers with random colored avatars.
    ```bash
    python main.py
    ```
+
+### Option 2: Using Web Scraper (⚠️ Violates Instagram ToS)
+
+**WARNING:** This can get your account banned! Use at your own risk.
+
+1. Edit `config.py`:
+   ```python
+   USE_INSTALOADER_SCRAPER = True
+   INSTAGRAM_USERNAME = "your_username"
+   INSTAGRAM_PASSWORD = "your_password"
+   USE_OFFLINE_MODE = False
+   ```
+
+2. Run the game:
+   ```bash
+   python main.py
+   ```
+
+**📖 For detailed scraping instructions, security warnings, and troubleshooting, see [SCRAPING_GUIDE.md](SCRAPING_GUIDE.md)**
 
 ## ⚙️ Configuration
 

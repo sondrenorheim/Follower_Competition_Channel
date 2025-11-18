@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Instaloader session files (IMPORTANT - contains login credentials!)
+.instaloader_session_*
+
+# Temporary avatar files
+.temp_avatar_*/
+
+# Video output
+*.mp4
+*.avi
+*.mov
+
+# Config with real credentials (optional - uncomment if you want to prevent committing credentials)
+# config.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out

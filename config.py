@@ -55,11 +55,21 @@ VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
 # ===== INSTAGRAM API SETTINGS =====
-# Set these values if you have Instagram Graph API access
-# Leave empty to run in offline mode with random colored avatars
+# Option 1: Official Instagram Graph API (recommended, safe)
+# Requires: Instagram Business account + Facebook Developer account
 INSTAGRAM_ACCESS_TOKEN = ""  # Your Instagram Graph API access token
 INSTAGRAM_USER_ID = ""       # Your Instagram user ID
-USE_OFFLINE_MODE = True      # Set to False to attempt API fetching
+
+# Option 2: Web Scraping with Instaloader (⚠️ VIOLATES INSTAGRAM ToS!)
+# WARNING: This can get your account banned! Use a burner account if possible.
+# Requires: Regular Instagram account credentials
+USE_INSTALOADER_SCRAPER = False  # Set to True to enable web scraping
+INSTAGRAM_USERNAME = ""          # Your Instagram username (for scraping)
+INSTAGRAM_PASSWORD = ""          # Your Instagram password (for scraping)
+INSTAGRAM_TARGET_USERNAME = ""   # Target account to scrape followers from (leave empty to use your own)
+
+# Option 3: Offline Mode (safe, no authentication required)
+USE_OFFLINE_MODE = True      # Set to False to attempt API/scraper fetching
 
 # ===== RANDOM AVATAR COLORS (for offline mode) =====
 RANDOM_COLORS = [
