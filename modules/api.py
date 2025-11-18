@@ -2,6 +2,7 @@
 Instagram API Integration Module
 Handles fetching followers and profile images from Instagram Graph API
 Also supports web scraping via Instaloader as an alternative
+Also supports importing from CSV/JSON files (SAFE - recommended!)
 Falls back to offline mode if API is unavailable
 
 ⚠️ WARNING: Web scraping violates Instagram's Terms of Service
@@ -13,6 +14,8 @@ from PIL import Image
 import io
 import random
 import os
+import json
+import csv
 from typing import List, Dict, Optional
 import config
 
@@ -20,9 +23,10 @@ import config
 class InstagramAPI:
     """
     Handles Instagram data fetching via multiple methods:
-    1. Official Instagram Graph API (recommended, requires business account)
-    2. Web scraping via Instaloader (⚠️ violates ToS, account risk)
-    3. Offline mode with placeholder data (safe, no authentication)
+    1. CSV/JSON Import (✅ SAFE - recommended! Use Instagram Data Download)
+    2. Official Instagram Graph API (recommended, requires business account)
+    3. Web scraping via Instaloader (⚠️ violates ToS, account risk)
+    4. Offline mode with placeholder data (safe, no authentication)
     """
 
     def __init__(self, access_token: str = "", user_id: str = ""):
@@ -39,10 +43,11 @@ class InstagramAPI:
         self.scraper_mode = getattr(config, 'USE_INSTALOADER_SCRAPER', False)
         self.insta_username = getattr(config, 'INSTAGRAM_USERNAME', '')
         self.insta_password = getattr(config, 'INSTAGRAM_PASSWORD', '')
+        self.import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
 
     def fetch_followers(self, count: int = 500) -> List[Dict[str, any]]:
         """
-        Fetch followers using configured method (API, Scraper, or Offline)
+        Fetch followers using configured method (Import, API, Scraper, or Offline)
 
         Args:
             count: Number of followers to fetch/generate
@@ -50,7 +55,20 @@ class InstagramAPI:
         Returns:
             List of follower dictionaries with 'id', 'username', and 'avatar' keys
         """
-        # Priority 1: Use Instaloader scraper if enabled
+        # Priority 1: Import from file if specified (SAFE!)
+        if self.import_file and os.path.exists(self.import_file):
+            print(f"✅ Importing followers from file: {self.import_file}")
+            try:
+                followers = self._import_from_file(self.import_file, count)
+                if followers:
+                    print(f"✅ Successfully imported {len(followers)} followers")
+                    return followers
+            except Exception as e:
+                print(f"❌ Import failed: {e}")
+                print(f"Falling back to offline mode")
+                return self._generate_placeholder_followers(count)
+
+        # Priority 2: Use Instaloader scraper if enabled (RISKY!)
         if self.scraper_mode and self.insta_username:
             print(f"⚠️  Using INSTALOADER SCRAPER (violates Instagram ToS)")
             try:
@@ -63,7 +81,7 @@ class InstagramAPI:
                 print(f"Falling back to offline mode")
                 return self._generate_placeholder_followers(count)
 
-        # Priority 2: Use official API if credentials available
+        # Priority 3: Use official API if credentials available (SAFE)
         if not config.USE_OFFLINE_MODE and self.access_token and self.user_id:
             try:
                 print(f"Attempting to fetch followers from Instagram Graph API...")
@@ -77,7 +95,7 @@ class InstagramAPI:
                 print(f"❌ API fetch failed: {e}")
                 print(f"Falling back to offline mode")
 
-        # Priority 3: Offline mode (default, safe)
+        # Priority 4: Offline mode (default, safe)
         print(f"Running in OFFLINE MODE - Generating {count} placeholder followers")
         return self._generate_placeholder_followers(count)
 
@@ -278,6 +296,136 @@ class InstagramAPI:
             return None
         except Exception as e:
             print(f"❌ Error fetching followers: {e}")
+            return None
+
+    def _import_from_file(self, file_path: str, count: int) -> Optional[List[Dict[str, any]]]:
+        """
+        Import followers from CSV or JSON file
+
+        ✅ SAFE METHOD - Use Instagram's Data Download feature to get this file!
+
+        Supports multiple formats:
+        1. Instagram Data Download JSON (followers.json from Instagram export)
+        2. Custom CSV with 'username' column
+        3. Custom JSON array with username field
+
+        Args:
+            file_path: Path to CSV or JSON file
+            count: Maximum number of followers to import
+
+        Returns:
+            List of follower data or None if failed
+        """
+        followers = []
+        file_ext = os.path.splitext(file_path)[1].lower()
+
+        try:
+            # Handle JSON files
+            if file_ext == '.json':
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                    # Instagram Data Download format (various structures)
+                    if isinstance(data, dict):
+                        # Try common Instagram export structures
+                        if 'followers' in data:
+                            # Format: {"followers": [{"string_list_data": [{"value": "username"}]}]}
+                            follower_list = data['followers']
+                        elif 'relationships_followers' in data:
+                            follower_list = data['relationships_followers']
+                        else:
+                            # Assume dict with usernames somewhere
+                            follower_list = data.get('data', [])
+                    elif isinstance(data, list):
+                        # Simple array format
+                        follower_list = data
+                    else:
+                        print(f"❌ Unsupported JSON format")
+                        return None
+
+                    # Extract usernames from various formats
+                    for i, item in enumerate(follower_list):
+                        if i >= count:
+                            break
+
+                        username = None
+
+                        # Instagram export format
+                        if isinstance(item, dict):
+                            # Format 1: {"string_list_data": [{"value": "username"}]}
+                            if 'string_list_data' in item:
+                                username = item['string_list_data'][0].get('value')
+                            # Format 2: {"username": "username"}
+                            elif 'username' in item:
+                                username = item['username']
+                            # Format 3: {"value": "username"}
+                            elif 'value' in item:
+                                username = item['value']
+                        # Simple string array
+                        elif isinstance(item, str):
+                            username = item
+
+                        if username:
+                            followers.append({
+                                "id": f"imported_{i}",
+                                "username": username,
+                                "avatar": None,
+                                "color": random.choice(config.RANDOM_COLORS)
+                            })
+
+            # Handle CSV files
+            elif file_ext == '.csv':
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+
+                    for i, row in enumerate(reader):
+                        if i >= count:
+                            break
+
+                        # Look for username column (case-insensitive)
+                        username = None
+                        for key in row.keys():
+                            if key.lower() in ['username', 'user', 'name', 'follower']:
+                                username = row[key]
+                                break
+
+                        if username:
+                            followers.append({
+                                "id": f"imported_{i}",
+                                "username": username,
+                                "avatar": None,
+                                "color": random.choice(config.RANDOM_COLORS)
+                            })
+
+            # Handle plain text files (one username per line)
+            elif file_ext == '.txt':
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for i, line in enumerate(f):
+                        if i >= count:
+                            break
+
+                        username = line.strip()
+                        if username:
+                            followers.append({
+                                "id": f"imported_{i}",
+                                "username": username,
+                                "avatar": None,
+                                "color": random.choice(config.RANDOM_COLORS)
+                            })
+
+            else:
+                print(f"❌ Unsupported file format: {file_ext}")
+                print(f"   Supported formats: .json, .csv, .txt")
+                return None
+
+            if followers:
+                return followers
+            else:
+                print(f"❌ No followers found in file")
+                return None
+
+        except Exception as e:
+            print(f"❌ Error reading file: {e}")
             return None
 
     def _generate_placeholder_followers(self, count: int) -> List[Dict[str, any]]:

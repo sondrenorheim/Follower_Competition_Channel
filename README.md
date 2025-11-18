@@ -44,7 +44,7 @@ Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
 ## 🎯 Usage
 
-### Quick Start (Offline Mode - Recommended)
+### Quick Start (Offline Mode)
 
 Run the game without Instagram API credentials:
 
@@ -54,7 +54,45 @@ python main.py
 
 This will generate 500 placeholder followers with random colored avatars.
 
-### Option 1: Using Instagram Graph API (Safe, Official)
+### Option 1: Import Your Own Followers (✅ RECOMMENDED - Safe & Legal!)
+
+**Use Instagram's official "Download Your Data" feature:**
+
+1. **Request your Instagram data:**
+   - Instagram App → Settings → Security → Download Data
+   - Or visit: instagram.com/download/request
+   - Wait 24-48 hours for email with download link
+
+2. **Download and extract** the ZIP file
+
+3. **Find `followers.json`** in the extracted folder (usually in `followers_and_following/`)
+
+4. **Edit `config.py`:**
+   ```python
+   FOLLOWER_IMPORT_FILE = "path/to/followers.json"
+   ```
+
+5. **Run the game:**
+   ```bash
+   python main.py
+   ```
+
+**Or create your own custom list:**
+
+See `examples/` folder for CSV, JSON, and TXT templates. You can create a simple file:
+
+```csv
+username
+friend1
+friend2
+follower3
+```
+
+Then set `FOLLOWER_IMPORT_FILE = "my_followers.csv"` in config.py
+
+**Note:** Imported followers will have colored circle avatars (usernames only, no profile pictures).
+
+### Option 2: Using Instagram Graph API (Safe, Official)
 
 1. Get Instagram Graph API credentials:
    - Create a Facebook Developer account
@@ -73,7 +111,7 @@ This will generate 500 placeholder followers with random colored avatars.
    python main.py
    ```
 
-### Option 2: Using Web Scraper (⚠️ Violates Instagram ToS)
+### Option 3: Using Web Scraper (⚠️ Violates Instagram ToS - Not Recommended)
 
 **WARNING:** This can get your account banned! Use at your own risk.
 

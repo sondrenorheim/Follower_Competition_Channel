@@ -1,0 +1,31 @@
+{
+  "followers": [
+    {
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/john_doe",
+          "value": "john_doe",
+          "timestamp": 1672531200
+        }
+      ]
+    },
+    {
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/jane_smith",
+          "value": "jane_smith",
+          "timestamp": 1672531200
+        }
+      ]
+    },
+    {
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/cool_user123",
+          "value": "cool_user123",
+          "timestamp": 1672531200
+        }
+      ]
+    }
+  ]
+}

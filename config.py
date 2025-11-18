@@ -54,13 +54,20 @@ OUTPUT_VIDEO_PATH = "follower_battle_royale.mp4"
 VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
-# ===== INSTAGRAM API SETTINGS =====
-# Option 1: Official Instagram Graph API (recommended, safe)
+# ===== INSTAGRAM DATA SETTINGS =====
+
+# Option 1: Import from File (✅ BEST - Safe, Legal, Recommended!)
+# Use Instagram's "Download Your Data" feature to get followers.json
+# Or create your own CSV/JSON/TXT file with usernames
+FOLLOWER_IMPORT_FILE = ""  # Path to CSV/JSON/TXT file (e.g., "followers.json" or "my_followers.csv")
+                           # Leave empty to skip import
+
+# Option 2: Official Instagram Graph API (Safe, requires business account)
 # Requires: Instagram Business account + Facebook Developer account
 INSTAGRAM_ACCESS_TOKEN = ""  # Your Instagram Graph API access token
 INSTAGRAM_USER_ID = ""       # Your Instagram user ID
 
-# Option 2: Web Scraping with Instaloader (⚠️ VIOLATES INSTAGRAM ToS!)
+# Option 3: Web Scraping with Instaloader (⚠️ VIOLATES INSTAGRAM ToS!)
 # WARNING: This can get your account banned! Use a burner account if possible.
 # Requires: Regular Instagram account credentials
 USE_INSTALOADER_SCRAPER = False  # Set to True to enable web scraping
@@ -68,7 +75,7 @@ INSTAGRAM_USERNAME = ""          # Your Instagram username (for scraping)
 INSTAGRAM_PASSWORD = ""          # Your Instagram password (for scraping)
 INSTAGRAM_TARGET_USERNAME = ""   # Target account to scrape followers from (leave empty to use your own)
 
-# Option 3: Offline Mode (safe, no authentication required)
+# Option 4: Offline Mode (Safe, generates random followers)
 USE_OFFLINE_MODE = True      # Set to False to attempt API/scraper fetching
 
 # ===== RANDOM AVATAR COLORS (for offline mode) =====
