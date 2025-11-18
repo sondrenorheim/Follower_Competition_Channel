@@ -1,0 +1,9 @@
+# Assets Directory
+
+This directory is reserved for future assets such as:
+- Custom avatar images
+- Sound effects
+- Background images
+- Custom fonts
+
+Currently, the game generates all visuals programmatically.
