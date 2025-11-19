@@ -58,9 +58,15 @@ VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
 # Option 1: Import from File (✅ BEST - Safe, Legal, Recommended!)
 # Use Instagram's "Download Your Data" feature to get followers.json
+# Or use a Chrome extension like "IG Exporter & Scraper" for instant export
 # Or create your own CSV/JSON/TXT file with usernames
-FOLLOWER_IMPORT_FILE = ""  # Path to CSV/JSON/TXT file (e.g., "followers.json" or "my_followers.csv")
+FOLLOWER_IMPORT_FILE = ""  # Path to CSV/JSON/TXT file (e.g., "followers.json" or "instagram_export.csv")
                            # Leave empty to skip import
+
+# Download real profile pictures from CSV (if profile_pic_url column exists)
+# Set to True to download real Instagram profile pictures (takes longer, uses bandwidth)
+# Set to False to use colored circle avatars (faster, recommended)
+DOWNLOAD_PROFILE_PICTURES = False
 
 # Option 2: Official Instagram Graph API (Safe, requires business account)
 # Requires: Instagram Business account + Facebook Developer account

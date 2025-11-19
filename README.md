@@ -56,7 +56,24 @@ This will generate 500 placeholder followers with random colored avatars.
 
 ### Option 1: Import Your Own Followers (✅ RECOMMENDED - Safe & Legal!)
 
-**Use Instagram's official "Download Your Data" feature:**
+**Method A: Chrome Extension (Fast - 5 minutes)**
+
+1. **Install IG Exporter extension** from Chrome Web Store
+2. **Export your followers** to CSV (up to 50K followers)
+3. **Save the CSV file** to the game folder
+4. **Edit `config.py`:**
+   ```python
+   FOLLOWER_IMPORT_FILE = "instagram_followers.csv"
+   DOWNLOAD_PROFILE_PICTURES = False  # True for real pics (slower)
+   ```
+5. **Run the game:**
+   ```bash
+   python main.py
+   ```
+
+**📖 See [IG_EXPORTER_GUIDE.md](IG_EXPORTER_GUIDE.md) for detailed Chrome extension instructions**
+
+**Method B: Instagram's Official Data Download (Slowest but safest)**
 
 1. **Request your Instagram data:**
    - Instagram App → Settings → Security → Download Data
@@ -90,7 +107,9 @@ follower3
 
 Then set `FOLLOWER_IMPORT_FILE = "my_followers.csv"` in config.py
 
-**Note:** Imported followers will have colored circle avatars (usernames only, no profile pictures).
+**Profile Pictures:**
+- Set `DOWNLOAD_PROFILE_PICTURES = False` for colored circles (fast, recommended)
+- Set `DOWNLOAD_PROFILE_PICTURES = True` to download real profile pics from CSV (if URLs provided)
 
 ### Option 2: Using Instagram Graph API (Safe, Official)
 

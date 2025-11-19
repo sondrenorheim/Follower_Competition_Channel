@@ -376,7 +376,14 @@ class InstagramAPI:
             # Handle CSV files
             elif file_ext == '.csv':
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
+                    # Auto-detect delimiter (comma or semicolon)
+                    sample = f.read(1024)
+                    f.seek(0)
+
+                    # Check if semicolon is used (common in European locales and IG exporters)
+                    delimiter = ';' if ';' in sample else ','
+
+                    reader = csv.DictReader(f, delimiter=delimiter)
 
                     for i, row in enumerate(reader):
                         if i >= count:
@@ -384,16 +391,25 @@ class InstagramAPI:
 
                         # Look for username column (case-insensitive)
                         username = None
+                        profile_pic_url = None
+
                         for key in row.keys():
-                            if key.lower() in ['username', 'user', 'name', 'follower']:
-                                username = row[key]
-                                break
+                            key_lower = key.lower().strip('"')
+                            if key_lower in ['username', 'user', 'name', 'follower']:
+                                username = row[key].strip('"')
+                            elif key_lower in ['profile_pic_url', 'profile_picture_url', 'avatar_url', 'picture_url']:
+                                profile_pic_url = row[key].strip('"')
 
                         if username:
+                            # Optionally download profile picture if URL provided and enabled
+                            avatar_img = None
+                            if profile_pic_url and getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False):
+                                avatar_img = self._download_avatar(profile_pic_url)
+
                             followers.append({
                                 "id": f"imported_{i}",
                                 "username": username,
-                                "avatar": None,
+                                "avatar": avatar_img,
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
 
