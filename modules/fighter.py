@@ -68,38 +68,43 @@ class Fighter(Follower):
     def get_movement_speed(self) -> float:
         """
         Get movement speed (pixels per frame)
-        Speed stat = pixels moved every 2 frames
+        Speed stat divided by 1.5 for balanced movement
         """
-        return self.speed_stat / 2.0
+        return self.speed_stat / 1.5
 
-    def can_attack(self, current_time: float) -> bool:
+    def can_attack(self, current_time: float, combat_enabled: bool = True) -> bool:
         """
         Check if fighter can attack
 
         Args:
             current_time: Current game time
+            combat_enabled: Whether combat is currently allowed (False during intro/countdown)
 
         Returns:
             True if can attack (not on cooldown and not stunned)
         """
+        if not combat_enabled:
+            return False
+
         if self.knockback_frames_remaining > 0:
             return False
 
         cooldown = self.get_attack_cooldown()
         return current_time - self.last_attack_time >= cooldown
 
-    def attack(self, target: 'Fighter', current_time: float) -> bool:
+    def attack(self, target: 'Fighter', current_time: float, combat_enabled: bool = True) -> bool:
         """
         Attack another fighter
 
         Args:
             target: Fighter to attack
             current_time: Current game time
+            combat_enabled: Whether combat is currently allowed
 
         Returns:
             True if attack landed
         """
-        if not self.can_attack(current_time):
+        if not self.can_attack(current_time, combat_enabled):
             return False
 
         if not target.alive:
@@ -165,12 +170,13 @@ class Fighter(Follower):
             dy: Normalized Y direction of knockback
             knockback_power: Knockback stat of attacker
         """
-        # Apply push velocity
-        self.push_vx += dx * knockback_power
-        self.push_vy += dy * knockback_power
+        # Apply push velocity (knockback / 4 pixels)
+        push_distance = knockback_power / 4.0
+        self.push_vx += dx * push_distance
+        self.push_vy += dy * push_distance
 
-        # Apply stun (knockback * 1.5 frames)
-        self.knockback_frames_remaining = int(knockback_power * 1.5)
+        # Apply stun (knockback * 0.8 frames)
+        self.knockback_frames_remaining = int(knockback_power * 0.8)
 
     def regenerate(self, dt: float):
         """
@@ -183,10 +189,11 @@ class Fighter(Follower):
             return
 
         if self.current_hp < self.max_hp:
-            regen_amount = self.regeneration_stat * dt
+            # Divide regeneration stat by 2 for balanced healing
+            regen_amount = (self.regeneration_stat / 2.0) * dt
             self.current_hp = min(self.max_hp, self.current_hp + regen_amount)
 
-    def update_fighter(self, dt: float, arena_rect: Tuple[int, int, int, int], all_fighters: List['Fighter'], current_time: float):
+    def update_fighter(self, dt: float, arena_rect: Tuple[int, int, int, int], all_fighters: List['Fighter'], current_time: float, combat_enabled: bool = True):
         """
         Update fighter state each frame (Fighter Arena specific)
 
@@ -195,6 +202,7 @@ class Fighter(Follower):
             arena_rect: (x, y, width, height) of the arena
             all_fighters: List of all fighters for targeting
             current_time: Current game time
+            combat_enabled: Whether combat is allowed (False during intro/countdown)
         """
         if not self.alive:
             # Handle fade out animation
@@ -218,16 +226,17 @@ class Fighter(Follower):
         self.regenerate(dt)
 
         # Choose target if we don't have one or target is dead
-        if self.target_follower is None or not self.target_follower.alive:
-            self._choose_target(all_fighters)
+        # Also occasionally re-target (2% chance per frame) to break circular patterns
+        if self.target_follower is None or not self.target_follower.alive or random.random() < 0.02:
+            self._choose_target_fighter(all_fighters)
 
         # Move toward target
         if self.target_follower and self.target_follower.alive:
             self._move_toward_target_fighter(dt)
 
-            # Try to attack if in range
-            if isinstance(self.target_follower, Fighter):
-                self.attack(self.target_follower, current_time)
+            # Try to attack if in range (only if combat is enabled)
+            if combat_enabled and isinstance(self.target_follower, Fighter):
+                self.attack(self.target_follower, current_time, combat_enabled)
         else:
             self._random_movement_fighter(dt)
 
@@ -259,6 +268,38 @@ class Fighter(Follower):
             self.vy *= -0.5
             self.push_vy *= -0.5
 
+    def _choose_target_fighter(self, all_fighters: list):
+        """
+        Choose a target with some randomness to prevent circular chasing
+
+        Args:
+            all_fighters: List of all fighters
+        """
+        alive_fighters = [f for f in all_fighters if f.alive and f != self]
+        if not alive_fighters:
+            self.target_follower = None
+            return
+
+        # 70% chance to pick nearest, 30% chance to pick random target
+        if random.random() < 0.7:
+            # Find nearest fighter
+            min_distance = float('inf')
+            nearest = None
+
+            for fighter in alive_fighters:
+                dx = fighter.x - self.x
+                dy = fighter.y - self.y
+                distance = math.sqrt(dx * dx + dy * dy)
+
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest = fighter
+
+            self.target_follower = nearest
+        else:
+            # Pick a random target
+            self.target_follower = random.choice(alive_fighters)
+
     def _move_toward_target_fighter(self, dt: float):
         """
         Move toward target using fighter's speed stat
@@ -281,12 +322,20 @@ class Fighter(Follower):
         dx /= distance
         dy /= distance
 
-        # Add slight randomness for natural movement
-        random_angle = (random.random() - 0.5) * config.MOVEMENT_RANDOMNESS * math.pi
+        # Add significant randomness to prevent circular chasing patterns
+        # Higher randomness when far from target, less when close
+        randomness_factor = min(1.0, distance / 100.0) * 0.8 + 0.2
+        random_angle = (random.random() - 0.5) * math.pi * randomness_factor
         cos_r = math.cos(random_angle)
         sin_r = math.sin(random_angle)
         new_dx = dx * cos_r - dy * sin_r
         new_dy = dx * sin_r + dy * cos_r
+
+        # Occasionally pick a completely random direction (5% chance)
+        if random.random() < 0.05:
+            rand_angle = random.random() * 2 * math.pi
+            new_dx = math.cos(rand_angle)
+            new_dy = math.sin(rand_angle)
 
         # Use fighter's speed stat instead of BASE_SPEED
         movement_speed = self.get_movement_speed()

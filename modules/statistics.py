@@ -63,8 +63,9 @@ class PlayerStatistics:
     # List index reference for player stats:
     # [0] total_points, [1] games_played, [2] best_placement, [3] total_placements,
     # [4] wins, [5] top_3_finishes, [6] top_10_pct_finishes, [7] total_survival_time,
-    # [8] first_eliminations (first out), [9] current_hot_streak, [10] best_hot_streak
-    P, G, B, T, W, T3, T10P, S, FIRST_OUT, STREAK, BEST_STREAK = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    # [8] first_eliminations (first out), [9] current_hot_streak, [10] best_hot_streak,
+    # [11] total_kills, [12] total_damage_dealt
+    P, G, B, T, W, T3, T10P, S, FIRST_OUT, STREAK, BEST_STREAK, KILLS, DAMAGE = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
 
     def get_player_stats(self, username: str) -> list:
         """
@@ -83,6 +84,8 @@ class PlayerStatistics:
         [8]  first_eliminations (times eliminated first - "most unlucky")
         [9]  current_hot_streak (consecutive top 10% finishes)
         [10] best_hot_streak (best consecutive top 10% finishes)
+        [11] total_kills (eliminations caused by this player)
+        [12] total_damage_dealt (damage dealt in Fighter Arena)
 
         Derived stats (not stored, calculated):
         - average_placement = [3] / [1]
@@ -95,7 +98,7 @@ class PlayerStatistics:
         """
         if username not in self.stats:
             # Initialize new player with all stats
-            self.stats[username] = [0.0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0]
+            self.stats[username] = [0.0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0, 0.0]
 
         # Handle legacy formats - extend list if needed
         if isinstance(self.stats[username], dict):
@@ -109,15 +112,12 @@ class PlayerStatistics:
                 old.get("t3", old.get("top_3_finishes", 0)),
                 old.get("t10", old.get("top_10_finishes", 0)),
                 old.get("s", old.get("total_survival_time", 0.0)),
-                0, 0, 0  # New fields default to 0
+                0, 0, 0, 0, 0.0  # New fields default to 0
             ]
-        elif isinstance(self.stats[username], list) and len(self.stats[username]) < 11:
+        elif isinstance(self.stats[username], list) and len(self.stats[username]) < 13:
             # Extend existing list with new fields
-            while len(self.stats[username]) < 11:
+            while len(self.stats[username]) < 13:
                 self.stats[username].append(0)
-        elif isinstance(self.stats[username], list) and len(self.stats[username]) > 11:
-            # Trim excess fields from old format
-            self.stats[username] = self.stats[username][:11]
 
         return self.stats[username]
 
@@ -127,7 +127,9 @@ class PlayerStatistics:
         placement: int,
         points_earned: float,
         survival_time: float,
-        total_participants: int
+        total_participants: int,
+        kills: int = 0,
+        damage_dealt: float = 0.0
     ):
         """
         Update statistics for a player after a game
@@ -138,6 +140,8 @@ class PlayerStatistics:
             points_earned: Points earned this game
             survival_time: Time survived in seconds
             total_participants: Total number of participants
+            kills: Number of eliminations caused by this player
+            damage_dealt: Total damage dealt (Fighter Arena)
         """
         s = self.get_player_stats(username)
 
@@ -146,6 +150,10 @@ class PlayerStatistics:
         s[self.G] += 1
         s[self.T] += placement
         s[self.S] = round(s[self.S] + survival_time, 1)
+
+        # Update kills and damage
+        s[self.KILLS] += kills
+        s[self.DAMAGE] = round(s[self.DAMAGE] + damage_dealt, 1)
 
         # Update best placement
         if s[self.B] == 0 or placement < s[self.B]:

@@ -49,6 +49,13 @@ class FighterRenderer:
         self.kill_feed = []
         self.kill_feed_duration = 3.0
 
+        # Countdown video overlay
+        self.countdown_video_frames = []
+        self.countdown_video_fps = 30
+        self.countdown_video_loaded = False
+        self.countdown_start_time = None
+        self._load_countdown_video()
+
     def render_frame(self, fighters: List[Fighter], arena: FighterArena,
                     game_state: dict, particle_system=None):
         """
@@ -140,18 +147,22 @@ class FighterRenderer:
                 surface = surface.copy()
                 surface.set_alpha(fighter.alpha)
 
-            # Draw fighter
+            # Draw fighter (scale down high-res surface to display size)
             pos = fighter.get_position()
-            rect = surface.get_rect(center=(int(pos[0]), int(pos[1])))
-            self.screen.blit(surface, rect)
+            display_size = int(config.FOLLOWER_RADIUS * 2)
+
+            # If surface is higher resolution, scale it down for display
+            if surface.get_width() != display_size:
+                display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
+            else:
+                display_surface = surface
+
+            rect = display_surface.get_rect(center=(int(pos[0]), int(pos[1])))
+            self.screen.blit(display_surface, rect)
 
             # Draw HP bar above fighter (if alive or fading)
             if fighter.alive or fighter.is_fading():
                 self._draw_hp_bar(fighter)
-
-                # Draw attack indicator if attacking
-                if fighter.is_attacking:
-                    self._draw_attack_indicator(fighter)
 
     def _get_fighter_surface(self, fighter: Fighter) -> pygame.Surface:
         """
@@ -169,28 +180,35 @@ class FighterRenderer:
         # Create new surface
         size = int(config.FOLLOWER_RADIUS * 2)
         radius = int(config.FOLLOWER_RADIUS)
-        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+
+        # Use higher resolution for better quality when upscaling video
+        # Multiply by upscale factor to maintain quality
+        upscale_multiplier = config.UPSCALE_FACTOR if config.UPSCALE_VIDEO else 1.0
+        render_size = int(size * upscale_multiplier)
+        render_radius = int(radius * upscale_multiplier)
+
+        surface = pygame.Surface((render_size, render_size), pygame.SRCALPHA)
 
         # Draw avatar circle
         if fighter.avatar_image:
-            avatar_surface = self._pil_to_pygame(fighter.avatar_image, size)
-            self._draw_circular_image(surface, avatar_surface, radius)
+            avatar_surface = self._pil_to_pygame(fighter.avatar_image, render_size)
+            self._draw_circular_image(surface, avatar_surface, render_radius)
         else:
             # Draw colored circle for placeholder
             pygame.draw.circle(
                 surface,
                 fighter.color,
-                (radius, radius),
-                radius - config.FOLLOWER_BORDER_WIDTH
+                (render_radius, render_radius),
+                render_radius - int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier)
             )
 
         # Draw white border
         pygame.draw.circle(
             surface,
             config.COLOR_BORDER,
-            (radius, radius),
-            radius,
-            config.FOLLOWER_BORDER_WIDTH
+            (render_radius, render_radius),
+            render_radius,
+            int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier)
         )
 
         # Cache the surface
@@ -335,7 +353,49 @@ class FighterRenderer:
         self.screen.blit(text2, rect2)
 
     def _draw_countdown(self, number: int):
-        """Draw countdown overlay"""
+        """Draw countdown using video overlay or fallback to text"""
+        # Try to use video overlay
+        if self.countdown_video_loaded and self.countdown_start_time is not None:
+            self._draw_countdown_video()
+            return
+
+        # Fallback to text-based countdown
+        self._draw_countdown_text(number)
+
+    def _draw_countdown_video(self):
+        """Draw the current frame of the countdown video overlay"""
+        import time
+
+        if self.countdown_start_time is None:
+            return
+
+        elapsed = time.time() - self.countdown_start_time
+        frame_index = int(elapsed * self.countdown_video_fps)
+
+        if frame_index >= len(self.countdown_video_frames):
+            return
+
+        frame = self.countdown_video_frames[frame_index]
+
+        # Scale frame to 30% of screen height
+        frame_width = frame.get_width()
+        frame_height = frame.get_height()
+
+        target_height = int(self.height * 0.3)
+        scale = target_height / frame_height
+        new_width = int(frame_width * scale)
+        new_height = target_height
+
+        scaled_frame = pygame.transform.scale(frame, (new_width, new_height))
+
+        # Center on screen
+        x = (self.width - new_width) // 2
+        y = (self.height - new_height) // 2
+
+        self.screen.blit(scaled_frame, (x, y))
+
+    def _draw_countdown_text(self, number: int):
+        """Fallback text-based countdown display"""
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 100))
         self.screen.blit(overlay, (0, 0))
@@ -359,6 +419,81 @@ class FighterRenderer:
         shadow_rect = shadow_text.get_rect(center=(self.width // 2 + 5, self.height // 2 + 5))
         self.screen.blit(shadow_text, shadow_rect)
         self.screen.blit(countdown_text, rect)
+
+    def _load_countdown_video(self):
+        """Load countdown video frames from green screen video file"""
+        video_path = "assets/3 2 1 fight.mp4"
+        if not os.path.exists(video_path):
+            print(f"Countdown video not found: {video_path}")
+            return
+
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            self.countdown_video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+
+            frames = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Apply chroma key (remove green screen)
+                frame_with_alpha = self._apply_chroma_key(frame_rgb)
+
+                # Convert to pygame surface
+                pygame_surface = pygame.image.frombuffer(
+                    frame_with_alpha.tobytes(),
+                    (frame_with_alpha.shape[1], frame_with_alpha.shape[0]),
+                    'RGBA'
+                )
+                frames.append(pygame_surface)
+
+            cap.release()
+            self.countdown_video_frames = frames
+            self.countdown_video_loaded = len(frames) > 0
+            print(f"Loaded countdown video: {len(frames)} frames at {self.countdown_video_fps:.0f} FPS")
+
+        except ImportError:
+            print("OpenCV not installed. Install with: pip install opencv-python")
+        except Exception as e:
+            print(f"Error loading countdown video: {e}")
+
+    def _apply_chroma_key(self, frame_rgb, tolerance: int = 80):
+        """Remove green screen from frame and return RGBA image"""
+        import numpy as np
+
+        # Create alpha channel (default fully opaque)
+        alpha = np.ones((frame_rgb.shape[0], frame_rgb.shape[1]), dtype=np.uint8) * 255
+
+        # Extract RGB channels
+        r = frame_rgb[:, :, 0].astype(np.int16)
+        g = frame_rgb[:, :, 1].astype(np.int16)
+        b = frame_rgb[:, :, 2].astype(np.int16)
+
+        # Green screen detection
+        green_mask = (
+            (g > 100) &
+            (g > r + 30) &
+            (g > b + 30)
+        )
+
+        # Make green pixels transparent
+        alpha[green_mask] = 0
+
+        # Combine RGB with alpha
+        frame_rgba = np.dstack((frame_rgb, alpha))
+
+        return frame_rgba
+
+    def start_countdown_video(self):
+        """Start the countdown video playback timer"""
+        import time
+        self.countdown_start_time = time.time()
+        print("Countdown video started")
 
     def _draw_podium(self, winners: List[Fighter], game_state: dict):
         """Draw final podium with winners"""

@@ -5,8 +5,8 @@ Modify these values to customize game behavior
 
 # ===== GAME MODE =====
 # Options: "battle_royale" or "fighter_arena"
-GAME_MODE = "battle_royale"
 
+# GAME_MODE = "battle_royale"
 # ===== GAME SETTINGS =====
 SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
 SCREEN_HEIGHT = 960  # 9:16 aspect ratio for Instagram Reels / TikTok
@@ -14,13 +14,15 @@ FPS = 60
 
 
 
+
 # Test mode - when True, game results won't be saved to the all-time leaderboard
+GAME_MODE = "fighter_arena"
 TEST_MODE = True
-EXPORT_VIDEO = False
+EXPORT_VIDEO = True
 DAY_NUMBER = 1  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = False
-
-
+DOWNLOAD_PROFILE_PICTURES = True
+UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
+UPSCALE_FACTOR = 2.0 
 
 # ===== ARENA SETTINGS =====
 ARENA_CENTER = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
@@ -78,9 +80,20 @@ COLOR_BORDER = (255, 255, 255)
 
 # ===== VIDEO EXPORT SETTINGS =====
 
-OUTPUT_VIDEO_PATH = f"follower_battle_royale_day_{DAY_NUMBER}.mp4"
+# Determine output video filename based on test mode
+if TEST_MODE:
+    OUTPUT_VIDEO_PATH = "follower_battle_royale_test_video.mp4"
+else:
+    OUTPUT_VIDEO_PATH = f"follower_battle_royale_day_{DAY_NUMBER}.mp4"
+
 VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
+
+# Video upscaling settings
+# Game renders at SCREEN_WIDTH x SCREEN_HEIGHT, but exports at higher resolution
+ # Multiplier for output resolution (2.0 = 1080x1920 from 540x960)
+# With UPSCALE_FACTOR = 2.0: 540x960 -> 1080x1920 (1080p vertical HD)
+# With UPSCALE_FACTOR = 3.0: 540x960 -> 1620x2880 (1620p vertical)
 
 # ===== INSTAGRAM DATA SETTINGS =====
 
@@ -177,15 +190,16 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
 
 # ===== FIGHTER ARENA SETTINGS =====
 # Rectangle arena boundaries (x, y, width, height)
-FIGHTER_ARENA_RECT = (20, 120, SCREEN_WIDTH - 40, SCREEN_HEIGHT - 280)
+# Height similar to Battle Royale circle diameter (500px = 2 * 250 radius)
+FIGHTER_ARENA_RECT = (20, 180, SCREEN_WIDTH - 40, 500)
 
 # Default fighter stats (must sum to 100)
 FIGHTER_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
     "speed": 10,        # Pixels moved every 2 frames
     "attack": 10,       # HP damage dealt per hit
-    "regeneration": 10, # HP regenerated per second
-    "knockback": 10,    # Pixels pushed + frames stunned * 1.5
+    "regeneration": 5,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
+    "knockback": 15,    # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
     "attack_speed": 20  # Attacks per second = value / 10 (default: 2 attacks/sec)
 }
 

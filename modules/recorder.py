@@ -42,6 +42,12 @@ class VideoRecorder:
 
         print(f"📹 Video Recorder initialized: {self.output_path} @ {self.fps} FPS")
         print(f"   Using time-based capture (1 frame every {self.frame_time*1000:.1f}ms)")
+
+        if config.UPSCALE_VIDEO and config.UPSCALE_FACTOR > 1.0:
+            output_width = int(config.SCREEN_WIDTH * config.UPSCALE_FACTOR)
+            output_height = int(config.SCREEN_HEIGHT * config.UPSCALE_FACTOR)
+            print(f"🔍 Upscaling enabled: {config.SCREEN_WIDTH}x{config.SCREEN_HEIGHT} -> {output_width}x{output_height} ({config.UPSCALE_FACTOR}x)")
+
         if audio_logger:
             print(f"🎤 Audio will be generated from logged events")
 
@@ -74,6 +80,10 @@ class VideoRecorder:
             frame = pygame.surfarray.array3d(surface)
             frame = np.transpose(frame, (1, 0, 2))  # Swap width and height
 
+            # Upscale frame if enabled
+            if config.UPSCALE_VIDEO and config.UPSCALE_FACTOR > 1.0:
+                frame = self._upscale_frame(frame, config.UPSCALE_FACTOR)
+
             self.frames.append(frame)
 
             # Schedule next capture
@@ -83,6 +93,38 @@ class VideoRecorder:
             if len(self.frames) % 100 == 0:
                 duration = len(self.frames) / self.fps
                 print(f"   Captured {len(self.frames)} frames ({duration:.1f}s of video)")
+
+    def _upscale_frame(self, frame: np.ndarray, scale_factor: float) -> np.ndarray:
+        """
+        Upscale a frame using high-quality interpolation
+
+        Args:
+            frame: Input frame as numpy array (height, width, 3)
+            scale_factor: Scaling factor (e.g., 2.0 for 2x upscale)
+
+        Returns:
+            Upscaled frame
+        """
+        try:
+            # Use OpenCV for high-quality upscaling (LANCZOS interpolation)
+            import cv2
+            height, width = frame.shape[:2]
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            upscaled = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+            return upscaled
+        except ImportError:
+            # Fallback to scipy if OpenCV not available
+            try:
+                from scipy.ndimage import zoom
+                upscaled = zoom(frame, (scale_factor, scale_factor, 1), order=3)
+                return upscaled.astype(np.uint8)
+            except ImportError:
+                # Final fallback: use numpy simple repeat (blocky but works)
+                print("⚠️  Warning: opencv-python or scipy not installed. Using simple upscaling.")
+                print("   Install opencv-python for better quality: pip install opencv-python")
+                upscaled = np.repeat(np.repeat(frame, int(scale_factor), axis=0), int(scale_factor), axis=1)
+                return upscaled
 
     def _generate_mixed_audio(self, video_duration: float) -> Optional[str]:
         """

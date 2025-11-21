@@ -43,6 +43,8 @@ class Follower:
         self.last_bump_time = 0.0  # Timestamp of last collision
         self.push_vx = 0.0  # Temporary push velocity
         self.push_vy = 0.0
+        self.last_pushed_by: Optional['Follower'] = None  # Track who pushed us last (for kill credit)
+        self.kills = 0  # Number of eliminations caused by this follower
 
         # State
         self.alive = True
@@ -320,6 +322,9 @@ class Follower:
             other.push_vx += push_dx * push_force
             other.push_vy += push_dy * push_force
 
+            # Track who pushed the other follower (for kill credit)
+            other.last_pushed_by = self
+
             # Apply反作用力 to self (Newton's third law)
             self.push_vx -= push_dx * push_force * 0.5
             self.push_vy -= push_dy * push_force * 0.5
@@ -336,6 +341,7 @@ class Follower:
         """
         Eliminate this follower from the game
         Starts fade-out animation
+        Credits kill to whoever pushed this follower last
 
         Args:
             particle_system: Optional ParticleSystem to create elimination effects
@@ -344,6 +350,10 @@ class Follower:
             self.alive = False
             self.elimination_time = time.time()
             self.surface_needs_update = True
+
+            # Credit kill to whoever pushed us last
+            if self.last_pushed_by is not None and self.last_pushed_by.alive:
+                self.last_pushed_by.kills += 1
 
             # Create particle explosion effect
             if particle_system:

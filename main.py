@@ -345,13 +345,14 @@ class FollowerBattleRoyale:
 
             points_earned = points_breakdown["total_points"]
 
-            # Update player statistics
+            # Update player statistics (including kills from pushing)
             self.statistics.update_player_stats(
                 username=follower.username,
                 placement=placement,
                 points_earned=points_earned,
                 survival_time=survival_time,
-                total_participants=total_participants
+                total_participants=total_participants,
+                kills=follower.kills
             )
 
             # Store for leaderboard

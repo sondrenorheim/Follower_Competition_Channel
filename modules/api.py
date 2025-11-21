@@ -161,12 +161,19 @@ class InstagramAPI:
             return None
 
         try:
-            response = requests.get(url, timeout=5)
+            # Add headers to mimic a browser (helps avoid some 403 errors)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Referer': 'https://www.instagram.com/'
+            }
+
+            response = requests.get(url, headers=headers, timeout=5)
             response.raise_for_status()
             img = Image.open(io.BytesIO(response.content))
             return img.convert("RGBA")
         except Exception as e:
-            print(f"Failed to download avatar from {url}: {e}")
+            # Silently fail - just use colored circle instead
             return None
 
     def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, any]]]:

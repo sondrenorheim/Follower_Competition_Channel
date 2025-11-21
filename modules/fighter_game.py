@@ -15,6 +15,7 @@ from .api import InstagramAPI
 from .fighter import Fighter
 from .fighter_arena import FighterArena
 from .fighter_renderer import FighterRenderer
+from .physics import PhysicsEngine
 from .particles import ParticleSystem
 from .sound_manager import SoundManager
 from .scoring import ScoringSystem
@@ -48,6 +49,7 @@ class FighterBattleArena:
         self.api = InstagramAPI()
         self.arena = FighterArena()
         self.renderer = FighterRenderer(self.screen)
+        self.physics = PhysicsEngine()
         self.audio_logger = AudioLogger()
         self.recorder = VideoRecorder(audio_logger=self.audio_logger)
         self.particles = ParticleSystem()
@@ -102,6 +104,9 @@ class FighterBattleArena:
             fighter = Fighter(data, (x, y))
             self.fighters.append(fighter)
 
+        # Randomize fighter update order to ensure fair attack priority
+        random.shuffle(self.fighters)
+
         # Store initial values for dynamic scaling
         self.initial_total_players = len(self.fighters)
 
@@ -153,13 +158,16 @@ class FighterBattleArena:
         # Update fighters during all phases
         arena_rect = self.arena.get_rect()
 
+        # Combat only enabled during "playing" phase
+        combat_enabled = (self.game_phase == "playing")
+
         for fighter in self.fighters:
-            if self.game_phase == "playing":
-                # Full combat update
-                fighter.update_fighter(dt, arena_rect, self.fighters, current_time)
-            else:
-                # Just movement during intro/countdown (no attacking)
-                fighter.update(dt, self.arena.center, min(arena_rect[2], arena_rect[3]) // 2, self.fighters)
+            # Always use fighter-specific update (no zone avoidance)
+            fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled)
+
+        # Physics: collision detection and overlap resolution
+        self.physics.update(self.fighters, current_time)
+        self.physics.resolve_overlaps(self.fighters)
 
         # Update particles
         self.particles.update(dt)
@@ -291,7 +299,9 @@ class FighterBattleArena:
                 placement=placement,
                 points_earned=points_earned,
                 survival_time=survival_time,
-                total_participants=total_participants
+                total_participants=total_participants,
+                kills=fighter.kills,
+                damage_dealt=fighter.damage_dealt
             )
 
             game_results.append((
@@ -355,10 +365,15 @@ class FighterBattleArena:
 
             dt = self.clock.tick(config.FPS) / 1000.0
 
-            # Update fighters during intro
+            # Update fighters during intro (no combat, just movement)
             arena_rect = self.arena.get_rect()
+            current_time = time.time()
             for fighter in self.fighters:
-                fighter.update(dt, self.arena.center, min(arena_rect[2], arena_rect[3]) // 2, self.fighters)
+                fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled=False)
+
+            # Physics: collision detection and overlap resolution
+            self.physics.update(self.fighters, current_time)
+            self.physics.resolve_overlaps(self.fighters)
 
             self.particles.update(dt)
             self.sound.update_music_volume()
@@ -369,6 +384,7 @@ class FighterBattleArena:
         self.game_phase = "countdown"
         self.phase_start_time = time.time()
         self.countdown_number = 3
+        self.renderer.start_countdown_video()  # Start the video overlay
         self.sound.play_countdown_audio()
 
         # Track podium display time
