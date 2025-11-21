@@ -1,0 +1,527 @@
+"""
+Fighter Renderer Module
+Handles rendering for Fighter Arena game mode
+Includes HP bars, rectangular arena, and combat effects
+"""
+
+import pygame
+import math
+import os
+from typing import List, Tuple, Optional
+from PIL import Image
+import config
+from .fighter import Fighter
+from .fighter_arena import FighterArena
+
+
+class FighterRenderer:
+    """
+    Handles all rendering operations for the Fighter Arena game mode
+    """
+
+    def __init__(self, screen: pygame.Surface):
+        """
+        Initialize the renderer
+
+        Args:
+            screen: Pygame display surface to render to
+        """
+        self.screen = screen
+        self.width = config.SCREEN_WIDTH
+        self.height = config.SCREEN_HEIGHT
+
+        # Initialize fonts
+        pygame.font.init()
+        self.font_small = pygame.font.Font(None, config.FOLLOWER_NAME_FONT_SIZE)
+        self.font_medium = pygame.font.Font(None, config.SCOREBOARD_FONT_SIZE)
+        self.font_large = pygame.font.Font(None, 48)
+        self.font_huge = pygame.font.Font(None, 72)
+
+        # Cache for fighter surfaces
+        self.fighter_surfaces = {}
+
+        # Animation state
+        self.show_podium = False
+        self.podium_animation_progress = 0
+        self.winners = []
+
+        # Kill feed
+        self.kill_feed = []
+        self.kill_feed_duration = 3.0
+
+    def render_frame(self, fighters: List[Fighter], arena: FighterArena,
+                    game_state: dict, particle_system=None):
+        """
+        Render complete frame
+
+        Args:
+            fighters: List of all fighters
+            arena: FighterArena object
+            game_state: Dictionary with game state info
+            particle_system: Optional ParticleSystem for effects
+        """
+        # Clear screen
+        self.screen.fill(config.COLOR_BACKGROUND)
+
+        # Draw arena
+        self._draw_arena(arena)
+
+        # Draw fighters with HP bars
+        self._draw_fighters(fighters)
+
+        # Draw particles
+        if particle_system:
+            particle_system.render(self.screen)
+
+        # Draw UI
+        self._draw_scoreboard(fighters, game_state)
+
+        # Draw intro overlay if in intro phase
+        if game_state.get("game_phase") == "intro":
+            self._draw_intro(game_state.get("day_number", 1))
+            return
+
+        # Draw countdown if in countdown phase
+        if game_state.get("game_phase") == "countdown":
+            self._draw_countdown(game_state.get("countdown_number", 3))
+            return
+
+        # Draw podium if game is over
+        if game_state.get("game_over", False) and not self.show_podium:
+            self.show_podium = True
+            self.podium_animation_progress = 0
+            self.winners = [f for f in fighters if f.alive]
+            self.game_state = game_state
+
+        if self.show_podium:
+            self._draw_podium(self.winners, self.game_state)
+
+    def _draw_arena(self, arena: FighterArena):
+        """
+        Draw the rectangular arena
+
+        Args:
+            arena: FighterArena object
+        """
+        rect = arena.get_rect()
+
+        # Draw arena floor
+        pygame.draw.rect(
+            self.screen,
+            config.COLOR_FIGHTER_ARENA,
+            rect
+        )
+
+        # Draw arena border
+        pygame.draw.rect(
+            self.screen,
+            (0, 0, 0),
+            rect,
+            3  # Border width
+        )
+
+    def _draw_fighters(self, fighters: List[Fighter]):
+        """
+        Draw all fighters with their avatars and HP bars
+
+        Args:
+            fighters: List of all fighters
+        """
+        for fighter in fighters:
+            # Skip if completely faded out
+            if not fighter.alive and not fighter.is_fading():
+                continue
+
+            # Get or create fighter surface
+            surface = self._get_fighter_surface(fighter)
+
+            # Apply alpha for fade out
+            if fighter.alpha < 255:
+                surface = surface.copy()
+                surface.set_alpha(fighter.alpha)
+
+            # Draw fighter
+            pos = fighter.get_position()
+            rect = surface.get_rect(center=(int(pos[0]), int(pos[1])))
+            self.screen.blit(surface, rect)
+
+            # Draw HP bar above fighter (if alive or fading)
+            if fighter.alive or fighter.is_fading():
+                self._draw_hp_bar(fighter)
+
+                # Draw attack indicator if attacking
+                if fighter.is_attacking:
+                    self._draw_attack_indicator(fighter)
+
+    def _get_fighter_surface(self, fighter: Fighter) -> pygame.Surface:
+        """
+        Get or create cached surface for a fighter
+
+        Args:
+            fighter: Fighter object
+
+        Returns:
+            Pygame surface with rendered avatar
+        """
+        if fighter.id in self.fighter_surfaces and not fighter.surface_needs_update:
+            return self.fighter_surfaces[fighter.id]
+
+        # Create new surface
+        size = int(config.FOLLOWER_RADIUS * 2)
+        radius = int(config.FOLLOWER_RADIUS)
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+
+        # Draw avatar circle
+        if fighter.avatar_image:
+            avatar_surface = self._pil_to_pygame(fighter.avatar_image, size)
+            self._draw_circular_image(surface, avatar_surface, radius)
+        else:
+            # Draw colored circle for placeholder
+            pygame.draw.circle(
+                surface,
+                fighter.color,
+                (radius, radius),
+                radius - config.FOLLOWER_BORDER_WIDTH
+            )
+
+        # Draw white border
+        pygame.draw.circle(
+            surface,
+            config.COLOR_BORDER,
+            (radius, radius),
+            radius,
+            config.FOLLOWER_BORDER_WIDTH
+        )
+
+        # Cache the surface
+        self.fighter_surfaces[fighter.id] = surface
+        fighter.surface_needs_update = False
+
+        return surface
+
+    def _draw_circular_image(self, surface: pygame.Surface,
+                           image_surface: pygame.Surface, radius: int):
+        """Draw an image clipped to a circle"""
+        mask = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(mask, (255, 255, 255, 255), (radius, radius),
+                         radius - config.FOLLOWER_BORDER_WIDTH)
+
+        scaled_image = pygame.transform.scale(image_surface, (radius * 2, radius * 2))
+        scaled_image.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.blit(scaled_image, (0, 0))
+
+    def _draw_hp_bar(self, fighter: Fighter):
+        """
+        Draw HP bar above a fighter
+
+        Args:
+            fighter: Fighter to draw HP bar for
+        """
+        pos = fighter.get_position()
+        hp_pct = fighter.get_hp_percentage()
+
+        # HP bar dimensions
+        bar_width = config.FIGHTER_HP_BAR_WIDTH
+        bar_height = config.FIGHTER_HP_BAR_HEIGHT
+        bar_x = int(pos[0] - bar_width // 2)
+        bar_y = int(pos[1] - config.FOLLOWER_RADIUS - 8)
+
+        # Draw background
+        pygame.draw.rect(
+            self.screen,
+            config.COLOR_HP_BAR_BG,
+            (bar_x, bar_y, bar_width, bar_height)
+        )
+
+        # Determine HP color based on percentage
+        if hp_pct > 0.6:
+            hp_color = config.COLOR_HP_BAR_FULL
+        elif hp_pct > 0.3:
+            hp_color = config.COLOR_HP_BAR_MID
+        else:
+            hp_color = config.COLOR_HP_BAR_LOW
+
+        # Draw HP fill
+        fill_width = int(bar_width * hp_pct)
+        if fill_width > 0:
+            pygame.draw.rect(
+                self.screen,
+                hp_color,
+                (bar_x, bar_y, fill_width, bar_height)
+            )
+
+        # Draw border
+        pygame.draw.rect(
+            self.screen,
+            (0, 0, 0),
+            (bar_x, bar_y, bar_width, bar_height),
+            1
+        )
+
+    def _draw_attack_indicator(self, fighter: Fighter):
+        """
+        Draw attack animation indicator
+
+        Args:
+            fighter: Fighter who is attacking
+        """
+        pos = fighter.get_position()
+        # Draw a brief flash around the fighter
+        pygame.draw.circle(
+            self.screen,
+            (255, 255, 100, 100),  # Yellow flash
+            (int(pos[0]), int(pos[1])),
+            int(config.FOLLOWER_RADIUS * 1.5),
+            2
+        )
+
+    def _draw_scoreboard(self, fighters: List[Fighter], game_state: dict):
+        """
+        Draw scoreboard with title and stats
+
+        Args:
+            fighters: List of all fighters
+            game_state: Game state dictionary
+        """
+        alive_count = sum(1 for f in fighters if f.alive)
+        total_count = len(fighters)
+
+        # Get arena for positioning
+        arena_rect = config.FIGHTER_ARENA_RECT
+        arena_top = arena_rect[1]
+        arena_bottom = arena_rect[1] + arena_rect[3]
+
+        # === TOP: FIGHTER ARENA title ===
+        title_font = pygame.font.Font(None, 56)
+        title_text = title_font.render("FIGHTER ARENA", True, config.COLOR_TEXT)
+        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 50))
+        self.screen.blit(title_text, title_rect)
+
+        # "Making my followers battle every day" subtitle
+        subtitle_font = pygame.font.Font(None, 32)
+        subtitle_text = subtitle_font.render("Making my followers battle every day", True, config.COLOR_TEXT)
+        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 20))
+        self.screen.blit(subtitle_text, subtitle_rect)
+
+        # === BELOW ARENA: Day and stats ===
+        day_number = game_state.get("day_number", getattr(config, 'DAY_NUMBER', 1))
+        day_font = pygame.font.Font(None, 36)
+        day_text = day_font.render(f"Day {day_number}: {total_count} fighters", True, config.COLOR_TEXT)
+        day_rect = day_text.get_rect(center=(self.width // 2, arena_bottom + 25))
+        self.screen.blit(day_text, day_rect)
+
+        # Alive stat
+        stats_font = pygame.font.Font(None, 28)
+        alive_text = stats_font.render(f"Alive: {alive_count}/{total_count}", True, config.COLOR_TEXT)
+        alive_rect = alive_text.get_rect(center=(self.width // 2, arena_bottom + 55))
+        self.screen.blit(alive_text, alive_rect)
+
+    def _draw_intro(self, day_number: int):
+        """Draw intro overlay"""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        intro_text = f"Day {day_number} of making my"
+        intro_text2 = "followers fight each other"
+
+        text1 = self.font_large.render(intro_text, True, (255, 255, 255))
+        text2 = self.font_large.render(intro_text2, True, (255, 255, 255))
+
+        rect1 = text1.get_rect(center=(self.width // 2, self.height // 2 - 40))
+        rect2 = text2.get_rect(center=(self.width // 2, self.height // 2 + 20))
+
+        self.screen.blit(text1, rect1)
+        self.screen.blit(text2, rect2)
+
+    def _draw_countdown(self, number: int):
+        """Draw countdown overlay"""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 100))
+        self.screen.blit(overlay, (0, 0))
+
+        pulse = abs(math.sin(pygame.time.get_ticks() / 150.0))
+        scale = 1.0 + pulse * 0.2
+
+        if number == 0:
+            text = "FIGHT!"
+            color = (255, 50, 50)
+        else:
+            text = str(number)
+            color = (255, 215, 0)
+
+        countdown_font = pygame.font.Font(None, int(200 * scale))
+        countdown_text = countdown_font.render(text, True, color)
+        rect = countdown_text.get_rect(center=(self.width // 2, self.height // 2))
+
+        # Shadow
+        shadow_text = countdown_font.render(text, True, (0, 0, 0))
+        shadow_rect = shadow_text.get_rect(center=(self.width // 2 + 5, self.height // 2 + 5))
+        self.screen.blit(shadow_text, shadow_rect)
+        self.screen.blit(countdown_text, rect)
+
+    def _draw_podium(self, winners: List[Fighter], game_state: dict):
+        """Draw final podium with winners"""
+        self.podium_animation_progress += 0.02
+        if self.podium_animation_progress > 1.0:
+            self.podium_animation_progress = 1.0
+
+        # Semi-transparent overlay
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, int(180 * self.podium_animation_progress)))
+        self.screen.blit(overlay, (0, 0))
+
+        if self.podium_animation_progress < 1.0:
+            return
+
+        # Draw title
+        pulse = abs(math.sin(pygame.time.get_ticks() / 300.0))
+        title_color = (255, int(215 + pulse * 40), 0)
+        title = self.font_huge.render("WINNER!", True, title_color)
+        title_y = int(self.height * 0.08)
+        title_rect = title.get_rect(center=(self.width // 2, title_y))
+        self.screen.blit(title, title_rect)
+
+        # Draw winner
+        if winners:
+            winner = winners[0]
+            winner_y = int(self.height * 0.25)
+
+            # Spotlight
+            spotlight_radius = int(80 + pulse * 20)
+            for i in range(3):
+                spotlight = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                radius = spotlight_radius + i * 25
+                alpha = int(50 / (i + 1))
+                pygame.draw.circle(spotlight, (255, 255, 0, alpha),
+                                 (self.width // 2, winner_y), radius)
+                self.screen.blit(spotlight, (0, 0))
+
+            # Avatar
+            avatar_size = int(self.width * 0.15)
+            avatar = self._get_fighter_surface(winner)
+            avatar = pygame.transform.scale(avatar, (avatar_size, avatar_size))
+            avatar_rect = avatar.get_rect(center=(self.width // 2, winner_y))
+            self.screen.blit(avatar, avatar_rect)
+
+            # Username
+            name_text = self.font_large.render(winner.username, True, (255, 255, 255))
+            name_rect = name_text.get_rect(center=(self.width // 2, winner_y + avatar_size // 2 + 30))
+            self.screen.blit(name_text, name_rect)
+
+            # Stats
+            stats_text = self.font_medium.render(
+                f"Kills: {winner.kills} | Damage: {winner.damage_dealt:.0f}",
+                True, (200, 200, 200)
+            )
+            stats_rect = stats_text.get_rect(center=(self.width // 2, winner_y + avatar_size // 2 + 60))
+            self.screen.blit(stats_text, stats_rect)
+
+        # Draw leaderboards
+        all_followers = game_state.get("all_followers", [])
+        self._draw_leaderboards(game_state, all_followers)
+
+    def _draw_leaderboards(self, game_state: dict, followers: list):
+        """Draw current game and all-time leaderboards"""
+        current_lb = game_state.get("current_game_leaderboard", [])
+        all_time_lb = game_state.get("all_time_leaderboard", [])
+
+        if not current_lb and not all_time_lb:
+            return
+
+        follower_map = {f.username: f for f in followers}
+
+        start_y = int(self.height * 0.45)
+        board_width = int(self.width * 0.44)
+        spacing = int(self.width * 0.037)
+        left_x = (self.width - board_width * 2 - spacing) // 2
+        right_x = left_x + board_width + spacing
+
+        if current_lb:
+            self._draw_leaderboard_panel(
+                "CURRENT GAME", "TOP 10",
+                current_lb[:10], left_x, start_y, board_width,
+                (0, 200, 255), follower_map
+            )
+
+        if all_time_lb:
+            all_time_formatted = [(username, points) for username, points, _ in all_time_lb]
+            self._draw_leaderboard_panel(
+                "ALL-TIME", "TOP 10",
+                all_time_formatted[:10], right_x, start_y, board_width,
+                (255, 215, 0), follower_map
+            )
+
+    def _draw_leaderboard_panel(self, title_line1: str, title_line2: str,
+                               leaderboard: list, x: int, y: int, width: int,
+                               color: tuple, follower_map: dict):
+        """Draw a single leaderboard panel"""
+        if not leaderboard:
+            return
+
+        entry_height = int(self.height * 0.026)
+        header_height = int(self.height * 0.047)
+        panel_height = header_height + len(leaderboard) * entry_height + 20
+
+        panel = pygame.Surface((width, panel_height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 200))
+        self.screen.blit(panel, (x, y))
+
+        # Titles
+        title1_text = self.font_medium.render(title_line1, True, color)
+        title1_rect = title1_text.get_rect(center=(x + width // 2, y + int(self.height * 0.013)))
+        self.screen.blit(title1_text, title1_rect)
+
+        title2_text = self.font_medium.render(title_line2, True, color)
+        title2_rect = title2_text.get_rect(center=(x + width // 2, y + int(self.height * 0.029)))
+        self.screen.blit(title2_text, title2_rect)
+
+        # Entries
+        medals = ["1.", "2.", "3."]
+        entry_y = y + header_height
+
+        for i, (username, points) in enumerate(leaderboard):
+            rank = i + 1
+            rank_str = medals[i] if i < 3 else f"{rank}."
+            rank_text = self.font_small.render(rank_str, True, (200, 200, 200))
+
+            max_len = 16
+            display_name = username if len(username) <= max_len else username[:max_len-2] + ".."
+            name_font = pygame.font.Font(None, 14)
+            name_text = name_font.render(display_name, True, (255, 255, 255))
+
+            points_text = self.font_small.render(f"{points:.1f}", True, (0, 255, 150))
+
+            rank_rect = rank_text.get_rect(left=x + 10, centery=entry_y)
+            name_rect = name_text.get_rect(left=x + 40, centery=entry_y)
+            points_rect = points_text.get_rect(right=x + width - 10, centery=entry_y)
+
+            self.screen.blit(rank_text, rank_rect)
+            self.screen.blit(name_text, name_rect)
+            self.screen.blit(points_text, points_rect)
+
+            entry_y += entry_height
+
+    def _pil_to_pygame(self, pil_image: Image.Image, size: int) -> pygame.Surface:
+        """Convert PIL image to pygame surface"""
+        pil_image = pil_image.resize((size, size), Image.Resampling.LANCZOS)
+        mode = pil_image.mode
+        size = pil_image.size
+        data = pil_image.tobytes()
+        surface = pygame.image.fromstring(data, size, mode)
+        return surface.convert_alpha()
+
+    def add_elimination(self, username: str):
+        """Add an elimination to the kill feed"""
+        import time
+        self.kill_feed.append((username, time.time()))
+        if len(self.kill_feed) > 5:
+            self.kill_feed.pop(0)
+
+    def reset(self):
+        """Reset renderer state"""
+        self.fighter_surfaces.clear()
+        self.show_podium = False
+        self.podium_animation_progress = 0
+        self.winners = []
+        self.kill_feed = []

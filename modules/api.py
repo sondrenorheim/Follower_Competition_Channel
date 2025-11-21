@@ -385,6 +385,11 @@ class InstagramAPI:
 
                     reader = csv.DictReader(f, delimiter=delimiter)
 
+                    # Check if we'll be downloading profile pictures
+                    download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
+                    if download_pics:
+                        print(f"📸 Profile picture downloading enabled - this may take a while...")
+
                     for i, row in enumerate(reader):
                         if i >= count:
                             break
@@ -403,8 +408,12 @@ class InstagramAPI:
                         if username:
                             # Optionally download profile picture if URL provided and enabled
                             avatar_img = None
-                            if profile_pic_url and getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False):
+                            if profile_pic_url and download_pics:
                                 avatar_img = self._download_avatar(profile_pic_url)
+
+                                # Show progress every 10 downloads
+                                if (i + 1) % 10 == 0:
+                                    print(f"   📥 Downloaded {i + 1}/{count} profile pictures...")
 
                             followers.append({
                                 "id": f"imported_{i}",
@@ -412,6 +421,10 @@ class InstagramAPI:
                                 "avatar": avatar_img,
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
+
+                    # Print completion message if we downloaded profile pictures
+                    if download_pics and followers:
+                        print(f"   ✅ Completed! Downloaded {len(followers)}/{count} profile pictures")
 
             # Handle plain text files (one username per line)
             elif file_ext == '.txt':

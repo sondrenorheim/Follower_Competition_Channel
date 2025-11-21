@@ -46,6 +46,7 @@ class Follower:
 
         # State
         self.alive = True
+        self.spawn_time = time.time()  # When follower spawned
         self.elimination_time = 0.0
         self.alpha = 255  # For fade out animation
 
@@ -78,10 +79,10 @@ class Follower:
 
         # Move toward target (trying to push them toward edge)
         if self.target_follower and self.target_follower.alive:
-            self._move_toward_target(arena_center, dt)
+            self._move_toward_target(arena_center, dt, safe_radius)
         else:
-            # Random movement if no target
-            self._random_movement(dt)
+            # Random movement if no target, but still avoid danger zone
+            self._random_movement(dt, arena_center, safe_radius)
 
         # Apply push velocity from collisions
         self.x += self.push_vx
@@ -135,14 +136,58 @@ class Follower:
 
         self.target_follower = nearest
 
-    def _move_toward_target(self, arena_center: Tuple[float, float], dt: float):
+    def _calculate_zone_avoidance(self, arena_center: Tuple[float, float], safe_radius: float) -> Tuple[float, float]:
+        """
+        Calculate avoidance force to stay away from danger zone
+
+        Args:
+            arena_center: Center of the arena
+            safe_radius: Current safe zone radius
+
+        Returns:
+            (force_x, force_y) tuple representing avoidance force
+        """
+        # Calculate distance from center
+        dx_to_center = arena_center[0] - self.x
+        dy_to_center = arena_center[1] - self.y
+        distance_from_center = math.sqrt(dx_to_center * dx_to_center + dy_to_center * dy_to_center)
+
+        # Distance from safe zone edge (negative if inside danger zone)
+        distance_from_edge = safe_radius - distance_from_center - config.FOLLOWER_RADIUS
+
+        # Start avoiding when within this distance from edge
+        avoidance_threshold = 80  # Start avoiding 80 pixels from edge
+
+        if distance_from_edge < avoidance_threshold:
+            # Normalize direction to center
+            if distance_from_center > 0.1:
+                dx_to_center /= distance_from_center
+                dy_to_center /= distance_from_center
+
+                # Calculate avoidance strength (stronger as we get closer to edge)
+                avoidance_strength = 1.0 - (distance_from_edge / avoidance_threshold)
+                avoidance_strength = max(0.0, min(1.0, avoidance_strength))
+
+                # Apply strong force when very close to or in danger zone
+                if distance_from_edge < 0:
+                    # In danger zone - panic mode!
+                    avoidance_strength = 2.0
+
+                # Return force toward center
+                force_magnitude = config.BASE_SPEED * avoidance_strength * 2.0
+                return (dx_to_center * force_magnitude, dy_to_center * force_magnitude)
+
+        return (0.0, 0.0)
+
+    def _move_toward_target(self, arena_center: Tuple[float, float], dt: float, safe_radius: float = None):
         """
         Move toward target with strategy to push them toward edge
-        Adds randomness for natural movement
+        Adds randomness for natural movement and zone avoidance
 
         Args:
             arena_center: Center of the arena
             dt: Delta time
+            safe_radius: Current safe zone radius for avoidance
         """
         if not self.target_follower:
             return
@@ -166,31 +211,57 @@ class Follower:
         new_dx = dx * cos_r - dy * sin_r
         new_dy = dx * sin_r + dy * cos_r
 
-        # Apply movement
-        self.vx = new_dx * config.BASE_SPEED
-        self.vy = new_dy * config.BASE_SPEED
+        # Calculate base target velocity
+        target_vx = new_dx * config.BASE_SPEED
+        target_vy = new_dy * config.BASE_SPEED
 
-    def _random_movement(self, dt: float):
+        # Add zone avoidance force
+        if safe_radius is not None:
+            avoid_x, avoid_y = self._calculate_zone_avoidance(arena_center, safe_radius)
+            target_vx += avoid_x
+            target_vy += avoid_y
+
+        # Apply movement with smooth interpolation for less flickering
+        smoothing = 0.15  # Lower = smoother but slower response, higher = faster but more jittery
+        self.vx += (target_vx - self.vx) * smoothing
+        self.vy += (target_vy - self.vy) * smoothing
+
+    def _random_movement(self, dt: float, arena_center: Tuple[float, float] = None, safe_radius: float = None):
         """
         Apply random movement when no target is available
 
         Args:
             dt: Delta time
+            arena_center: Center of the arena for zone avoidance
+            safe_radius: Current safe zone radius for avoidance
         """
         # Occasionally change direction
         if random.random() < 0.02:  # 2% chance per frame
             angle = random.random() * 2 * math.pi
-            self.vx = math.cos(angle) * config.BASE_SPEED
-            self.vy = math.sin(angle) * config.BASE_SPEED
+            target_vx = math.cos(angle) * config.BASE_SPEED
+            target_vy = math.sin(angle) * config.BASE_SPEED
 
-    def check_safe_zone(self, arena_center: Tuple[float, float], safe_radius: float) -> bool:
+            # Add zone avoidance force
+            if arena_center is not None and safe_radius is not None:
+                avoid_x, avoid_y = self._calculate_zone_avoidance(arena_center, safe_radius)
+                target_vx += avoid_x
+                target_vy += avoid_y
+
+            # Smooth interpolation for random movement too
+            smoothing = 0.15
+            self.vx += (target_vx - self.vx) * smoothing
+            self.vy += (target_vy - self.vy) * smoothing
+
+    def check_safe_zone(self, arena_center: Tuple[float, float], safe_radius: float,
+                       particle_system=None) -> bool:
         """
         Check if follower is inside safe zone
-        Eliminate if completely outside
+        Eliminate if any part of follower touches the danger zone
 
         Args:
             arena_center: Center of the arena
             safe_radius: Current safe zone radius
+            particle_system: Optional ParticleSystem for elimination effects
 
         Returns:
             True if alive, False if eliminated
@@ -198,14 +269,15 @@ class Follower:
         if not self.alive:
             return False
 
-        # Calculate distance from center
+        # Calculate distance from center to follower center
         dx = self.x - arena_center[0]
         dy = self.y - arena_center[1]
         distance = math.sqrt(dx * dx + dy * dy)
 
-        # Check if completely outside safe zone (center is outside)
-        if distance > safe_radius:
-            self.eliminate()
+        # Check if ANY part of the follower is outside the safe zone
+        # (distance to center + follower radius > safe zone radius)
+        if distance + config.FOLLOWER_RADIUS > safe_radius:
+            self.eliminate(particle_system)
             return False
 
         return True
@@ -260,15 +332,22 @@ class Follower:
 
         return False
 
-    def eliminate(self):
+    def eliminate(self, particle_system=None):
         """
         Eliminate this follower from the game
         Starts fade-out animation
+
+        Args:
+            particle_system: Optional ParticleSystem to create elimination effects
         """
         if self.alive:
             self.alive = False
             self.elimination_time = time.time()
             self.surface_needs_update = True
+
+            # Create particle explosion effect
+            if particle_system:
+                particle_system.create_elimination_explosion(self.x, self.y, self.color)
 
     def get_position(self) -> Tuple[float, float]:
         """
@@ -287,6 +366,16 @@ class Follower:
             True if fading, False otherwise
         """
         return not self.alive and (time.time() - self.elimination_time < config.FADE_DURATION)
+
+    def get_survival_time(self) -> float:
+        """
+        Get survival time in seconds
+
+        Returns:
+            Survival time from spawn to elimination (or current time if still alive)
+        """
+        end_time = self.elimination_time if not self.alive else time.time()
+        return end_time - self.spawn_time
 
     def __repr__(self):
         status = "ALIVE" if self.alive else "ELIMINATED"
