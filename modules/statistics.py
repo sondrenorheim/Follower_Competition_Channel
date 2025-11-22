@@ -36,12 +36,12 @@ class PlayerStatistics:
             try:
                 with open(self.stats_file, 'r', encoding='utf-8') as f:
                     self.stats = json.load(f)
-                print(f"📊 Loaded statistics for {len(self.stats)} players")
+                print(f"Loaded statistics for {len(self.stats)} players")
             except Exception as e:
-                print(f"⚠️  Error loading statistics: {e}")
+                print(f"Error loading statistics: {e}")
                 self.stats = {}
         else:
-            print("📊 No existing statistics file, starting fresh")
+            print("No existing statistics file, starting fresh")
             self.stats = {}
 
     def save_statistics(self):
@@ -269,11 +269,11 @@ class PlayerStatistics:
         leaderboard = self.get_all_time_leaderboard(top_n)
 
         if not leaderboard:
-            print("\n📊 No statistics available yet")
+            print("\nNo statistics available yet")
             return
 
         print("\n" + "=" * 70)
-        print("  🏆 ALL-TIME LEADERBOARD 🏆")
+        print("  ALL-TIME LEADERBOARD")
         print("=" * 70)
 
         medals = ["🥇", "🥈", "🥉"]

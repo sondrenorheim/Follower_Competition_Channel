@@ -16,11 +16,12 @@ FPS = 60
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "fighter_arena"
+GAME_MODE = "obstacle_course"
 TEST_MODE = True
-EXPORT_VIDEO = True
-DAY_NUMBER = 1  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = True
+TEST_MODE_SPEED_MULTIPLIER = 0.5  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
+EXPORT_VIDEO = False
+DAY_NUMBER = 6  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = False
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 
@@ -101,7 +102,10 @@ VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 # Use Instagram's "Download Your Data" feature to get followers.json
 # Or use a Chrome extension like "IG Exporter & Scraper" for instant export
 # Or create your own CSV/JSON/TXT file with usernames
-FOLLOWER_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegrounds_Followers.csv"  
+FOLLOWER_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegrounds_Followers.csv"
+
+# TikTok followers import file (optional - will be combined with Instagram followers)
+TIKTOK_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegro-followers.csv"
 
 # Download real profile pictures from CSV (if profile_pic_url column exists)
 # Set to True to download real Instagram profile pictures (takes longer, uses bandwidth)
@@ -191,7 +195,7 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
 # ===== FIGHTER ARENA SETTINGS =====
 # Rectangle arena boundaries (x, y, width, height)
 # Height similar to Battle Royale circle diameter (500px = 2 * 250 radius)
-FIGHTER_ARENA_RECT = (20, 180, SCREEN_WIDTH - 40, 500)
+FIGHTER_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, 500)
 
 # Default fighter stats (must sum to 100)
 FIGHTER_DEFAULT_STATS = {
@@ -221,3 +225,39 @@ COLOR_HP_BAR_LOW = (255, 50, 50)       # Red when HP is low
 FIGHTER_ATTACK_RANGE = FOLLOWER_RADIUS * 2.5  # Distance to land an attack
 FIGHTER_HP_BAR_WIDTH = 30             # Width of HP bar above fighters
 FIGHTER_HP_BAR_HEIGHT = 4             # Height of HP bar
+
+# ===== OBSTACLE COURSE SETTINGS =====
+# Course dimensions
+OBSTACLE_COURSE_LENGTH = 9000      # Total course length in pixels
+OBSTACLE_COURSE_WIDTH = 500        # Track width in pixels
+
+# Track generation settings - simple horizontal race with gentle vertical waves
+COURSE_SEGMENT_LENGTH = 300        # Distance between waypoints (pixels)
+COURSE_VERTICAL_WAVE_MIN = 30      # Minimum vertical shift between waypoints
+COURSE_VERTICAL_WAVE_MAX = 100     # Maximum vertical shift between waypoints
+
+# Course colors
+COLOR_OBSTACLE_COURSE_TRACK = (180, 180, 190)  # Track surface color
+OBSTACLE_COURSE_BARRIER_COLOR = (100, 100, 100)  # Track edge barriers
+COLOR_WAYPOINT_MARKER = (100, 200, 255)  # Waypoint visualization color
+
+# Racer grab mechanic
+RACER_GRAB_RANGE = 30              # pixels - distance to grab another racer
+RACER_GRAB_COOLDOWN = 2.0          # seconds - cooldown between grabs
+RACER_GRAB_THROW_POWER = 15        # pixels/frame - how far target gets thrown
+
+# Finish line settings
+FINISH_GRACE_PERIOD = 5.0          # seconds - time after first finisher for others to finish
+
+# Racer default stats (must sum to 30)
+RACER_DEFAULT_STATS = {
+    "speed": 10,        # Movement speed
+    "agility": 10,      # Obstacle avoidance, turn speed
+    "intelligence": 10  # Pathfinding quality, grab decisions
+}
+
+# Stat boosts for specific usernames
+# Format: {"username": {"stat_name": bonus_points, ...}, ...}
+RACER_STAT_BOOSTS = {
+    # Add usernames here to give them boosted stats
+}

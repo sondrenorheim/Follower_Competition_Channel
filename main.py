@@ -13,7 +13,17 @@ import random
 import math
 import time
 import sys
+import os
 from typing import List
+
+# Fix Windows console encoding to support UTF-8 characters
+if os.name == 'nt':  # Windows
+    try:
+        import codecs
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+    except:
+        pass  # If this fails, emojis will be skipped but game will still run
 
 # Import configuration
 import config
@@ -538,18 +548,23 @@ def main():
             from modules import FighterBattleArena
             print("🥊 Starting Fighter Arena mode...")
             game = FighterBattleArena()
+        elif game_mode == "obstacle_course":
+            # Import and run Obstacle Course
+            from modules import ObstacleCourseGame
+            print("Starting Obstacle Course mode...")
+            game = ObstacleCourseGame()
         else:
             # Default to Battle Royale
-            print("🎮 Starting Battle Royale mode...")
+            print("Starting Battle Royale mode...")
             game = FollowerBattleRoyale()
 
         game.run()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Game interrupted by user")
+        print("\n\nGame interrupted by user")
         pygame.quit()
         sys.exit(0)
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
         pygame.quit()

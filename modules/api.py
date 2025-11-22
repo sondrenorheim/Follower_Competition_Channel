@@ -44,6 +44,7 @@ class InstagramAPI:
         self.insta_username = getattr(config, 'INSTAGRAM_USERNAME', '')
         self.insta_password = getattr(config, 'INSTAGRAM_PASSWORD', '')
         self.import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
+        self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
 
     def fetch_followers(self, count: int = 500) -> List[Dict[str, any]]:
         """
@@ -55,18 +56,37 @@ class InstagramAPI:
         Returns:
             List of follower dictionaries with 'id', 'username', and 'avatar' keys
         """
-        # Priority 1: Import from file if specified (SAFE!)
+        # Priority 1: Import from file(s) if specified (SAFE!)
+        instagram_followers = []
+        tiktok_followers = []
+
+        # Import Instagram followers
         if self.import_file and os.path.exists(self.import_file):
-            print(f"✅ Importing followers from file: {self.import_file}")
+            print(f"✅ Importing Instagram followers from: {self.import_file}")
             try:
-                followers = self._import_from_file(self.import_file, count)
-                if followers:
-                    print(f"✅ Successfully imported {len(followers)} followers")
-                    return followers
+                instagram_followers = self._import_from_file(self.import_file, count) or []
+                print(f"✅ Imported {len(instagram_followers)} Instagram followers")
             except Exception as e:
-                print(f"❌ Import failed: {e}")
-                print(f"Falling back to offline mode")
-                return self._generate_placeholder_followers(count)
+                print(f"❌ Instagram import failed: {e}")
+
+        # Import TikTok followers
+        if self.tiktok_import_file and os.path.exists(self.tiktok_import_file):
+            print(f"✅ Importing TikTok followers from: {self.tiktok_import_file}")
+            try:
+                tiktok_followers = self._import_from_file(self.tiktok_import_file, count) or []
+                print(f"✅ Imported {len(tiktok_followers)} TikTok followers")
+            except Exception as e:
+                print(f"❌ TikTok import failed: {e}")
+
+        # Combine both sources
+        if instagram_followers or tiktok_followers:
+            combined_followers = instagram_followers + tiktok_followers
+            # Shuffle to mix Instagram and TikTok followers
+            random.shuffle(combined_followers)
+            # Limit to requested count
+            combined_followers = combined_followers[:count]
+            print(f"✅ Combined total: {len(combined_followers)} followers ({len(instagram_followers)} IG + {len(tiktok_followers)} TikTok)")
+            return combined_followers
 
         # Priority 2: Use Instaloader scraper if enabled (RISKY!)
         if self.scraper_mode and self.insta_username:
@@ -409,7 +429,7 @@ class InstagramAPI:
                             key_lower = key.lower().strip('"')
                             if key_lower in ['username', 'user', 'name', 'follower']:
                                 username = row[key].strip('"')
-                            elif key_lower in ['profile_pic_url', 'profile_picture_url', 'avatar_url', 'picture_url']:
+                            elif key_lower in ['profile_pic_url', 'profile_picture_url', 'profile picture', 'avatar_url', 'picture_url']:
                                 profile_pic_url = row[key].strip('"')
 
                         if username:

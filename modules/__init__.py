@@ -1,5 +1,5 @@
 """
-Follower Battle Royale & Fighter Arena Game Modules
+Follower Battle Royale, Fighter Arena, and Obstacle Course Game Modules
 """
 
 # Battle Royale modules
@@ -21,6 +21,15 @@ from .fighter_arena import FighterArena
 from .fighter_renderer import FighterRenderer
 from .fighter_game import FighterBattleArena
 
+# Obstacle Course modules
+from .racer import Racer
+from .obstacle_course import ObstacleCourse
+from .obstacles import Obstacle, StaticWall, MovingWall
+from .course_generator import CourseGenerator
+from .obstacle_course_camera import ObstacleCourseCamera
+from .obstacle_course_renderer import ObstacleCourseRenderer
+from .obstacle_course_game import ObstacleCourseGame
+
 __all__ = [
     # Battle Royale
     'InstagramAPI',
@@ -39,4 +48,14 @@ __all__ = [
     'FighterArena',
     'FighterRenderer',
     'FighterBattleArena',
+    # Obstacle Course
+    'Racer',
+    'ObstacleCourse',
+    'Obstacle',
+    'StaticWall',
+    'MovingWall',
+    'CourseGenerator',
+    'ObstacleCourseCamera',
+    'ObstacleCourseRenderer',
+    'ObstacleCourseGame',
 ]
