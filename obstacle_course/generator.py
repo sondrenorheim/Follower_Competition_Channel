@@ -7,7 +7,7 @@ import random
 import math
 from typing import List, Tuple
 import config
-from .obstacle_course import ObstacleCourse
+from .course import ObstacleCourse
 from .obstacles import StaticWall, MovingWall, Spinner, SpeedBoost, SlowZone, Bumper, Crusher
 
 
@@ -75,14 +75,7 @@ class CourseGenerator:
             if current_x > finish_x:
                 current_x = finish_x
 
-            # Add gentle vertical wave/shift
-            y_change = random.uniform(-config.COURSE_VERTICAL_WAVE_MAX, config.COURSE_VERTICAL_WAVE_MAX)
-            current_y += y_change
-
-            # Keep track centered on screen with margins
-            margin = config.OBSTACLE_COURSE_WIDTH + 100
-            current_y = max(margin, min(config.SCREEN_HEIGHT - margin, current_y))
-
+            # Keep Y fixed for a straight horizontal track
             waypoints.append((current_x, current_y))
 
         return waypoints
@@ -128,7 +121,7 @@ class CourseGenerator:
 
             # Number of obstacles in this segment (90% less obstacles)
             # Only 10% chance of placing an obstacle per segment
-            if random.random() > 0.10:
+            if random.random() > 0.60:
                 continue
 
             num_obstacles = 1  # Max 1 obstacle per segment when we do place one
@@ -243,13 +236,13 @@ class CourseGenerator:
     def _create_spinner(self, x: float, y: float, waypoint: Tuple[float, float]) -> Spinner:
         """Create a spinning bar obstacle"""
         track_top, track_bottom = self._get_track_bounds_at_position(waypoint)
-        track_center = (track_top + track_bottom) / 2
+        half_bar = 90  # Half of max bar length to keep spinner arms in bounds
 
-        # Place spinner near track center
-        spinner_y = track_center + random.uniform(-30, 30)
+        # Place spinner at random position within track (keeping bar arms inside)
+        spinner_y = random.uniform(track_top + half_bar, track_bottom - half_bar)
 
         # Random bar length and rotation speed
-        bar_length = random.uniform(60, 100)
+        bar_length = random.uniform(120, 180)
         rotation_speed = random.uniform(0.5, 1.5)
         if random.random() < 0.5:
             rotation_speed *= -1  # Reverse direction
@@ -259,14 +252,13 @@ class CourseGenerator:
     def _create_bumper(self, x: float, y: float, waypoint: Tuple[float, float]) -> Bumper:
         """Create a pinball-style bumper"""
         track_top, track_bottom = self._get_track_bounds_at_position(waypoint)
-        track_center = (track_top + track_bottom) / 2
-
-        # Position bumper near center of track (small random offset)
-        bumper_y = track_center + random.uniform(-20, 20)
 
         # Random size and stronger bounce force to push racers away
         radius = random.uniform(20, 35)
         bounce_force = random.uniform(18, 25)  # Increased from 10-15
+
+        # Position bumper at random position within track
+        bumper_y = random.uniform(track_top + radius + 10, track_bottom - radius - 10)
 
         return Bumper((x, bumper_y), radius, bounce_force)
 

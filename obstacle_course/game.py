@@ -10,15 +10,18 @@ import numpy as np
 from typing import List, Optional
 
 import config
-from .api import InstagramAPI
+from shared import (
+    InstagramAPI,
+    PlayerStatistics,
+    ScoringSystem,
+    SoundManager,
+    AudioLogger,
+    VideoRecorder
+)
 from .racer import Racer
-from .course_generator import CourseGenerator
-from .obstacle_course_camera import ObstacleCourseCamera
-from .obstacle_course_renderer import ObstacleCourseRenderer
-from .statistics import PlayerStatistics
-from .scoring import ScoringSystem
-from .sound_manager import SoundManager
-from .audio_logger import AudioLogger
+from .generator import CourseGenerator
+from .camera import ObstacleCourseCamera
+from .renderer import ObstacleCourseRenderer
 
 
 class ObstacleCourseGame:
@@ -46,6 +49,16 @@ class ObstacleCourseGame:
         self.renderer = ObstacleCourseRenderer(self.screen)
         self.audio_logger = AudioLogger()
         self.sound = SoundManager(audio_logger=self.audio_logger)
+        self.recorder = VideoRecorder(
+            audio_logger=self.audio_logger,
+            countdown_audio_path='assets/smash_countdown_audio.wav'
+        )
+        # Set green screen overlay to be applied during video export
+        self.recorder.set_greenscreen_overlay(
+            video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
+            scale=1.5,
+            offset_y=70
+        )
         self.statistics = PlayerStatistics()
         self.scoring = ScoringSystem()
 
@@ -71,6 +84,10 @@ class ObstacleCourseGame:
         self.all_time_leaderboard = []
         self.show_leaderboards = False
         self.leaderboard_display_start = None
+
+        # Top 5 race leaderboard (locks once 5 have finished)
+        self.top_5_finishers = []
+        self.top_5_locked = False
 
         # Countdown video
         self.countdown_video = None
@@ -133,19 +150,35 @@ class ObstacleCourseGame:
         if not ret:
             return None
 
-        # Convert BGR to RGB
+        # Convert BGR to HSV for better chroma keying
+        frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Apply chroma key (remove green screen)
-        # Green screen typically has high green channel, low red and blue
-        lower_green = np.array([0, 100, 0])    # Lower bound for green
-        upper_green = np.array([100, 255, 100]) # Upper bound for green
+        # Apply chroma key using HSV color space (more accurate for green screen)
+        # Green hue is around 35-85 in OpenCV's 0-180 range
+        lower_green = np.array([35, 80, 80])   # Hue, Saturation, Value
+        upper_green = np.array([85, 255, 255])
 
         # Create mask where green pixels are white (255), others are black (0)
-        mask = cv2.inRange(frame_rgb, lower_green, upper_green)
+        mask = cv2.inRange(frame_hsv, lower_green, upper_green)
+
+        # Erode the mask to trim green fringe from edges
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.dilate(mask, kernel, iterations=2)  # Expand green area to catch edges
 
         # Invert mask so green pixels are 0 (transparent), non-green are 255 (opaque)
         alpha_channel = cv2.bitwise_not(mask)
+
+        # Feather the edges slightly for smoother blending
+        alpha_channel = cv2.GaussianBlur(alpha_channel, (3, 3), 0)
+
+        # Apply green spill suppression on edge pixels
+        # Reduce green channel where there's partial transparency
+        edge_mask = (alpha_channel > 0) & (alpha_channel < 255)
+        frame_rgb[edge_mask, 1] = np.minimum(
+            frame_rgb[edge_mask, 1],
+            np.maximum(frame_rgb[edge_mask, 0], frame_rgb[edge_mask, 2])
+        )
 
         # Create RGBA image by adding alpha channel
         frame_rgba = np.dstack([frame_rgb, alpha_channel])
@@ -169,6 +202,10 @@ class ObstacleCourseGame:
 
         # Fetch followers
         follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+
+        # Randomize order so followers aren't always in the same starting positions
+        import random
+        random.shuffle(follower_data)
 
         # Place all racers at starting line within track boundaries
         start_x = self.course.start_line[0]
@@ -264,18 +301,36 @@ class ObstacleCourseGame:
         alive_count = sum(1 for r in self.racers if r.alive and not r.finished)
         finished_count = sum(1 for r in self.racers if r.finished)
 
-        # Get leader
+        # Get leader (stop tracking progress once first finisher crosses)
         leader = self._get_leader()
         leader_name = leader.username if leader else None
-        leader_progress = leader.progress if leader else 0.0
+        # If someone has finished, show 100% and stop updating
+        if self.first_finisher is not None:
+            leader_progress = 1.0
+        else:
+            leader_progress = leader.progress if leader else 0.0
 
-        # Get top 5 racers by progress
-        alive_racers = [r for r in self.racers if r.alive and not r.finished]
-        top_5 = sorted(alive_racers, key=lambda r: r.progress, reverse=True)[:5]
-        top_5_data = [(r.username, r.progress) for r in top_5]
+        # Get top 5 racers - prioritize finishers, then by progress
+        if not self.top_5_locked:
+            # Get finishers sorted by finish time
+            finishers = [r for r in self.racers if r.finished]
+            finishers_sorted = sorted(finishers, key=lambda r: r.finish_time if r.finish_time else 9999)
 
-        # Get countdown frame if in countdown phase
-        countdown_frame = self._get_countdown_frame()
+            # Get remaining racers by progress
+            alive_racers = [r for r in self.racers if r.alive and not r.finished]
+            alive_sorted = sorted(alive_racers, key=lambda r: r.progress, reverse=True)
+
+            # Combine: finishers first, then alive racers
+            combined = finishers_sorted + alive_sorted
+            top_5 = combined[:5]
+            top_5_data = [(r.username, r.progress) for r in top_5]
+
+            # Lock the top 5 once we have 5 finishers or game is over
+            if len(finishers_sorted) >= 5 or self.game_over:
+                self.top_5_finishers = top_5_data
+                self.top_5_locked = True
+        else:
+            top_5_data = self.top_5_finishers
 
         game_state = {
             "alive_count": alive_count,
@@ -285,14 +340,18 @@ class ObstacleCourseGame:
             "leader_progress": leader_progress,
             "top_5": top_5_data,
             "game_over": self.game_over,
-            "countdown_frame": countdown_frame,
+            "countdown_frame": None,  # Green screen overlay added during video export
             "show_leaderboards": self.show_leaderboards,
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
+            "winner": self.first_finisher,
         }
 
         self.renderer.render_frame(self.racers, self.course, self.camera, game_state)
         pygame.display.flip()
+
+        # Capture frame for video export
+        self.recorder.capture_frame(self.screen)
 
     def _get_leader(self) -> Racer:
         """Get the leading racer"""
@@ -390,7 +449,11 @@ class ObstacleCourseGame:
         self.sound.start_background_music()
         self.sound.set_music_volume_low()
 
-        # Show countdown video while racers are at starting line
+        # Play the Smash Ultimate countdown audio
+        self.sound.play_smash_countdown_audio()
+
+        # Countdown phase - racers wait at starting line
+        # The green screen overlay will be added during video export
         countdown_active = True
         while countdown_active and self.running:
             for event in pygame.event.get():
@@ -412,7 +475,7 @@ class ObstacleCourseGame:
                 # Increase music volume for race
                 self.sound.set_music_volume_high()
 
-            # Render (countdown frame will be shown in overlay)
+            # Render (no green screen overlay in simulation)
             self.render()
 
         # Race has started - reset countdown start time
@@ -447,7 +510,13 @@ class ObstacleCourseGame:
         print(f"Total Racers: {len(self.racers)}")
         if self.first_finisher:
             print(f"Winner: {self.first_finisher.username}")
+        print(f"Video Frames Captured: {self.recorder.get_frame_count()}")
+        print(f"Video Duration: {self.recorder.get_video_duration():.1f}s")
         print("=" * 60)
+
+        # Export video if enabled
+        if config.EXPORT_VIDEO:
+            self.recorder.export_video()
 
         pygame.quit()
         print("\nThanks for racing!")

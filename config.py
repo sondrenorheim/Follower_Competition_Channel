@@ -17,11 +17,11 @@ FPS = 60
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "obstacle_course"
-TEST_MODE = True
-TEST_MODE_SPEED_MULTIPLIER = 0.5  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
-EXPORT_VIDEO = False
-DAY_NUMBER = 6  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = False
+TEST_MODE = False
+TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
+EXPORT_VIDEO = True
+DAY_NUMBER = 3  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 

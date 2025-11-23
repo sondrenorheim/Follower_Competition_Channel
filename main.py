@@ -28,13 +28,10 @@ if os.name == 'nt':  # Windows
 # Import configuration
 import config
 
-# Import game modules
-from modules import (
+# Import shared modules
+from shared import (
     InstagramAPI,
-    Follower,
-    Arena,
     PhysicsEngine,
-    Renderer,
     VideoRecorder,
     ParticleSystem,
     SoundManager,
@@ -42,6 +39,9 @@ from modules import (
     PlayerStatistics,
     AudioLogger
 )
+
+# Import battle royale specific modules
+from battle_royale import Follower, Arena, Renderer
 
 
 class FollowerBattleRoyale:
@@ -545,12 +545,12 @@ def main():
 
         if game_mode == "fighter_arena":
             # Import and run Fighter Arena
-            from modules import FighterBattleArena
+            from fighter_arena import FighterBattleArena
             print("🥊 Starting Fighter Arena mode...")
             game = FighterBattleArena()
         elif game_mode == "obstacle_course":
             # Import and run Obstacle Course
-            from modules import ObstacleCourseGame
+            from obstacle_course import ObstacleCourseGame
             print("Starting Obstacle Course mode...")
             game = ObstacleCourseGame()
         else:

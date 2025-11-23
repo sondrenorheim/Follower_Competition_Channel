@@ -1,7 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(dir /s /b)",
+      "Bash(copy modulesapi.py shared )",
+      "Bash(copy modulesphysics.py shared )",
+      "Bash(copy modulesparticles.py shared )",
+      "Bash(copy modulessound_manager.py shared )",
+      "Bash(copy modulesrecorder.py shared )",
+      "Bash(copy modulesscoring.py shared )",
+      "Bash(copy modulesstatistics.py shared )",
+      "Bash(copy modulesaudio_logger.py shared)"
     ],
     "deny": [],
     "ask": []

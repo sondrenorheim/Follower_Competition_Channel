@@ -7,9 +7,9 @@ import pygame
 from typing import List
 import config
 from .racer import Racer
-from .obstacle_course import ObstacleCourse
-from .obstacle_course_camera import ObstacleCourseCamera
-from .fighter_renderer import FighterRenderer  # Reuse for racer avatars
+from .course import ObstacleCourse
+from .camera import ObstacleCourseCamera
+from fighter_arena import FighterRenderer  # Reuse for racer avatars
 
 
 class ObstacleCourseRenderer:
@@ -399,22 +399,22 @@ class ObstacleCourseRenderer:
         track_top = 80  # Approximate top of visible track area
         track_bottom = config.SCREEN_HEIGHT - 80  # Approximate bottom
 
-        # Draw title above track
+        # Draw title above track (just above the top track wall)
         title_text = "OBSTACLE COURSE RACE"
         title_surface = self.font_title.render(title_text, True, (0, 0, 0))
-        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top - 50))
+        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 80))
         self.screen.blit(title_surface, title_rect)
 
         # Draw subtitle above track
         subtitle_text = "Making my followers battle every day"
         subtitle_surface = self.font_subtitle.render(subtitle_text, True, (0, 0, 0))
-        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top - 15))
+        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 115))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
-        # Draw day counter below track
+        # Draw day counter right below the track (close to bottom barrier)
         day_text = f"Day {config.DAY_NUMBER}: {total_racers} racers"
         day_surface = self.font_day.render(day_text, True, (0, 0, 0))
-        day_rect = day_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_bottom + 25))
+        day_rect = day_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_bottom - 120))
         self.screen.blit(day_surface, day_rect)
 
     def _draw_ui(self, game_state: dict):
@@ -449,7 +449,8 @@ class ObstacleCourseRenderer:
         if game_state.get('show_leaderboards'):
             self._draw_end_game_leaderboards(
                 game_state.get('current_game_leaderboard', []),
-                game_state.get('all_time_leaderboard', [])
+                game_state.get('all_time_leaderboard', []),
+                game_state.get('winner')
             )
 
     def _draw_progress_bar(self, progress: float):
@@ -495,70 +496,68 @@ class ObstacleCourseRenderer:
 
     def _draw_leaderboard(self, top_5: list):
         """
-        Draw top 5 leaderboard on the right side
+        Draw top 5 leaderboard horizontally below the Day counter
 
         Args:
             top_5: List of (username, progress) tuples
         """
-        # Leaderboard position (top-right)
-        board_x = config.SCREEN_WIDTH - 250
-        board_y = 10
-        board_width = 240
-        row_height = 28
-        board_height = len(top_5) * row_height + 35
+        # Position below the "Day X: XX racers" text
+        track_bottom = config.SCREEN_HEIGHT - 80
+        start_y = track_bottom - 90  # Just below day counter
 
-        # Draw semi-transparent background
-        bg_surface = pygame.Surface((board_width, board_height), pygame.SRCALPHA)
-        bg_surface.fill((0, 0, 0, 180))
-        self.screen.blit(bg_surface, (board_x, board_y))
+        # Calculate total width needed and center it
+        item_width = 100  # Width per racer entry
+        total_width = len(top_5) * item_width
+        start_x = (config.SCREEN_WIDTH - total_width) // 2
 
-        # Draw title
-        title_surface = self.font_small.render("TOP 5 RACERS", True, (255, 215, 0))
-        title_rect = title_surface.get_rect(center=(board_x + board_width // 2, board_y + 15))
-        self.screen.blit(title_surface, title_rect)
+        # Position colors for medals
+        position_colors = [
+            (255, 215, 0),   # 1st - Gold
+            (192, 192, 192), # 2nd - Silver
+            (205, 127, 50),  # 3rd - Bronze
+            (255, 255, 255), # 4th - White
+            (255, 255, 255), # 5th - White
+        ]
 
-        # Draw each racer
+        # Draw each racer horizontally (1st on left, 5th on right)
         for i, (username, progress) in enumerate(top_5):
-            y_pos = board_y + 35 + i * row_height
-
-            # Position number with color
-            position_colors = [
-                (255, 215, 0),   # 1st - Gold
-                (192, 192, 192), # 2nd - Silver
-                (205, 127, 50),  # 3rd - Bronze
-                (255, 255, 255), # 4th - White
-                (255, 255, 255), # 5th - White
-            ]
+            x_pos = start_x + (i * item_width) + item_width // 2  # Center of each slot
             pos_color = position_colors[i] if i < len(position_colors) else (255, 255, 255)
 
             # Draw position number
             pos_text = f"{i + 1}."
             pos_surface = self.font_small.render(pos_text, True, pos_color)
-            self.screen.blit(pos_surface, (board_x + 10, y_pos))
+            pos_rect = pos_surface.get_rect(center=(x_pos, start_y))
+            self.screen.blit(pos_surface, pos_rect)
 
             # Draw username (truncated if too long)
-            max_username_length = 15
-            display_username = username[:max_username_length] + "..." if len(username) > max_username_length else username
-            name_surface = self.font_small.render(display_username, True, (255, 255, 255))
-            self.screen.blit(name_surface, (board_x + 35, y_pos))
+            max_username_length = 10
+            display_username = username[:max_username_length] + ".." if len(username) > max_username_length else username
+            name_surface = self.font_small.render(display_username, True, (0, 0, 0))
+            name_rect = name_surface.get_rect(center=(x_pos, start_y + 20))
+            self.screen.blit(name_surface, name_rect)
 
-            # Draw progress percentage
-            progress_text = f"{progress * 100:.1f}%"
-            progress_surface = self.font_small.render(progress_text, True, (100, 255, 100))
-            progress_rect = progress_surface.get_rect(right=board_x + board_width - 10, top=y_pos)
-            self.screen.blit(progress_surface, progress_rect)
-
-    def _draw_end_game_leaderboards(self, current_game_board: list, all_time_board: list):
+    def _draw_end_game_leaderboards(self, current_game_board: list, all_time_board: list, winner=None):
         """
         Draw two side-by-side leaderboards: current game and all-time
 
         Args:
             current_game_board: List of (username, points) tuples for current race
             all_time_board: List of (username, total_points, stats) tuples for all-time
+            winner: The winning racer object (optional)
         """
         # Screen dimensions
         screen_w = config.SCREEN_WIDTH
         screen_h = config.SCREEN_HEIGHT
+
+        # Draw semi-transparent overlay over entire screen
+        overlay = pygame.Surface((screen_w, screen_h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        self.screen.blit(overlay, (0, 0))
+
+        # Draw winner display first (above leaderboards)
+        if winner:
+            self._draw_winner_display(winner)
 
         # Panel dimensions (matching battle royale layout)
         panel_width = int(screen_w * 0.44)  # 44% of screen width
@@ -664,18 +663,99 @@ class ObstacleCourseRenderer:
             self.screen.blit(name_surface, (x + 50, entry_y + 2))
 
             # Draw points
-            points_text = f"{int(points)}"
+            points_text = f"{points:.1f}"
             points_surface = font_entry.render(points_text, True, (0, 255, 150))
             points_rect = points_surface.get_rect(right=x + width - 10, top=entry_y + 2)
             self.screen.blit(points_surface, points_rect)
 
+    def _draw_winner_display(self, winner):
+        """
+        Draw the 1st place winner display above the leaderboards
+
+        Args:
+            winner: The winning racer object
+        """
+        import math
+
+        screen_w = config.SCREEN_WIDTH
+        screen_h = config.SCREEN_HEIGHT
+
+        # Pulsing effect for title
+        pulse = abs(math.sin(pygame.time.get_ticks() / 300.0))
+        title_color = (255, int(215 + pulse * 40), 0)
+
+        # Draw "WINNER!" title
+        font_huge = pygame.font.Font(None, 72)
+        title = font_huge.render("WINNER!", True, title_color)
+        title_y = int(screen_h * 0.08)
+        title_rect = title.get_rect(center=(screen_w // 2, title_y))
+        self.screen.blit(title, title_rect)
+
+        # Winner position
+        winner_y = int(screen_h * 0.22)
+
+        # Spotlight effect
+        spotlight_radius = int(60 + pulse * 15)
+        for i in range(3):
+            spotlight = pygame.Surface((screen_w, screen_h), pygame.SRCALPHA)
+            radius = spotlight_radius + i * 20
+            alpha = int(50 / (i + 1))
+            pygame.draw.circle(spotlight, (255, 255, 0, alpha),
+                             (screen_w // 2, winner_y), radius)
+            self.screen.blit(spotlight, (0, 0))
+
+        # Draw winner avatar (with profile picture if available)
+        avatar_size = int(screen_w * 0.15)  # Larger avatar for winner display
+        avatar_surface = pygame.Surface((avatar_size, avatar_size), pygame.SRCALPHA)
+
+        if winner.avatar_image:
+            # Use actual profile picture - convert PIL image to pygame surface
+            pil_image = winner.avatar_image
+            pil_resized = pil_image.resize((avatar_size, avatar_size))
+            mode = pil_resized.mode
+            data = pil_resized.tobytes()
+            img_surface = pygame.image.fromstring(data, (avatar_size, avatar_size), mode)
+
+            # Create circular mask
+            mask = pygame.Surface((avatar_size, avatar_size), pygame.SRCALPHA)
+            pygame.draw.circle(mask, (255, 255, 255, 255), (avatar_size // 2, avatar_size // 2), avatar_size // 2)
+
+            # Apply mask to image
+            img_surface = img_surface.convert_alpha()
+            img_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            avatar_surface.blit(img_surface, (0, 0))
+        else:
+            # Fallback to colored circle
+            pygame.draw.circle(avatar_surface, winner.color, (avatar_size // 2, avatar_size // 2), avatar_size // 2)
+
+        # Draw white border around avatar
+        pygame.draw.circle(avatar_surface, (255, 255, 255), (avatar_size // 2, avatar_size // 2), avatar_size // 2, 4)
+
+        avatar_rect = avatar_surface.get_rect(center=(screen_w // 2, winner_y))
+        self.screen.blit(avatar_surface, avatar_rect)
+
+        # Draw winner username
+        font_large = pygame.font.Font(None, 48)
+        name_text = font_large.render(winner.username, True, (255, 255, 255))
+        name_rect = name_text.get_rect(center=(screen_w // 2, winner_y + avatar_size // 2 + 30))
+        self.screen.blit(name_text, name_rect)
+
     def _draw_countdown_overlay(self, frame_surface: pygame.Surface):
         """
-        Draw countdown video overlay centered on screen
+        Draw countdown video overlay scaled down and positioned lower on screen
 
         Args:
             frame_surface: Pygame surface of current video frame
         """
-        # Center the video on screen
-        rect = frame_surface.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2))
-        self.screen.blit(frame_surface, rect)
+        # Scale down the video (50% of original size)
+        scale_factor = 0.5
+        new_width = int(frame_surface.get_width() * scale_factor)
+        new_height = int(frame_surface.get_height() * scale_factor)
+        scaled_surface = pygame.transform.smoothscale(frame_surface, (new_width, new_height))
+
+        # Position: centered horizontally, moved down vertically
+        center_x = config.SCREEN_WIDTH // 2
+        center_y = config.SCREEN_HEIGHT // 2 + 120  # Move down by 120 pixels
+
+        rect = scaled_surface.get_rect(center=(center_x, center_y))
+        self.screen.blit(scaled_surface, rect)

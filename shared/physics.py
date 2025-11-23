@@ -4,9 +4,11 @@ Handles collision detection and physics calculations
 """
 
 import time
-from typing import List
+from typing import List, TYPE_CHECKING
 import config
-from .follower import Follower
+
+if TYPE_CHECKING:
+    from battle_royale import Follower
 
 
 class PhysicsEngine:
@@ -22,7 +24,7 @@ class PhysicsEngine:
         self.collision_checks = 0  # For debugging/stats
         self.collisions_detected = 0
 
-    def update(self, followers: List[Follower], dt: float):
+    def update(self, followers: List['Follower'], dt: float):
         """
         Update physics for all followers
         Handles collision detection and resolution
@@ -57,7 +59,7 @@ class PhysicsEngine:
                 if follower.check_collision(other, current_time):
                     self.collisions_detected += 1
 
-    def resolve_overlaps(self, followers: List[Follower]):
+    def resolve_overlaps(self, followers: List['Follower']):
         """
         Immediately resolve overlapping followers by repositioning them
         This prevents followers' radii from overlapping
@@ -102,7 +104,7 @@ class PhysicsEngine:
                         other.x += math.cos(angle) * move_amount
                         other.y += math.sin(angle) * move_amount
 
-    def apply_separation_force(self, followers: List[Follower], strength: float = 0.3):
+    def apply_separation_force(self, followers: List['Follower'], strength: float = 0.3):
         """
         Apply gentle separation force to prevent followers from stacking
         This ensures followers spread out naturally without interfering with combat

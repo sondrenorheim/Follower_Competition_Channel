@@ -15,13 +15,16 @@ class ObstacleCourseCamera:
 
     def __init__(self):
         """Initialize the camera"""
-        self.camera_x = 0  # Start at left of course
+        self.camera_x = -150  # Start further left to show racers before race
         self.camera_y = config.SCREEN_HEIGHT / 2
         self.target_x = self.camera_x
         self.target_y = self.camera_y
 
         # Smoothing factor for camera movement (0.0 = no smoothing, 1.0 = instant)
         self.smoothing = 0.08
+
+        # Minimum camera X (allows seeing behind starting line)
+        self.min_camera_x = -150
 
     def update(self, leader_position: Optional[Tuple[float, float]], course_length: float, finish_line_x: Optional[float] = None):
         """
@@ -37,19 +40,15 @@ class ObstacleCourseCamera:
 
         # Target camera position: keep leader at 1/3 from left of screen
         self.target_x = leader_position[0] - (config.SCREEN_WIDTH * 0.33)
-        self.target_y = leader_position[1]
 
-        # Smooth camera movement using linear interpolation
+        # Smooth camera movement using linear interpolation (X only)
         self.camera_x += (self.target_x - self.camera_x) * self.smoothing
-        self.camera_y += (self.target_y - self.camera_y) * self.smoothing
 
-        # Lock Y to screen center for horizontal track (with slight vertical following for track waves)
-        # Allow some Y movement to follow the track's gentle vertical curves
-        margin = config.OBSTACLE_COURSE_WIDTH + 100
-        self.camera_y = max(margin, min(config.SCREEN_HEIGHT - margin, self.camera_y))
+        # Lock Y to screen center for straight horizontal track
+        self.camera_y = config.SCREEN_HEIGHT / 2
 
-        # Don't scroll left beyond start
-        self.camera_x = max(0, self.camera_x)
+        # Don't scroll left beyond minimum (allows seeing behind starting line)
+        self.camera_x = max(self.min_camera_x, self.camera_x)
 
         # Stop camera at finish line if provided, otherwise use course length
         if finish_line_x is not None:

@@ -11,17 +11,19 @@ import sys
 from typing import List
 
 import config
-from .api import InstagramAPI
+from shared import (
+    InstagramAPI,
+    PhysicsEngine,
+    ParticleSystem,
+    SoundManager,
+    ScoringSystem,
+    PlayerStatistics,
+    VideoRecorder,
+    AudioLogger
+)
 from .fighter import Fighter
-from .fighter_arena import FighterArena
-from .fighter_renderer import FighterRenderer
-from .physics import PhysicsEngine
-from .particles import ParticleSystem
-from .sound_manager import SoundManager
-from .scoring import ScoringSystem
-from .statistics import PlayerStatistics
-from .recorder import VideoRecorder
-from .audio_logger import AudioLogger
+from .arena import FighterArena
+from .renderer import FighterRenderer
 
 
 class FighterBattleArena:

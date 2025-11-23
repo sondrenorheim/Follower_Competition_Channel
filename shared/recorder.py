@@ -18,7 +18,7 @@ class VideoRecorder:
     Optimized to capture at specified FPS for smaller file sizes
     """
 
-    def __init__(self, output_path: str = None, fps: int = None, audio_logger=None):
+    def __init__(self, output_path: str = None, fps: int = None, audio_logger=None, countdown_audio_path: str = None):
         """
         Initialize video recorder
 
@@ -26,6 +26,7 @@ class VideoRecorder:
             output_path: Path to save video file
             fps: Frames per second for export
             audio_logger: AudioLogger for tracking audio events
+            countdown_audio_path: Custom path to countdown audio file (default: assets/countdown_audio.wav)
         """
         self.output_path = output_path or config.OUTPUT_VIDEO_PATH
         self.fps = fps or config.VIDEO_FPS
@@ -40,6 +41,14 @@ class VideoRecorder:
         # Audio logger for post-processing
         self.audio_logger = audio_logger
 
+        # Custom countdown audio path
+        self.countdown_audio_path = countdown_audio_path or 'assets/countdown_audio.wav'
+
+        # Green screen overlay video (for obstacle course)
+        self.greenscreen_video_path = None
+        self.greenscreen_scale = 0.5  # Scale factor for overlay
+        self.greenscreen_offset_y = 120  # Pixels to move down from center
+
         print(f"📹 Video Recorder initialized: {self.output_path} @ {self.fps} FPS")
         print(f"   Using time-based capture (1 frame every {self.frame_time*1000:.1f}ms)")
 
@@ -51,7 +60,7 @@ class VideoRecorder:
         if audio_logger:
             print(f"🎤 Audio will be generated from logged events")
 
-    def capture_frame(self, surface: pygame.Surface, current_time: float = None):
+    def capture_frame(self, surface: pygame.Surface, current_time: float = None, force: bool = False):
         """
         Capture a frame from the pygame surface using time-based sampling
         This ensures the video plays at the correct speed regardless of game FPS
@@ -59,6 +68,7 @@ class VideoRecorder:
         Args:
             surface: Pygame surface to capture
             current_time: Current time in seconds (uses time.time() if not provided)
+            force: If True, capture this frame regardless of timing (useful for countdown sync)
         """
         if not self.recording:
             return
@@ -73,8 +83,8 @@ class VideoRecorder:
         import time
         elapsed = (current_time if current_time is not None else time.time()) - self.start_time
 
-        # Check if it's time to capture a frame
-        if elapsed >= self.next_capture_time:
+        # Check if it's time to capture a frame (or if forced)
+        if force or elapsed >= self.next_capture_time:
             # Convert pygame surface to numpy array
             # pygame uses (width, height, 3) but we need (height, width, 3)
             frame = pygame.surfarray.array3d(surface)
@@ -86,8 +96,9 @@ class VideoRecorder:
 
             self.frames.append(frame)
 
-            # Schedule next capture
-            self.next_capture_time += self.frame_time
+            # Schedule next capture (only advance if not forced)
+            if not force:
+                self.next_capture_time += self.frame_time
 
             # Print progress every 100 frames
             if len(self.frames) % 100 == 0:
@@ -148,7 +159,7 @@ class VideoRecorder:
             # Audio file paths (cached WAV files)
             audio_files = {
                 'background': 'assets/background_music.wav',
-                'countdown': 'assets/countdown_audio.wav',
+                'countdown': self.countdown_audio_path,
             }
 
             # 1. Add background music (looped, lower volume)
@@ -194,6 +205,171 @@ class VideoRecorder:
             traceback.print_exc()
             return None
 
+    def set_greenscreen_overlay(self, video_path: str, scale: float = 0.5, offset_y: int = 120):
+        """
+        Set a green screen video to overlay on the first frames during export
+
+        Args:
+            video_path: Path to the green screen video file
+            scale: Scale factor for the overlay (0.5 = 50% size)
+            offset_y: Pixels to offset down from center
+        """
+        self.greenscreen_video_path = video_path
+        self.greenscreen_scale = scale
+        self.greenscreen_offset_y = offset_y
+        print(f"🎬 Green screen overlay set: {video_path}")
+
+    def _apply_greenscreen_overlay(self, frames: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Apply green screen video overlay to the first frames
+
+        Args:
+            frames: List of frames to modify
+
+        Returns:
+            Modified frames with green screen overlay
+        """
+        if not self.greenscreen_video_path or not os.path.exists(self.greenscreen_video_path):
+            print(f"⚠️  Green screen video not found: {self.greenscreen_video_path}")
+            return frames
+
+        try:
+            import cv2
+
+            print(f"🎬 Applying green screen overlay: {self.greenscreen_video_path}")
+
+            # Open the green screen video
+            gs_video = cv2.VideoCapture(self.greenscreen_video_path)
+
+            if not gs_video.isOpened():
+                print(f"⚠️  Could not open green screen video: {self.greenscreen_video_path}")
+                return frames
+
+            gs_fps = gs_video.get(cv2.CAP_PROP_FPS)
+            gs_frame_count = int(gs_video.get(cv2.CAP_PROP_FRAME_COUNT))
+            gs_duration = gs_frame_count / gs_fps
+
+            # Calculate how many output frames the overlay covers
+            overlay_frame_count = int(gs_duration * self.fps)
+            overlay_frame_count = min(overlay_frame_count, len(frames))
+
+            print(f"   Overlay duration: {gs_duration:.1f}s ({overlay_frame_count} frames)")
+            print(f"   Green screen video: {gs_frame_count} frames @ {gs_fps:.1f} FPS")
+
+            # Get frame dimensions
+            frame_height, frame_width = frames[0].shape[:2]
+            print(f"   Output frame size: {frame_width}x{frame_height}")
+
+            # Get green screen video dimensions
+            gs_orig_w = int(gs_video.get(cv2.CAP_PROP_FRAME_WIDTH))
+            gs_orig_h = int(gs_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            print(f"   Green screen original size: {gs_orig_w}x{gs_orig_h}")
+
+            # Calculate scale to fit overlay within frame while respecting user's scale preference
+            # The user's scale is relative to the frame width
+            # E.g., scale=0.75 means overlay should be 75% of frame width
+            target_width = int(frame_width * self.greenscreen_scale)
+
+            # Calculate the actual scale factor to apply to the green screen video
+            actual_scale = target_width / gs_orig_w
+
+            # Account for video upscaling for offset
+            upscale_factor = config.UPSCALE_FACTOR if config.UPSCALE_VIDEO else 1.0
+            adjusted_offset_y = int(self.greenscreen_offset_y * upscale_factor)
+
+            print(f"   Target overlay width: {target_width}px ({self.greenscreen_scale*100:.0f}% of frame)")
+            print(f"   Actual scale factor: {actual_scale:.3f}")
+            print(f"   Overlay offset_y: {self.greenscreen_offset_y} -> {adjusted_offset_y}")
+
+            # Process each frame that needs overlay
+            for i in range(overlay_frame_count):
+                # Calculate which green screen frame to use
+                gs_frame_idx = int((i / overlay_frame_count) * gs_frame_count)
+                gs_video.set(cv2.CAP_PROP_POS_FRAMES, gs_frame_idx)
+                ret, gs_frame = gs_video.read()
+
+                if not ret:
+                    continue
+
+                # Convert BGR to RGB
+                gs_frame = cv2.cvtColor(gs_frame, cv2.COLOR_BGR2RGB)
+
+                # Scale the green screen frame to fit within output frame
+                gs_h, gs_w = gs_frame.shape[:2]
+                new_w = int(gs_w * actual_scale)
+                new_h = int(gs_h * actual_scale)
+                gs_frame = cv2.resize(gs_frame, (new_w, new_h))
+
+                # Apply chroma key (remove green)
+                gs_hsv = cv2.cvtColor(gs_frame, cv2.COLOR_RGB2HSV)
+                lower_green = np.array([35, 80, 80])
+                upper_green = np.array([85, 255, 255])
+                mask = cv2.inRange(gs_hsv, lower_green, upper_green)
+
+                # Dilate mask to catch green edges
+                kernel = np.ones((3, 3), np.uint8)
+                mask = cv2.dilate(mask, kernel, iterations=2)
+
+                # Create alpha channel (inverted mask)
+                alpha = cv2.bitwise_not(mask)
+                alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
+
+                # Calculate position (centered horizontally, offset vertically with upscale adjustment)
+                x_pos = (frame_width - new_w) // 2
+                y_pos = (frame_height - new_h) // 2 + adjusted_offset_y
+
+                # Handle overlay larger than frame by cropping
+                # Calculate the region of the overlay that fits in the frame
+                overlay_x_start = 0
+                overlay_y_start = 0
+                overlay_x_end = new_w
+                overlay_y_end = new_h
+
+                # Crop left edge if overlay extends past left of frame
+                if x_pos < 0:
+                    overlay_x_start = -x_pos
+                    x_pos = 0
+
+                # Crop top edge if overlay extends past top of frame
+                if y_pos < 0:
+                    overlay_y_start = -y_pos
+                    y_pos = 0
+
+                # Crop right edge if overlay extends past right of frame
+                if x_pos + (overlay_x_end - overlay_x_start) > frame_width:
+                    overlay_x_end = overlay_x_start + (frame_width - x_pos)
+
+                # Crop bottom edge if overlay extends past bottom of frame
+                if y_pos + (overlay_y_end - overlay_y_start) > frame_height:
+                    overlay_y_end = overlay_y_start + (frame_height - y_pos)
+
+                # Get the cropped overlay region
+                cropped_gs = gs_frame[overlay_y_start:overlay_y_end, overlay_x_start:overlay_x_end]
+                cropped_alpha = alpha[overlay_y_start:overlay_y_end, overlay_x_start:overlay_x_end]
+
+                # Calculate destination region size
+                dest_h, dest_w = cropped_gs.shape[:2]
+
+                # Blend the green screen frame onto the game frame
+                frame = frames[i].copy()
+                for c in range(3):
+                    frame[y_pos:y_pos+dest_h, x_pos:x_pos+dest_w, c] = (
+                        frame[y_pos:y_pos+dest_h, x_pos:x_pos+dest_w, c] * (1 - cropped_alpha/255.0) +
+                        cropped_gs[:, :, c] * (cropped_alpha/255.0)
+                    ).astype(np.uint8)
+
+                frames[i] = frame
+
+            gs_video.release()
+            print(f"   ✓ Green screen overlay applied to {overlay_frame_count} frames")
+            return frames
+
+        except Exception as e:
+            print(f"⚠️  Error applying green screen overlay: {e}")
+            import traceback
+            traceback.print_exc()
+            return frames
+
     def export_video(self):
         """
         Export captured frames to MP4 video file using MoviePy
@@ -205,12 +381,16 @@ class VideoRecorder:
 
         try:
             print(f"\n🎬 Exporting video with {len(self.frames)} frames...")
+            print(f"   Greenscreen path configured: {self.greenscreen_video_path}")
+
+            # Apply green screen overlay if set
+            frames_to_export = self._apply_greenscreen_overlay(list(self.frames))
 
             # Import MoviePy (only when needed to save startup time)
             from moviepy.editor import ImageSequenceClip, AudioFileClip
 
             # Create video clip from frames
-            video_clip = ImageSequenceClip(list(self.frames), fps=self.fps)
+            video_clip = ImageSequenceClip(frames_to_export, fps=self.fps)
             video_duration = video_clip.duration
 
             # Generate mixed audio from all audio files

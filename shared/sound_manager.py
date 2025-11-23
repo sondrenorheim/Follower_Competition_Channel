@@ -64,6 +64,8 @@ class SoundManager:
         self.day_sound = None
         self.intro_sound = None
         self.countdown_sound = None
+        self.smash_countdown_sound = None
+        self.smash_countdown_duration = 0.0
         self.day_audio_duration = 0.5  # Default fallback
 
         # Background music
@@ -315,6 +317,9 @@ class SoundManager:
         # Preload countdown audio
         self._preload_countdown_audio()
 
+        # Preload Smash Ultimate countdown audio (for obstacle course)
+        self._preload_smash_countdown_audio()
+
         # Preload background music
         self._preload_background_music()
 
@@ -463,6 +468,51 @@ class SoundManager:
                 print(f"   ⚠️ Countdown video not found: {countdown_video_path}")
         except Exception as e:
             print(f"   ⚠️ Could not preload countdown audio: {e}")
+
+    def _preload_smash_countdown_audio(self):
+        """Preload the Smash Ultimate countdown audio file (for obstacle course)"""
+        smash_video_path = "assets/smash ultimate 3 2 1 go green screen.mp4"
+        smash_audio_cache = "assets/smash_countdown_audio.wav"
+
+        try:
+            import os
+
+            # Check if we have a cached audio file
+            if os.path.exists(smash_audio_cache):
+                self.smash_countdown_sound = pygame.mixer.Sound(smash_audio_cache)
+                self.smash_countdown_duration = self.smash_countdown_sound.get_length()
+                print(f"   ✓ Smash countdown audio loaded (cached, {self.smash_countdown_duration:.2f}s)")
+                return
+
+            # Extract audio from video using moviepy
+            if os.path.exists(smash_video_path):
+                try:
+                    from moviepy.editor import VideoFileClip
+                    print(f"   Extracting Smash countdown audio from video...")
+                    video = VideoFileClip(smash_video_path)
+                    self.smash_countdown_duration = video.duration
+                    video.audio.write_audiofile(smash_audio_cache, verbose=False, logger=None)
+                    video.close()
+
+                    self.smash_countdown_sound = pygame.mixer.Sound(smash_audio_cache)
+                    print(f"   ✓ Smash countdown audio extracted ({self.smash_countdown_duration:.2f}s)")
+                except ImportError:
+                    print("   ⚠️ moviepy not installed. Install with: pip install moviepy")
+                except Exception as e:
+                    print(f"   ⚠️ Could not extract Smash countdown audio: {e}")
+            else:
+                print(f"   ⚠️ Smash countdown video not found: {smash_video_path}")
+        except Exception as e:
+            print(f"   ⚠️ Could not preload Smash countdown audio: {e}")
+
+    def play_smash_countdown_audio(self):
+        """Play the Smash Ultimate countdown audio"""
+        if self.smash_countdown_sound:
+            self.smash_countdown_sound.set_volume(self.announcer_volume * self.master_volume)
+            self.announcer_channel.play(self.smash_countdown_sound)
+            print(f"🔊 Smash countdown audio started ({self.smash_countdown_duration:.2f}s)")
+        else:
+            print("⚠️  Smash countdown audio not preloaded")
 
     def start_background_music(self):
         """Start playing background music on loop"""

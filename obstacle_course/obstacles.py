@@ -84,11 +84,14 @@ class StaticWall(Obstacle):
 
     def apply_collision_effect(self, racer):
         """
-        Push racer away from wall to prevent overlap
+        Push racer away from wall and stop horizontal velocity
 
         Args:
             racer: Racer object that collided
         """
+        # Stop horizontal velocity when hitting a wall
+        racer.current_velocity = 0.0
+
         # Calculate penetration and push racer out
         racer_center = (racer.x, racer.y)
         bounds = self.get_bounds()
@@ -103,20 +106,15 @@ class StaticWall(Obstacle):
 
         closest_edge = min(distances, key=distances.get)
 
-        # Push racer away from closest edge (exactly touching, no gap)
-        push_strength = 2.0
+        # Push racer away from closest edge
         if closest_edge == 'left':
             racer.x = bounds[0] - config.FOLLOWER_RADIUS
-            racer.vx = min(racer.vx, -push_strength)
         elif closest_edge == 'right':
             racer.x = bounds[2] + config.FOLLOWER_RADIUS
-            racer.vx = max(racer.vx, push_strength)
         elif closest_edge == 'top':
             racer.y = bounds[1] - config.FOLLOWER_RADIUS
-            racer.vy = min(racer.vy, -push_strength)
         elif closest_edge == 'bottom':
             racer.y = bounds[3] + config.FOLLOWER_RADIUS
-            racer.vy = max(racer.vy, push_strength)
 
 
 class MovingWall(Obstacle):
@@ -165,12 +163,14 @@ class MovingWall(Obstacle):
 
     def apply_collision_effect(self, racer):
         """
-        Push racer along with the wall's movement
-        Racer can escape by moving perpendicular to wall
+        Push racer along with the wall's movement and stop horizontal velocity
 
         Args:
             racer: Racer object that collided
         """
+        # Stop horizontal velocity when hitting a moving wall
+        racer.current_velocity = 0.0
+
         # Racer moves with the wall vertically
         racer.push_vy = self.velocity_y * 0.8
 
@@ -265,8 +265,11 @@ class Spinner(Obstacle):
         return distance < (racer_radius + self.bar_width / 2)
 
     def apply_collision_effect(self, racer):
-        """Knock racer backward"""
+        """Knock racer backward and reduce velocity"""
         import math
+        # Reduce horizontal velocity significantly when hit by spinner
+        racer.current_velocity *= 0.3  # Lose 70% of speed
+
         # Push racer away from center and backward
         dx = racer.x - self.center_x
         dy = racer.y - self.center_y
@@ -395,8 +398,12 @@ class Bumper(Obstacle):
         return distance < (self.radius + racer_radius)
 
     def apply_collision_effect(self, racer):
-        """Bounce racer away from bumper"""
+        """Bounce racer away from bumper and reduce velocity"""
         import math
+
+        # Reduce horizontal velocity when hitting bumper
+        racer.current_velocity *= 0.5  # Lose 50% of speed
+
         dx = racer.x - self.center_x
         dy = racer.y - self.center_y
         distance = math.sqrt(dx * dx + dy * dy)
@@ -477,7 +484,10 @@ class Crusher(Obstacle):
             self.width = self.current_width
 
     def apply_collision_effect(self, racer):
-        """Push racer back and out of crusher"""
+        """Push racer back and out of crusher, stop velocity"""
+        # Stop horizontal velocity when hit by crusher
+        racer.current_velocity = 0.0
+
         # Push racer to the left of the crusher (behind it)
         racer.x = self.x - config.FOLLOWER_RADIUS - 5
 

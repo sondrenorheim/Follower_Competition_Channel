@@ -10,7 +10,7 @@ import random
 import time
 from typing import Optional, Tuple, List
 import config
-from .follower import Follower
+from battle_royale import Follower
 
 
 class Racer(Follower):
@@ -48,8 +48,8 @@ class Racer(Follower):
         self.placement = None
 
         # Dynamic speed multiplier that varies throughout the race
-        self.speed_multiplier = random.uniform(0.85, 1.15)
-        self.next_speed_change_time = time.time() + random.uniform(1.0, 3.0)
+        self.speed_multiplier = random.uniform(0.5, 1.5)
+        self.next_speed_change_time = time.time() + random.uniform(0.5, 1.5)
 
         # Simple racing direction - primarily moves right with random Y adjustments
         self.target_y = self.y  # Target Y position for smooth vertical movement
@@ -61,27 +61,46 @@ class Racer(Follower):
         self.in_slow_zone = False  # Currently in a slow zone
         self.slow_zone_multiplier = 1.0  # Speed reduction in slow zone
 
-    def get_movement_speed(self) -> float:
+        # Acceleration system
+        self.current_velocity = 0.0  # Current speed (accelerates toward target)
+        self.acceleration_rate = 0.05  # How fast we accelerate (per frame)
+
+    def get_target_speed(self) -> float:
         """
-        Get movement speed (pixels per frame)
-        Based on speed stat, dynamic multiplier, and zone effects
+        Get target movement speed (pixels per frame)
+        Based on speed stat and dynamic multiplier (no zone effects)
         """
         base_speed = self.speed_stat / 1.5
 
         # Apply dynamic speed multiplier (varies throughout race)
-        speed = base_speed * self.speed_multiplier
+        return base_speed * self.speed_multiplier
 
-        # Apply speed boost (temporary effect)
+    def get_movement_speed(self) -> float:
+        """
+        Get actual movement speed with acceleration system.
+        Speed boosts and slow zones apply instantly, but normal acceleration is gradual.
+        """
+        target_speed = self.get_target_speed()
+
+        # Check for instant velocity changes from obstacles
+        # Speed boost (temporary effect) - INSTANT
         if time.time() < self.speed_boost_end_time:
-            speed *= self.speed_boost
+            self.current_velocity = target_speed * self.speed_boost
+            return self.current_velocity
         else:
             self.speed_boost = 1.0
 
-        # Apply slow zone effect (only while in zone)
+        # Slow zone effect - INSTANT while in zone
         if self.in_slow_zone:
-            speed *= self.slow_zone_multiplier
+            self.current_velocity = target_speed * self.slow_zone_multiplier
+            return self.current_velocity
 
-        return speed
+        # Normal acceleration - gradual increase toward target speed
+        if self.current_velocity < target_speed:
+            self.current_velocity += self.acceleration_rate
+            self.current_velocity = min(self.current_velocity, target_speed)
+
+        return self.current_velocity
 
     def update_racer(self, dt: float, course, all_racers: List['Racer'], current_time: float):
         """
@@ -112,9 +131,9 @@ class Racer(Follower):
         # Update speed multiplier periodically (varies throughout race)
         if current_time >= self.next_speed_change_time:
             # Change speed multiplier to a new random value
-            self.speed_multiplier = random.uniform(0.85, 1.15)
-            # Next change in 1-3 seconds
-            self.next_speed_change_time = current_time + random.uniform(1.0, 3.0)
+            self.speed_multiplier = random.uniform(0.5, 1.5)
+            # Next change in 0.5-1.5 seconds
+            self.next_speed_change_time = current_time + random.uniform(0.5, 1.5)
 
         # Pick new target Y position periodically
         if current_time >= self.direction_change_time:
@@ -131,8 +150,13 @@ class Racer(Follower):
         move_x = movement_speed * dt * 60
 
         # Vertical movement (smooth interpolation toward target Y)
-        y_diff = self.target_y - self.y
-        move_y = y_diff * 0.05  # Smooth interpolation factor (5% per frame)
+        # Block vertical movement for first 100 pixels after start line
+        start_line_x = course.start_line[0]
+        if self.x < start_line_x + 100:
+            move_y = 0  # No vertical movement in starting zone
+        else:
+            y_diff = self.target_y - self.y
+            move_y = y_diff * 0.05  # Smooth interpolation factor (5% per frame)
 
         # Apply movement
         self.x += move_x

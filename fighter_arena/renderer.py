@@ -11,7 +11,7 @@ from typing import List, Tuple, Optional
 from PIL import Image
 import config
 from .fighter import Fighter
-from .fighter_arena import FighterArena
+from .arena import FighterArena
 
 
 class FighterRenderer:

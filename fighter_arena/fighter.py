@@ -11,7 +11,7 @@ import time
 from typing import Optional, Tuple, List
 from PIL import Image
 import config
-from .follower import Follower
+from battle_royale import Follower
 
 
 class Fighter(Follower):
