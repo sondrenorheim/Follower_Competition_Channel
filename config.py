@@ -16,12 +16,12 @@ FPS = 60
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "obstacle_course"
-TEST_MODE = False
+GAME_MODE = "snake_escape" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape"
+TEST_MODE = True
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
-EXPORT_VIDEO = True
-DAY_NUMBER = 3  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
+EXPORT_VIDEO = False
+DAY_NUMBER = 4  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 
@@ -261,3 +261,13 @@ RACER_DEFAULT_STATS = {
 RACER_STAT_BOOSTS = {
     # Add usernames here to give them boosted stats
 }
+
+# ===== SNAKE ESCAPE SETTINGS =====
+# Snake settings
+SNAKE_COUNT = 2                          # Number of snakes in the game
+SNAKE_INITIAL_SPEED = BASE_SPEED * 1.25  # Snake starts ~25% faster than followers
+SNAKE_MAX_SPEED_MULTIPLIER = 2.0         # Maximum speed multiplier (at end of game)
+
+# Follower flee behavior
+SNAKE_FLEE_DISTANCE = 150    # Distance at which followers start fleeing from snake
+SNAKE_PANIC_DISTANCE = 80    # Distance at which followers enter panic mode (max speed flee)

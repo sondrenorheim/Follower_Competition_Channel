@@ -11,7 +11,14 @@ from .scoring import ScoringSystem
 from .statistics import PlayerStatistics
 from .audio_logger import AudioLogger, AudioEvent
 
+# Templates for creating new games
+from .game_template import GameTemplate
+from .renderer_template import RendererTemplate
+from .arena_template import ArenaTemplate, ArenaShape
+from .entity_template import EntityTemplate, MovingEntity
+
 __all__ = [
+    # Core shared modules
     'InstagramAPI',
     'PhysicsEngine',
     'ParticleSystem',
@@ -22,4 +29,11 @@ __all__ = [
     'PlayerStatistics',
     'AudioLogger',
     'AudioEvent',
+    # Templates for new games
+    'GameTemplate',
+    'RendererTemplate',
+    'ArenaTemplate',
+    'ArenaShape',
+    'EntityTemplate',
+    'MovingEntity',
 ]

@@ -1,0 +1,452 @@
+"""
+Snake Escape Game - Main game controller.
+
+A survival game where followers must escape from a hungry snake.
+Last survivor wins!
+"""
+
+import pygame
+import random
+import math
+import time
+from typing import List, Optional
+
+import config
+from shared import (
+    InstagramAPI,
+    PlayerStatistics,
+    ScoringSystem,
+    SoundManager,
+    AudioLogger,
+    VideoRecorder,
+    ParticleSystem
+)
+
+from .arena import SnakeEscapeArena
+from .snake import Snake
+from .follower import SnakeEscapeFollower
+from .renderer import SnakeEscapeRenderer
+
+
+class SnakeEscapeGame:
+    """
+    Snake Escape game controller.
+
+    Game flow:
+    1. Followers spawn in the arena
+    2. Countdown begins
+    3. Snake spawns and starts hunting
+    4. Followers try to survive by fleeing and pushing others toward the snake
+    5. Snake gets faster as followers are eliminated
+    6. Last survivor wins
+    """
+
+    GAME_TITLE = "SNAKE ESCAPE"
+    PLAYER_LABEL = "survivors"
+
+    def __init__(self):
+        """Initialize the game."""
+        print("=" * 60)
+        print(f"  {self.GAME_TITLE}")
+        print("=" * 60)
+
+        # Initialize Pygame
+        pygame.init()
+        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
+        pygame.display.set_caption(self.GAME_TITLE)
+        self.clock = pygame.time.Clock()
+
+        # Initialize shared components
+        print(f"\nInitializing {self.GAME_TITLE}...")
+        self.api = InstagramAPI()
+        self.audio_logger = AudioLogger()
+        self.sound = SoundManager(audio_logger=self.audio_logger)
+        self.recorder = VideoRecorder(
+            audio_logger=self.audio_logger,
+            countdown_audio_path='assets/smash_countdown_audio.wav'
+        )
+        self.recorder.set_greenscreen_overlay(
+            video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
+            scale=1.5,
+            offset_y=70
+        )
+        self.statistics = PlayerStatistics()
+        self.scoring = ScoringSystem()
+        self.particles = ParticleSystem()
+
+        # Preload audio
+        self.sound.preload_audio()
+
+        # Initialize game-specific components
+        self.arena = SnakeEscapeArena()
+        self.renderer = SnakeEscapeRenderer(self.screen)
+        self.snakes: List[Snake] = []  # Support multiple snakes
+        self.followers: List[SnakeEscapeFollower] = []
+
+        # Game state
+        self.running = True
+        self.game_over = False
+        self.game_start_time = time.time()
+
+        # Game phases: "intro" -> "countdown" -> "playing" -> "finished"
+        self.phase = "intro"
+
+        # Leaderboards
+        self.current_game_leaderboard = []
+        self.all_time_leaderboard = []
+        self.show_leaderboards = False
+        self.leaderboard_display_start = None
+        self.winner = None
+
+        # Countdown
+        self.countdown_start_time = None
+        self.countdown_duration = 3.5  # Will be updated from sound
+
+        # Statistics
+        self.total_eliminations = 0
+        self.initial_follower_count = 0
+
+        print(f"{self.GAME_TITLE} initialized!\n")
+
+    def setup_players(self):
+        """Set up followers and spawn them in the arena."""
+        print(f"Setting up {config.FOLLOWER_COUNT} {self.PLAYER_LABEL}...")
+
+        # Fetch followers
+        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        random.shuffle(follower_data)
+
+        # Create followers at random positions
+        for data in follower_data:
+            position = self.arena.get_random_position(config.FOLLOWER_RADIUS + 10)
+            follower = SnakeEscapeFollower(data, position)
+            self.followers.append(follower)
+
+        self.initial_follower_count = len(self.followers)
+
+        print(f"{len(self.followers)} {self.PLAYER_LABEL} ready!\n")
+
+    def spawn_snakes(self):
+        """Spawn snakes at random edges of the arena."""
+        snake_count = getattr(config, 'SNAKE_COUNT', 1)
+        bounds = self.arena.get_bounds()
+        left, top, right, bottom = bounds
+
+        edges = ['top', 'bottom', 'left', 'right']
+        random.shuffle(edges)
+
+        for i in range(snake_count):
+            # Each snake spawns on a different edge if possible
+            edge = edges[i % len(edges)]
+
+            if edge == 'top':
+                x = random.uniform(left + 50, right - 50)
+                y = top + 30
+            elif edge == 'bottom':
+                x = random.uniform(left + 50, right - 50)
+                y = bottom - 30
+            elif edge == 'left':
+                x = left + 30
+                y = random.uniform(top + 50, bottom - 50)
+            else:  # right
+                x = right - 30
+                y = random.uniform(top + 50, bottom - 50)
+
+            snake = Snake((x, y))
+            self.snakes.append(snake)
+
+        print(f"{len(self.snakes)} snake(s) have entered the arena!")
+
+    def update(self, dt: float):
+        """
+        Update game state.
+
+        Args:
+            dt: Delta time in seconds
+        """
+        if self.game_over:
+            return
+
+        current_time = time.time()
+
+        # Get alive count
+        alive_followers = [f for f in self.followers if f.alive]
+        alive_count = len(alive_followers)
+
+        # Update all snakes
+        for snake in self.snakes:
+            snake.update(dt, self.arena, self.followers)
+
+            # Update snake speed based on eliminations
+            snake.update_speed_scaling(alive_count, self.initial_follower_count)
+
+            # Check if snake eats any followers
+            for follower in self.followers:
+                if follower.alive and snake.check_eat_follower(follower):
+                    placement = alive_count  # Current place when eliminated
+                    follower.eliminate(placement, self.particles)
+                    self.total_eliminations += 1
+                    self.renderer.add_elimination(follower.username) if hasattr(self.renderer, 'add_elimination') else None
+                    self.sound.play_elimination()
+                    print(f"Snake ate {follower.username}! {alive_count - 1} survivors remaining")
+
+        # Update followers - find nearest snake for flee behavior
+        for follower in self.followers:
+            if self.snakes:
+                # Find the nearest snake for this follower
+                nearest_snake = min(self.snakes, key=lambda s: follower.distance_to(s))
+                follower.update(dt, self.arena, nearest_snake, self.followers)
+            else:
+                # Before snakes spawn, just wander
+                follower.update(dt, self.arena, type('FakeSnake', (), {'x': -1000, 'y': -1000})(), self.followers)
+
+        # Check collisions between followers
+        for i, f1 in enumerate(self.followers):
+            for f2 in self.followers[i + 1:]:
+                if f1.alive and f2.alive:
+                    # Pass nearest snake for strategic pushing
+                    nearest_snake = min(self.snakes, key=lambda s: f1.distance_to(s)) if self.snakes else None
+                    f1.check_collision(f2, current_time, nearest_snake)
+
+        # Update particles
+        self.particles.update(dt)
+
+        # Update music
+        self.sound.update_music_volume()
+        self.sound.update_music_intensity(alive_count, self.initial_follower_count)
+
+        # Recalculate alive count after eliminations
+        alive_followers = [f for f in self.followers if f.alive]
+        alive_count = len(alive_followers)
+
+        # Check win condition
+        if alive_count <= 1 and not self.game_over:
+            self._handle_game_over(alive_followers)
+
+    def render(self):
+        """Render the current game state."""
+        game_state = {
+            'phase': self.phase,
+            'arena': self.arena,
+            'snakes': self.snakes,  # Pass all snakes
+            'alive_count': sum(1 for f in self.followers if f.alive),
+            'total_count': len(self.followers),
+            'show_leaderboards': self.show_leaderboards,
+            'current_game_leaderboard': self.current_game_leaderboard,
+            'all_time_leaderboard': self.all_time_leaderboard,
+            'winner': self.winner,
+        }
+
+        self.renderer.render_frame(self.followers, game_state)
+
+        # Draw particles
+        self.particles.render(self.screen)
+
+        pygame.display.flip()
+
+        # Capture frame for video
+        if self.phase in ("countdown", "playing", "finished"):
+            self.recorder.capture_frame(self.screen)
+
+    def run(self):
+        """Main game loop."""
+        # Setup
+        self.setup_players()
+
+        # Start audio logging
+        self.audio_logger.start()
+
+        # Countdown phase - no intro, go straight to countdown like obstacle course
+        print("\nStarting countdown...")
+        self.phase = "countdown"
+        self.countdown_start_time = time.time()
+
+        # Start background music at low volume
+        self.sound.start_background_music()
+        self.sound.set_music_volume_low()
+
+        # Play the Smash Ultimate countdown audio
+        # The green screen overlay will be added during video export
+        self.sound.play_smash_countdown_audio()
+        self.countdown_duration = self.sound.countdown_audio_duration
+
+        # Spawn snakes during countdown (but they can't eat yet)
+        self.spawn_snakes()
+
+        # Countdown phase - followers wander, snakes move but don't eat
+        while time.time() - self.countdown_start_time < self.countdown_duration and self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    return
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.running = False
+                    return
+
+            dt = self.clock.tick(config.FPS) / 1000.0
+            current_time = time.time()
+
+            # Update snakes (moving but not eating)
+            for snake in self.snakes:
+                snake.update(dt, self.arena, self.followers)
+
+            # Update followers - flee from nearest snake even during countdown
+            for follower in self.followers:
+                if self.snakes:
+                    nearest_snake = min(self.snakes, key=lambda s: follower.distance_to(s))
+                    follower.update(dt, self.arena, nearest_snake, self.followers)
+
+            # Check collisions to prevent overlapping during countdown
+            for i, f1 in enumerate(self.followers):
+                for f2 in self.followers[i + 1:]:
+                    if f1.alive and f2.alive:
+                        f1.check_collision(f2, current_time, None)
+
+            self.render()
+
+        # Reset countdown start time
+        self.countdown_start_time = None
+
+        # Game starts - enable snake hunting and eating
+        print("\nGO! Game started!")
+        self.phase = "playing"
+        self.sound.set_music_volume_high()
+
+        # Enable snakes to hunt and eat
+        for snake in self.snakes:
+            snake.hunting = True
+            snake.can_eat = True
+
+        # Main game loop
+        game_over_start_time = None
+
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.running = False
+
+            dt = self.clock.tick(config.FPS) / 1000.0
+
+            self.update(dt)
+            self.render()
+
+            # Track game over display time
+            if self.game_over and game_over_start_time is None:
+                game_over_start_time = time.time()
+
+            # Auto-close after 5 seconds of leaderboards
+            if self.game_over and game_over_start_time:
+                if time.time() - game_over_start_time > 5.0:
+                    self.running = False
+
+        self.cleanup()
+
+    def _handle_game_over(self, survivors: List[SnakeEscapeFollower]):
+        """Handle game over."""
+        self.game_over = True
+        self.phase = "finished"
+
+        print("\n" + "=" * 60)
+        print("  GAME OVER")
+        print("=" * 60)
+
+        if survivors:
+            self.winner = survivors[0]
+            self.winner.placement = 1
+            print(f"Winner: {self.winner.username}")
+            self.sound.play_winner_celebration()
+        else:
+            print("No survivors - Snake wins!")
+
+        # Calculate and save scores
+        self._calculate_and_save_scores()
+
+    def _calculate_and_save_scores(self):
+        """Calculate scores for all followers and update statistics."""
+        print("\nCalculating scores...")
+
+        # Sort followers by survival (alive first, then by survival time)
+        sorted_followers = sorted(
+            self.followers,
+            key=lambda f: (not f.alive, -f.get_survival_time())
+        )
+
+        # Assign placements
+        for i, follower in enumerate(sorted_followers):
+            if follower.placement is None:
+                follower.placement = i + 1
+
+        total_participants = len(self.followers)
+        game_results = []
+
+        for follower in sorted_followers:
+            games_played = self.statistics.get_games_played(follower.username)
+
+            points_breakdown = self.scoring.calculate_total_points(
+                placement=follower.placement,
+                total_participants=total_participants,
+                survival_time=follower.get_survival_time(),
+                games_played=games_played
+            )
+
+            points = points_breakdown["total_points"]
+
+            game_results.append((
+                follower.username,
+                follower.placement,
+                points,
+                follower.get_survival_time()
+            ))
+
+            self.statistics.update_player_stats(
+                username=follower.username,
+                placement=follower.placement,
+                points_earned=points,
+                survival_time=follower.get_survival_time(),
+                total_participants=total_participants
+            )
+
+        # Save statistics
+        self.statistics.save_statistics()
+        print("Statistics saved!")
+
+        # Generate leaderboards
+        self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)
+        self.all_time_leaderboard = self.statistics.get_all_time_leaderboard(top_n=10)
+
+        # Show leaderboards
+        self.show_leaderboards = True
+        self.leaderboard_display_start = time.time()
+
+        # Print top 10
+        print("\nTop 10:")
+        for i, result in enumerate(game_results[:10]):
+            print(f"{i + 1}. {result[0]} - {result[2]:.1f} pts")
+
+    def cleanup(self):
+        """Clean up and export video."""
+        self.audio_logger.stop()
+
+        print("\n" + "=" * 60)
+        print("  GAME STATISTICS")
+        print("=" * 60)
+        print(f"Total Survivors: {len(self.followers)}")
+        print(f"Total Eliminations: {self.total_eliminations}")
+        if self.snakes:
+            total_kills = sum(s.kills for s in self.snakes)
+            print(f"Snake Count: {len(self.snakes)}")
+            print(f"Total Snake Kills: {total_kills}")
+        print(f"Video Frames: {self.recorder.get_frame_count()}")
+        print(f"Video Duration: {self.recorder.get_video_duration():.1f}s")
+        print("=" * 60)
+
+        # Export video
+        if config.EXPORT_VIDEO:
+            self.recorder.export_video()
+
+        self.sound.cleanup()
+        pygame.quit()
+
+        print(f"\nThanks for playing {self.GAME_TITLE}!")

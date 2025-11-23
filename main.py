@@ -546,13 +546,18 @@ def main():
         if game_mode == "fighter_arena":
             # Import and run Fighter Arena
             from fighter_arena import FighterBattleArena
-            print("🥊 Starting Fighter Arena mode...")
+            print("Starting Fighter Arena mode...")
             game = FighterBattleArena()
         elif game_mode == "obstacle_course":
             # Import and run Obstacle Course
             from obstacle_course import ObstacleCourseGame
             print("Starting Obstacle Course mode...")
             game = ObstacleCourseGame()
+        elif game_mode == "snake_escape":
+            # Import and run Snake Escape
+            from snake_escape import SnakeEscapeGame
+            print("Starting Snake Escape mode...")
+            game = SnakeEscapeGame()
         else:
             # Default to Battle Royale
             print("Starting Battle Royale mode...")
