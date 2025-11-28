@@ -53,13 +53,13 @@ class PlatformerRacer(Follower):
         self.placement = 0  # Final placement (1st, 2nd, etc.)
 
         # Per-racer stats (slight variation for natural spread)
-        self.horizontal_speed = random.uniform(120, 170)  # pixels/sec (increased for longer jumps)
-        self.jump_velocity = random.uniform(-420, -460)  # upward velocity (slightly increased for better jumps)
-        self.jump_cooldown = 0.2  # seconds
+        self.horizontal_speed = random.uniform(150, 200)  # pixels/sec (increased for faster movement)
+        self.jump_velocity = random.uniform(-400, -430)  # upward velocity (reduced to prevent floor-skipping)
+        self.jump_cooldown = 0.15  # seconds (reduced cooldown for faster jumping)
         self.last_jump_time = 0.0
 
-        # AI mistake chance (5-20% error rate)
-        self.mistake_chance = random.uniform(0.05, 0.20)
+        # AI mistake chance (2-10% error rate - reduced for faster completion)
+        self.mistake_chance = random.uniform(0.02, 0.10)
 
         # Floor tracking for dynamic direction changes
         self.current_floor = 1
@@ -229,31 +229,53 @@ class PlatformerRacer(Follower):
         # Ladder is at x=35, y=360, height=120, width=20
         # Climb until reaching Floor 3 (y=360)
         # Use Y range check instead of floor check to handle threshold changes
-        if 25 <= self.x <= 65 and 360 < self.y < 480:
-            # Player is in ladder area - force them up until reaching Floor 3
-            climb_speed = 120.0  # pixels per second
-            self.y -= climb_speed * dt
-            self.vy = 0  # Cancel gravity
-            self.on_ground = False
-            # Skip normal physics when auto-climbing
-            self.progress = self.calculate_progress(level)
-            self.check_finish_line(level, current_time)
-            return
+        ladder_center_floor2 = 45  # Center of ladder (x=35 + width/2)
+
+        # Wider detection zone and magnetic pull
+        if 10 <= self.x <= 100 and 360 < self.y < 480:
+            # Pull player toward ladder center horizontally (magnetic effect)
+            pull_speed = 150.0  # pixels per second
+            if self.x < ladder_center_floor2:
+                self.x += pull_speed * dt
+            elif self.x > ladder_center_floor2:
+                self.x -= pull_speed * dt
+
+            # Once close enough to center, force climb
+            if abs(self.x - ladder_center_floor2) < 30:
+                climb_speed = 180.0  # pixels per second (increased for faster climbing)
+                self.y -= climb_speed * dt
+                self.vy = 0  # Cancel gravity
+                self.on_ground = False
+                # Skip normal physics when auto-climbing
+                self.progress = self.calculate_progress(level)
+                self.check_finish_line(level, current_time)
+                return
 
         # FLOOR 4 LADDER AUTO-CLIMB: Force upward movement when near ladder between Floor 4 and 5
         # Ladder is at x=35, y=120, height=120, width=20
         # Climb until reaching Floor 5 (y=120)
         # Use Y range check instead of floor check to handle threshold changes
-        if 25 <= self.x <= 65 and 120 < self.y < 240:
-            # Player is in ladder area - force them up until reaching Floor 5
-            climb_speed = 120.0  # pixels per second
-            self.y -= climb_speed * dt
-            self.vy = 0  # Cancel gravity
-            self.on_ground = False
-            # Skip normal physics when auto-climbing
-            self.progress = self.calculate_progress(level)
-            self.check_finish_line(level, current_time)
-            return
+        ladder_center_floor4 = 45  # Center of ladder
+
+        # Wider detection zone and magnetic pull
+        if 10 <= self.x <= 100 and 120 < self.y < 240:
+            # Pull player toward ladder center horizontally (magnetic effect)
+            pull_speed = 150.0  # pixels per second
+            if self.x < ladder_center_floor4:
+                self.x += pull_speed * dt
+            elif self.x > ladder_center_floor4:
+                self.x -= pull_speed * dt
+
+            # Once close enough to center, force climb
+            if abs(self.x - ladder_center_floor4) < 30:
+                climb_speed = 180.0  # pixels per second (increased for faster climbing)
+                self.y -= climb_speed * dt
+                self.vy = 0  # Cancel gravity
+                self.on_ground = False
+                # Skip normal physics when auto-climbing
+                self.progress = self.calculate_progress(level)
+                self.check_finish_line(level, current_time)
+                return
 
         # Execute action based on state
         if self.state == RacerState.CLIMBING:

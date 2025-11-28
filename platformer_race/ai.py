@@ -28,6 +28,12 @@ class JumpAI:
         if not level.goal:
             return "none"
 
+        # Priority 0: If in goal area and on ground, stop moving
+        if level.goal and racer.on_ground:
+            distance = math.dist((racer.x, racer.y), (level.goal.x, level.goal.y))
+            if distance < level.goal.radius:
+                return "none"
+
         # Apply mistake chance
         if random.random() < racer.mistake_chance:
             return self._make_mistake(racer)
@@ -55,7 +61,15 @@ class JumpAI:
             if racer.current_floor == 2:
                 # Always try to climb - the massive overlap check will handle whether it works
                 # If we're in the left area where the ladder is, this will grab it
-                if racer.x < 120:  # Left side of floor 2 where ladder is located
+                if racer.x < 150:  # Expanded detection area for ladder (was 120)
+                    return "climb_up"
+                # Otherwise keep moving left to reach the ladder
+                return "walk_left"
+
+            # Priority: On floor 4 (moving left), constantly try to climb (same as floor 2)
+            if racer.current_floor == 4:
+                # Always try to climb when in the left area
+                if racer.x < 150:  # Expanded detection area for ladder
                     return "climb_up"
                 # Otherwise keep moving left to reach the ladder
                 return "walk_left"
@@ -63,20 +77,20 @@ class JumpAI:
             # Check if we should change floors (reached edge of current floor)
             # If moving right and close to right edge, or moving left and close to left edge
             # Then look for vertical movement options
-            if moving_right and racer.x > 450:  # Near right edge
+            if moving_right and racer.x > 400:  # Near right edge (expanded from 450)
                 # Look for ways to go up/down
                 best_climbable = self._find_best_climbable(racer, level)
-                if best_climbable and self._is_close_to_climbable(racer, best_climbable):
-                    return "climb_up"
+                if best_climbable:
+                    return "climb_up"  # Try to climb regardless of proximity check
                 # Or try to jump to platform above
                 platform_above = self._find_best_platform_above(racer, level)
                 if platform_above and self._can_reach_with_jump(racer, platform_above):
                     return "jump"
-            elif not moving_right and racer.x < 50:  # Near left edge
+            elif not moving_right and racer.x < 100:  # Near left edge (expanded from 50)
                 # Look for ways to go up/down
                 best_climbable = self._find_best_climbable(racer, level)
-                if best_climbable and self._is_close_to_climbable(racer, best_climbable):
-                    return "climb_up"
+                if best_climbable:
+                    return "climb_up"  # Try to climb regardless of proximity check
                 # Or try to jump to platform above
                 platform_above = self._find_best_platform_above(racer, level)
                 if platform_above and self._can_reach_with_jump(racer, platform_above):
@@ -193,8 +207,8 @@ class JumpAI:
         Returns:
             bool: True if there's a gap ahead and racer should jump
         """
-        # Look ahead distance - increased to 35px to jump early enough
-        look_ahead_distance = 35
+        # Look ahead distance - increased to 45px to jump earlier and clear gaps better
+        look_ahead_distance = 45
 
         # Calculate the check position (ahead of racer)
         if moving_right:

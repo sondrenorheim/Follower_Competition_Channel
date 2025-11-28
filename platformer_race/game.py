@@ -101,6 +101,8 @@ class PlatformerRaceGame:
 
         # Statistics
         self.day_number = 1
+        self.current_game_leaderboard = []
+        self.all_time_leaderboard = []
 
     def setup_racers(self):
         """Fetch followers and place at starting line"""
@@ -250,10 +252,23 @@ class PlatformerRaceGame:
             self._finish_race()
 
     def _update_finished_phase(self):
-        """Finished phase - show winner (5.27 seconds)"""
+        """Finished phase - show winner (5.27 seconds) then leaderboards (6 seconds)"""
         elapsed = time.time() - self.phase_start_time
-        if elapsed >= 5.27:
-            # End game
+
+        # Sub-phase 1: Show top 10 finishers (0-5.27 seconds)
+        if elapsed < 5.27:
+            if not hasattr(self, '_leaderboards_prepared'):
+                self._leaderboards_prepared = False
+
+        # Sub-phase 2: Show leaderboards (5.27-11.27 seconds)
+        elif elapsed < 11.27:
+            # Prepare leaderboards once when entering this sub-phase
+            if not self._leaderboards_prepared:
+                self._prepare_leaderboards()
+                self._leaderboards_prepared = True
+
+        # End game after both phases
+        else:
             self.running = False
 
     def _get_visible_racers(self):
@@ -315,16 +330,58 @@ class PlatformerRaceGame:
         self.phase = "finished"
         self.phase_start_time = time.time()
 
+    def _prepare_leaderboards(self):
+        """Prepare leaderboard data after race finishes"""
+        # Update statistics for each racer
+        total_participants = len(self.racers)
+        for racer in self.racers:
+            placement = racer.placement if racer.placement > 0 else total_participants
+            self.statistics.update_player_stats(
+                username=racer.username,
+                placement=placement,
+                points_earned=racer.points,
+                survival_time=racer.finish_time if racer.finished else 0.0,
+                total_participants=total_participants
+            )
+
+        # Build game results for leaderboard display
+        game_results = []
+        for racer in self.racers:
+            placement = racer.placement if racer.placement > 0 else total_participants
+            game_results.append((
+                racer.username,
+                placement,
+                racer.points,
+                racer.finish_time if racer.finished else 0.0
+            ))
+
+        # Get leaderboards
+        self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)
+        self.all_time_leaderboard = self.statistics.get_all_time_leaderboard(top_n=10)
+
     def render(self):
         """Render the current frame"""
         # Build game state dict
+        finished_count = sum(1 for racer in self.racers if racer.finished)
+
+        # Determine finished sub-phase
+        finished_sub_phase = "top_10"  # Default
+        if self.phase == "finished":
+            elapsed = time.time() - self.phase_start_time
+            if elapsed >= 5.27:
+                finished_sub_phase = "leaderboards"
+
         game_state = {
             'day': self.day_number,
             'racer_count': len(self.racers),
             'phase': self.phase,
+            'finished_sub_phase': finished_sub_phase,
             'top_5': self._get_top_5_racers() if self.phase == "race" else [],
             'winner': self.first_finisher if self.phase == "finished" else None,
-            'top_10': self.top_10_finishers if self.phase == "finished" else []
+            'top_10': self.top_10_finishers if self.phase == "finished" else [],
+            'finished_count': finished_count,
+            'current_game_leaderboard': self.current_game_leaderboard,
+            'all_time_leaderboard': self.all_time_leaderboard
         }
 
         # Render frame

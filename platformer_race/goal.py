@@ -30,6 +30,8 @@ class Goal:
         """
         Check if racer has reached the goal
 
+        Racer must be on the ground (landed on platform) to finish
+
         Args:
             racer: Racer object to check
 
@@ -38,7 +40,8 @@ class Goal:
         """
         distance = math.dist((racer.x, racer.y), (self.x, self.y))
 
-        if distance < self.radius:
+        # Racer must be on ground and within radius to finish
+        if distance < self.radius and racer.on_ground:
             if racer.id not in self.reached_by:
                 self.reached_by.add(racer.id)
                 return True

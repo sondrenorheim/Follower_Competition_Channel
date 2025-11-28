@@ -80,15 +80,21 @@ class PlatformerRenderer:
 
         # Draw UI (in screen space)
         self._draw_day_counter(game_state.get('day', 1), game_state.get('racer_count', 0))
-        self._draw_top_5_leaderboard(game_state.get('top_5', []))
+
+        # Draw finish counter during race phase
+        if game_state.get('phase') == 'race':
+            self._draw_finish_counter(game_state.get('finished_count', 0))
 
         # Draw countdown text if in countdown phase
         if game_state.get('phase') == 'countdown':
             self._draw_countdown_text()
 
-        # Draw winner display if game finished
+        # Draw winner display or leaderboards if game finished
         if game_state.get('phase') == 'finished':
-            self._draw_winner_display(game_state.get('winner'), game_state.get('top_10'))
+            if game_state.get('finished_sub_phase') == 'top_10':
+                self._draw_winner_display(game_state.get('winner'), game_state.get('top_10'))
+            else:
+                self._draw_leaderboards(game_state)
 
         # Update animation offsets
         self.checkpoint_wave_offset += 0.1
@@ -826,8 +832,8 @@ class PlatformerRenderer:
 
         pole_height = 60
         pole_x = int(screen_pos[0])
-        pole_top_y = int(screen_pos[1])
-        pole_bottom_y = pole_top_y + pole_height
+        pole_bottom_y = int(screen_pos[1])
+        pole_top_y = pole_bottom_y - pole_height
 
         # Step 1: Pulsing glow effect (4 concentric circles with varying alpha)
         # Pulse intensity varies with sine wave
@@ -1035,6 +1041,38 @@ class PlatformerRenderer:
         day_center = (config.SCREEN_WIDTH // 2, self.game_area_y + self.game_area_height + 30)
         self._draw_text_with_shadow(day_text, self.font_day, config.COLOR_TEXT, day_center, shadow_offset=2)
 
+    def _draw_finish_counter(self, finished_count):
+        """Draw finish counter showing progress to top 10 - positioned above game area"""
+        # Position above the game area, below the subtitle
+        y_position = self.game_area_y - 30
+
+        # Create background panel
+        panel_width = 250
+        panel_height = 45
+        panel_x = (config.SCREEN_WIDTH - panel_width) // 2
+        panel_y = y_position - panel_height // 2
+
+        # Draw semi-transparent background
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        panel.fill((20, 20, 30, 180))
+
+        # Determine border and text color based on progress
+        if finished_count >= 10:
+            color = (100, 255, 100)  # Green when complete
+        elif finished_count >= 7:
+            color = (255, 200, 0)    # Yellow when close
+        else:
+            color = (100, 200, 255)  # Blue normally
+
+        # Draw colored border
+        pygame.draw.rect(panel, color, (0, 0, panel_width, panel_height), 3)
+        self.screen.blit(panel, (panel_x, panel_y))
+
+        # Draw text
+        finish_text = f"FINISHERS: {finished_count}/10"
+        finish_center = (config.SCREEN_WIDTH // 2, y_position)
+        self._draw_text_with_shadow(finish_text, self.font_day, color, finish_center, shadow_offset=2)
+
     def _draw_top_5_leaderboard(self, top_5_data):
         """
         Draw horizontal top 5 leaderboard below day counter
@@ -1185,6 +1223,32 @@ class PlatformerRenderer:
         surface = pygame.image.fromstring(data, size, mode)
         return surface.convert_alpha()
 
+    def _truncate_text_to_width(self, text, font, max_width):
+        """
+        Truncate text to fit within max_width pixels
+
+        Args:
+            text: Text to truncate
+            font: Font to use for measuring
+            max_width: Maximum width in pixels
+
+        Returns:
+            Truncated text with ".." if needed
+        """
+        # Check if text fits as-is
+        text_surface = font.render(text, True, (255, 255, 255))
+        if text_surface.get_width() <= max_width:
+            return text
+
+        # Binary search for the right length
+        for length in range(len(text), 0, -1):
+            truncated = text[:length] + ".."
+            test_surface = font.render(truncated, True, (255, 255, 255))
+            if test_surface.get_width() <= max_width:
+                return truncated
+
+        return ".."
+
     def _draw_text_with_shadow(self, text, font, color, position, shadow_offset=2):
         """Draw text with drop shadow for better readability"""
         # Shadow
@@ -1222,3 +1286,93 @@ class PlatformerRenderer:
         self.screen.blit(text_surface, text_rect)
 
         return text_rect
+
+    def _draw_leaderboards(self, game_state):
+        """Draw current game and all-time leaderboards"""
+        current_lb = game_state.get("current_game_leaderboard", [])
+        all_time_lb = game_state.get("all_time_leaderboard", [])
+
+        if not current_lb and not all_time_lb:
+            return
+
+        # Draw semi-transparent background overlay
+        overlay = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        self.screen.blit(overlay, (0, 0))
+
+        # Position leaderboards side by side
+        start_y = int(config.SCREEN_HEIGHT * 0.25)
+        board_width = int(config.SCREEN_WIDTH * 0.40)
+        spacing = int(config.SCREEN_WIDTH * 0.05)
+        left_x = (config.SCREEN_WIDTH - board_width * 2 - spacing) // 2
+        right_x = left_x + board_width + spacing
+
+        # Draw title
+        title_text = "LEADERBOARDS"
+        title_y = int(config.SCREEN_HEIGHT * 0.12)
+        self._draw_text_with_shadow(title_text, self.font_large, (255, 215, 0),
+                                    (config.SCREEN_WIDTH // 2, title_y), shadow_offset=3)
+
+        if current_lb:
+            self._draw_leaderboard_panel(
+                "CURRENT GAME", "TOP 10",
+                current_lb[:10], left_x, start_y, board_width,
+                (0, 200, 255)
+            )
+
+        if all_time_lb:
+            all_time_formatted = [(username, points) for username, points, _ in all_time_lb]
+            self._draw_leaderboard_panel(
+                "ALL-TIME", "TOP 10",
+                all_time_formatted[:10], right_x, start_y, board_width,
+                (255, 215, 0)
+            )
+
+    def _draw_leaderboard_panel(self, title_line1, title_line2,
+                               leaderboard, x, y, width, color):
+        """Draw a single leaderboard panel"""
+        if not leaderboard:
+            return
+
+        entry_height = 35
+        header_height = 60
+        panel_height = header_height + len(leaderboard) * entry_height + 20
+
+        # Panel background
+        panel = pygame.Surface((width, panel_height), pygame.SRCALPHA)
+        panel.fill((20, 20, 30, 220))
+        pygame.draw.rect(panel, color, (0, 0, width, panel_height), 3)
+        self.screen.blit(panel, (x, y))
+
+        # Title lines
+        title1_text = self.font_day.render(title_line1, True, color)
+        title1_rect = title1_text.get_rect(center=(x + width // 2, y + 18))
+        self.screen.blit(title1_text, title1_rect)
+
+        title2_text = self.font_day.render(title_line2, True, color)
+        title2_rect = title2_text.get_rect(center=(x + width // 2, y + 40))
+        self.screen.blit(title2_text, title2_rect)
+
+        # Entries
+        medals = ["1st", "2nd", "3rd"]
+        entry_y = y + header_height
+
+        for i, (username, points) in enumerate(leaderboard):
+            # Rank
+            rank_str = medals[i] if i < 3 else f"{i + 1}."
+            rank_text = self.font_small.render(rank_str, True, (200, 200, 200))
+            self.screen.blit(rank_text, (x + 10, entry_y))
+
+            # Username - truncate to fit available space
+            # Calculate available width: panel width - rank space - points space - padding
+            available_width = width - 60 - 80 - 10  # 60 for rank, 80 for points, 10 for padding
+            display_name = self._truncate_text_to_width(username, self.font_small, available_width)
+            name_text = self.font_small.render(display_name, True, (255, 255, 255))
+            self.screen.blit(name_text, (x + 60, entry_y))
+
+            # Points
+            points_text = self.font_small.render(f"{points:.0f}", True, (0, 255, 150))
+            points_rect = points_text.get_rect(right=x + width - 10, top=entry_y)
+            self.screen.blit(points_text, points_rect)
+
+            entry_y += entry_height

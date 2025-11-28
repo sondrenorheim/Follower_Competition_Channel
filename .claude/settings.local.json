@@ -14,7 +14,8 @@
       "Bash(del \"C:\\Users\\SondreNorheim\\Documents\\Follower_Competition_Channel\\assets\\sydney_tour_music.wav\")",
       "Bash(timeout 5 python:*)",
       "Bash(timeout 10 python:*)",
-      "Bash(timeout 15 python:*)"
+      "Bash(timeout 15 python:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

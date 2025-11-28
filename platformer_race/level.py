@@ -58,7 +58,7 @@ class PlatformerLevel:
 
         # Spikes - first challenge
         level.spikes.append(Spike(
-            x=150, y=610, width=30, height=8,
+            x=150, y=612, width=30, height=8,
             orientation="up"
         ))
 
@@ -69,7 +69,7 @@ class PlatformerLevel:
         ))
 
         level.spikes.append(Spike(
-            x=220, y=610, width=30, height=8,
+            x=220, y=612, width=30, height=8,
             orientation="up"
         ))
 
@@ -81,16 +81,11 @@ class PlatformerLevel:
 
         # Right platform
         level.platforms.append(Platform(
-            x=365, y=600, width=125, height=20,
+            x=380, y=600, width=125, height=20,
             color=stone_gray
         ))
 
         # Stairs to Floor 2
-        level.platforms.append(Platform(
-            x=430, y=565, width=60, height=12,
-            color=stone_gray
-        ))
-
         level.platforms.append(Platform(
             x=420, y=530, width=80, height=12,
             color=stone_gray
@@ -118,7 +113,7 @@ class PlatformerLevel:
 
         # Checkpoint 1
         level.checkpoints.append(Checkpoint(
-            x=450, y=470, index=1
+            x=450, y=480, index=1
         ))
 
         # Ladder to Floor 3
@@ -148,36 +143,30 @@ class PlatformerLevel:
 
         # Spikes
         level.spikes.append(Spike(
-            x=145, y=365, width=20, height=8,
+            x=145, y=367, width=20, height=8,
             orientation="up"
         ))
 
         level.spikes.append(Spike(
-            x=200, y=365, width=20, height=8,
+            x=200, y=367, width=20, height=8,
             orientation="up"
         ))
 
         # Medium platform
         level.platforms.append(Platform(
-            x=220, y=360, width=80, height=15,
+            x=220, y=360, width=60, height=15,
             color=stone_gray
         ))
 
-        # After gap (reduced from x=340 to x=320 for smaller jump)
+        # After gap - extended to connect with checkpoint platform
         level.platforms.append(Platform(
-            x=320, y=360, width=65, height=15,
-            color=stone_gray
-        ))
-
-        # Checkpoint platform
-        level.platforms.append(Platform(
-            x=405, y=360, width=85, height=15,
+            x=320, y=360, width=170, height=15,
             color=stone_gray
         ))
 
         # Checkpoint 2
         level.checkpoints.append(Checkpoint(
-            x=45, y=350, index=2
+            x=45, y=360, index=2
         ))
 
         # Stairs up
@@ -205,7 +194,7 @@ class PlatformerLevel:
 
         # Checkpoint 3
         level.checkpoints.append(Checkpoint(
-            x=450, y=230, index=3
+            x=450, y=240, index=3
         ))
 
         # Ladder to Floor 5
@@ -230,7 +219,7 @@ class PlatformerLevel:
 
         # Spike 1
         level.spikes.append(Spike(
-            x=105, y=125, width=20, height=8,
+            x=105, y=127, width=20, height=8,
             orientation="up"
         ))
 
@@ -242,7 +231,7 @@ class PlatformerLevel:
 
         # Spike 2
         level.spikes.append(Spike(
-            x=165, y=125, width=20, height=8,
+            x=165, y=127, width=20, height=8,
             orientation="up"
         ))
 
@@ -260,7 +249,7 @@ class PlatformerLevel:
 
         # Spike 4
         level.spikes.append(Spike(
-            x=285, y=125, width=20, height=8,
+            x=285, y=127, width=20, height=8,
             orientation="up"
         ))
 
@@ -272,7 +261,7 @@ class PlatformerLevel:
 
         # Spike 5
         level.spikes.append(Spike(
-            x=345, y=125, width=20, height=8,
+            x=345, y=127, width=20, height=8,
             orientation="up"
         ))
 
@@ -284,7 +273,7 @@ class PlatformerLevel:
 
         # Spike 6
         level.spikes.append(Spike(
-            x=405, y=125, width=20, height=8,
+            x=405, y=127, width=20, height=8,
             orientation="up"
         ))
 
@@ -296,7 +285,7 @@ class PlatformerLevel:
 
         # Checkpoint 4
         level.checkpoints.append(Checkpoint(
-            x=45, y=110, index=4
+            x=45, y=120, index=4
         ))
 
         # ===== FINISH AREA (Y=70) =====
@@ -307,8 +296,9 @@ class PlatformerLevel:
             color=goal_green
         ))
 
-        # Goal flag
-        level.goal = Goal(x=480, y=50)
+        # Goal flag (positioned at left edge of platform, pole bottom at platform top)
+        # Radius set to cover entire finish platform (x=400 to x=490)
+        level.goal = Goal(x=445, y=70, radius=50)
 
         return level
 
