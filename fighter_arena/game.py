@@ -53,7 +53,15 @@ class FighterBattleArena:
         self.renderer = FighterRenderer(self.screen)
         self.physics = PhysicsEngine()
         self.audio_logger = AudioLogger()
-        self.recorder = VideoRecorder(audio_logger=self.audio_logger)
+        self.recorder = VideoRecorder(
+            audio_logger=self.audio_logger,
+            countdown_audio_path='assets/smash_countdown_audio.wav'
+        )
+        self.recorder.set_greenscreen_overlay(
+            video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
+            scale=1.0,  # 100% scale
+            offset_y=0  # Centered vertically
+        )
         self.particles = ParticleSystem()
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
@@ -68,10 +76,18 @@ class FighterBattleArena:
         self.game_over = False
         self.game_start_time = time.time()
 
+        # Track game time for consistent video recording with time scaling
+        self.game_time = 0.0
+        self.recording_start_time = None  # Will be set when recording starts
+
         # Game phases: "intro", "countdown", "playing", "finished"
         self.game_phase = "intro"
         self.phase_start_time = 0
         self.countdown_number = 3
+
+        # Combat delay: 1 second after countdown ends before combat starts
+        self.combat_delay_duration = 2.0
+        self.combat_start_time = None
 
         # Statistics
         self.total_eliminations = 0
@@ -146,22 +162,58 @@ class FighterBattleArena:
 
         # Handle countdown phase
         if self.game_phase == "countdown":
-            elapsed = current_time - self.phase_start_time
+            elapsed = self.game_time - self.phase_start_time
             countdown_duration = self.sound.countdown_audio_duration
 
+            # Scale countdown duration when exporting video with time scaling
+            if config.EXPORT_VIDEO:
+                countdown_duration *= config.EXPORT_TIME_SCALE
+
             if elapsed >= countdown_duration:
-                print("🔊 FIGHT!")
+                import time as time_module
+                print(f"🔊 [{time_module.time():.2f}] FIGHT! (elapsed: {elapsed:.2f}s, duration: {countdown_duration:.2f}s)")
                 self.game_phase = "playing"
+                self.combat_start_time = self.game_time  # Set combat start time (will delay by 1 second)
                 self.sound.set_music_volume_high()
-                print("\n⚔️  Battle starting!\n")
+                print(f"[{time_module.time():.2f}] ⚔️  Battle phase starting (combat delayed by {self.combat_delay_duration}s)!\n")
             else:
                 self.countdown_number = max(0, 3 - int(elapsed))
+                # Debug: Log countdown number changes
+                if not hasattr(self, '_last_countdown_number'):
+                    self._last_countdown_number = None
+                if self._last_countdown_number != self.countdown_number:
+                    import time as time_module
+                    print(f"⏱️  [{time_module.time():.2f}] Countdown: {self.countdown_number}")
+                    self._last_countdown_number = self.countdown_number
 
         # Update fighters during all phases
         arena_rect = self.arena.get_rect()
 
-        # Combat only enabled during "playing" phase
-        combat_enabled = (self.game_phase == "playing")
+        # Combat only enabled during "playing" phase AND after combat delay has elapsed
+        combat_enabled = False
+        if self.game_phase == "playing" and self.combat_start_time is not None:
+            # Calculate delay duration (scale for video export)
+            delay_duration = self.combat_delay_duration
+            if config.EXPORT_VIDEO:
+                delay_duration *= config.EXPORT_TIME_SCALE
+
+            # Check if delay has elapsed
+            time_since_combat_start = self.game_time - self.combat_start_time
+            combat_enabled = time_since_combat_start >= delay_duration
+
+            # Debug: Log when combat becomes enabled
+            if combat_enabled and not hasattr(self, '_combat_enabled_logged'):
+                import time as time_module
+                print(f"⚔️  [{time_module.time():.2f}] COMBAT ENABLED! (delay: {delay_duration:.2f}s, elapsed: {time_since_combat_start:.2f}s)")
+                self._combat_enabled_logged = True
+
+        # Debug: Log phase transitions and combat state
+        if not hasattr(self, '_last_combat_state'):
+            self._last_combat_state = None
+        if self._last_combat_state != combat_enabled:
+            import time as time_module
+            print(f"🎮 [{time_module.time():.2f}] Phase: {self.game_phase} | Combat: {'ENABLED' if combat_enabled else 'DISABLED'}")
+            self._last_combat_state = combat_enabled
 
         for fighter in self.fighters:
             # Always use fighter-specific update (no zone avoidance)
@@ -238,7 +290,13 @@ class FighterBattleArena:
 
         # Record frame (only from countdown onwards)
         if self.game_phase in ("countdown", "playing", "finished"):
-            self.recorder.capture_frame(self.screen)
+            # Set recording start time on first frame
+            if self.recording_start_time is None:
+                self.recording_start_time = self.game_time
+
+            # Pass recording time (time since recording started) to capture_frame
+            recording_time = self.game_time - self.recording_start_time
+            self.recorder.capture_frame(self.screen, current_time=recording_time)
 
         pygame.display.flip()
 
@@ -365,7 +423,18 @@ class FighterBattleArena:
                         self.running = False
                         return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
+
+            self.game_time += dt  # Track game time during intro
 
             # Update fighters during intro (no combat, just movement)
             arena_rect = self.arena.get_rect()
@@ -384,7 +453,7 @@ class FighterBattleArena:
         # Start countdown
         print("\n⏱️  Starting countdown...")
         self.game_phase = "countdown"
-        self.phase_start_time = time.time()
+        self.phase_start_time = self.game_time  # Use game_time instead of real time
         self.countdown_number = 3
         self.renderer.start_countdown_video()  # Start the video overlay
         self.sound.play_countdown_audio()
@@ -401,16 +470,32 @@ class FighterBattleArena:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
+
+            self.game_time += dt  # Track game time
 
             self.update(dt)
             self.render()
 
             if self.game_over and game_over_start_time is None:
-                game_over_start_time = time.time()
+                game_over_start_time = self.game_time
 
-            if self.game_over and game_over_start_time:
-                if time.time() - game_over_start_time > 5.0:
+            if self.game_over and game_over_start_time is not None:
+                outro_duration = 5.0
+                # Scale outro duration when exporting video with time scaling
+                if config.EXPORT_VIDEO:
+                    outro_duration *= config.EXPORT_TIME_SCALE
+
+                if self.game_time - game_over_start_time > outro_duration:
                     print("\n🎬 Game complete!")
                     self.running = False
 

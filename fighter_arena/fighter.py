@@ -122,6 +122,10 @@ class Fighter(Follower):
         # Land the attack!
         self.last_attack_time = current_time
         self.is_attacking = True
+
+        # Debug: Log attacks with timestamp
+        import time
+        print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
         self.attack_animation_frames = 10  # Brief attack animation
 
         # Deal damage
@@ -170,8 +174,8 @@ class Fighter(Follower):
             dy: Normalized Y direction of knockback
             knockback_power: Knockback stat of attacker
         """
-        # Apply push velocity (knockback / 4 pixels)
-        push_distance = knockback_power / 4.0
+        # Apply push velocity (knockback / 10 pixels for smaller knockback)
+        push_distance = knockback_power / 10.0
         self.push_vx += dx * push_distance
         self.push_vy += dy * push_distance
 

@@ -353,7 +353,13 @@ class FighterRenderer:
         self.screen.blit(text2, rect2)
 
     def _draw_countdown(self, number: int):
-        """Draw countdown using video overlay or fallback to text"""
+        """Draw countdown - skip if exporting video (recorder handles it with greenscreen)"""
+        import config
+
+        # Don't draw countdown overlay during video export - the recorder's greenscreen handles it
+        if config.EXPORT_VIDEO:
+            return
+
         # Try to use video overlay
         if self.countdown_video_loaded and self.countdown_start_time is not None:
             self._draw_countdown_video()

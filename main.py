@@ -558,6 +558,16 @@ def main():
             from snake_escape import SnakeEscapeGame
             print("Starting Snake Escape mode...")
             game = SnakeEscapeGame()
+        elif game_mode == "team_battle":
+            # Import and run Team Battle
+            from team_battle import TeamBattleGame
+            print("Starting Team Battle mode...")
+            game = TeamBattleGame()
+        elif game_mode == "platformer_race":
+            # Import and run Platformer Race
+            from platformer_race import PlatformerRaceGame
+            print("Starting Platformer Race mode...")
+            game = PlatformerRaceGame()
         else:
             # Default to Battle Royale
             print("Starting Battle Royale mode...")

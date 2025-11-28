@@ -142,6 +142,9 @@ class VideoRecorder:
         Generate mixed audio track from audio files (background music and countdown)
         Note: Video recording starts from countdown phase, so day/intro audio are not included
 
+        The background music is trimmed from the BEGINNING so that the ending of the audio
+        lines up perfectly with the end of the video (since outro is always 5.27s).
+
         Args:
             video_duration: Duration of the video in seconds
 
@@ -158,28 +161,41 @@ class VideoRecorder:
 
             # Audio file paths (cached WAV files)
             audio_files = {
-                'background': 'assets/background_music.wav',
+                'background': 'assets/sydney_tour_music.wav',
                 'countdown': self.countdown_audio_path,
             }
 
-            # 1. Add background music (looped, lower volume)
+            # 1. Add background music (trimmed from beginning to sync ending)
             if os.path.exists(audio_files['background']):
                 print(f"   Adding background music...")
                 bg_music = AudioSegment.from_wav(audio_files['background'])
                 bg_music = bg_music - 12  # Reduce volume by 12dB
 
-                # Loop background music to fill video duration
                 video_duration_ms = int(video_duration * 1000)
-                looped_bg = bg_music
-                while len(looped_bg) < video_duration_ms:
-                    looped_bg = looped_bg + bg_music
+                bg_duration_ms = len(bg_music)
 
-                # Trim to video duration
-                looped_bg = looped_bg[:video_duration_ms]
+                # If video is longer than music, we need to loop
+                # If video is shorter than music, we trim from the beginning
+                if video_duration_ms > bg_duration_ms:
+                    # Loop background music to fill video duration
+                    print(f"   Background music shorter than video, looping...")
+                    looped_bg = bg_music
+                    while len(looped_bg) < video_duration_ms:
+                        looped_bg = looped_bg + bg_music
+
+                    # Trim from beginning to keep the ending
+                    # We want the last video_duration_ms of the looped music
+                    start_trim = len(looped_bg) - video_duration_ms
+                    looped_bg = looped_bg[start_trim:]
+                else:
+                    # Music is longer than video, trim from beginning to keep ending
+                    print(f"   Trimming {(bg_duration_ms - video_duration_ms)/1000:.2f}s from beginning of music...")
+                    start_trim = bg_duration_ms - video_duration_ms
+                    looped_bg = bg_music[start_trim:]
 
                 # Overlay background music
                 mixed_audio = mixed_audio.overlay(looped_bg, position=0)
-                print(f"   ✓ Background music added (looped)")
+                print(f"   ✓ Background music added (ending synced)")
 
             # 2. Add countdown audio at the start (video starts from countdown phase)
             if os.path.exists(audio_files['countdown']):

@@ -66,9 +66,6 @@ class SnakeEscapeRenderer(RendererTemplate):
             pygame.draw.rect(self.screen, self.arena_border_color,
                            arena_rect, self.arena_border_width)
 
-            # Draw grass/ground pattern (subtle)
-            self._draw_ground_pattern(arena_rect)
-
     def _draw_ground_pattern(self, arena_rect: pygame.Rect):
         """Draw a subtle ground pattern on the arena."""
         line_color = (200, 200, 190)

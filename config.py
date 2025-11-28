@@ -12,18 +12,29 @@ SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
 SCREEN_HEIGHT = 960  # 9:16 aspect ratio for Instagram Reels / TikTok
 FPS = 60
 
+# Performance optimization: Lower FPS during video export for better performance
+# Since video is only 30 FPS, running simulation at 60 FPS wastes CPU
+SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO_FPS)
+
+# Time scaling during video export - slows down simulation to give more processing time
+# 1.0 = normal speed, 0.5 = half speed (2x more time per frame), 0.25 = quarter speed (4x more time)
+
+# Maximum delta time cap - prevents huge jumps when system lags
+MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
+
 
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "snake_escape" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape"
+GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
 TEST_MODE = True
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = False
-DAY_NUMBER = 4  # Increment this each time you record a new video
+DAY_NUMBER = 8  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
+EXPORT_TIME_SCALE = 0.5  # Run simulation at half speed during export for smoother results
 
 # ===== ARENA SETTINGS =====
 ARENA_CENTER = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
@@ -54,7 +65,7 @@ SCALING_GROWTH_RATE = 0.5   # How quickly players grow as others are eliminated 
 
 # ===== PHYSICS SETTINGS =====
 BASE_SPEED = 2.0            # Base movement speed (pixels per frame) - reduced for slower pace
-FRICTION = 0.95             # Friction multiplier (lower = more friction)
+FRICTION = 0.75             # Friction multiplier (lower = more friction)
 PUSH_FORCE = 8.0            # Force applied during collisions
 BUMP_COOLDOWN = 0.5         # Cooldown between bumps (seconds) - reduced for more frequent collisions
 COLLISION_DISTANCE = FOLLOWER_RADIUS * 2  # Distance for collision detection
@@ -200,10 +211,10 @@ FIGHTER_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, 500)
 # Default fighter stats (must sum to 100)
 FIGHTER_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
-    "speed": 10,        # Pixels moved every 2 frames
-    "attack": 10,       # HP damage dealt per hit
+    "speed": 5,        # Pixels moved every 2 frames
+    "attack": 3.5,        # HP damage dealt per hit (halved from 10)
     "regeneration": 5,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
-    "knockback": 15,    # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
+    "knockback": 3,    # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
     "attack_speed": 20  # Attacks per second = value / 10 (default: 2 attacks/sec)
 }
 
@@ -271,3 +282,23 @@ SNAKE_MAX_SPEED_MULTIPLIER = 2.0         # Maximum speed multiplier (at end of g
 # Follower flee behavior
 SNAKE_FLEE_DISTANCE = 150    # Distance at which followers start fleeing from snake
 SNAKE_PANIC_DISTANCE = 80    # Distance at which followers enter panic mode (max speed flee)
+
+# ===== TEAM BATTLE SETTINGS =====
+# Team colors (RGB) - used for team rings around fighters
+TEAM_BATTLE_COLORS = {
+    "red": (220, 50, 50),
+    "blue": (50, 100, 220),
+    "green": (50, 180, 50),
+    "yellow": (220, 200, 50),
+}
+
+# Team placement base scores
+TEAM_PLACEMENT_SCORES = {
+    4: 25,   # First team eliminated (4th place)
+    3: 50,   # Second team eliminated (3rd place)
+    2: 75,   # Lost finals (2nd place)
+    1: 75,   # Won finals (1st place) - individual ranking adds 0-25 more
+}
+
+# Kill bonus points
+TEAM_BATTLE_KILL_BONUS = 1  # Points per kill

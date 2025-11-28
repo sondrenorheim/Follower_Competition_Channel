@@ -49,7 +49,7 @@ class SoundManager:
         self.target_intensity = 0.0
 
         # Background music file
-        self.background_music_path = "assets/Background song.m4a"
+        self.background_music_path = "assets/Sydney Tour Song adjusted.m4a"
         self.music_playing = False
 
         # Audio durations (will be set when audio is loaded)
@@ -329,7 +329,7 @@ class SoundManager:
 
     def _preload_background_music(self):
         """Preload and convert background music to WAV"""
-        music_cache = "assets/background_music.wav"
+        music_cache = "assets/sydney_tour_music.wav"
 
         try:
             import os
@@ -515,9 +515,16 @@ class SoundManager:
             print("⚠️  Smash countdown audio not preloaded")
 
     def start_background_music(self):
-        """Start playing background music on loop"""
+        """Start playing background music on loop (skipped during video export)"""
         try:
             import os
+
+            # Skip playing background music during simulation if we're exporting video
+            # Audio will be added during video export instead
+            if config.EXPORT_VIDEO:
+                print(f"🎵 Background music skipped during simulation (will be added during video export)")
+                return
+
             if os.path.exists(self.background_music_path):
                 pygame.mixer.music.load(self.background_music_path)
                 pygame.mixer.music.set_volume(self.current_music_volume * self.master_volume)
@@ -530,7 +537,12 @@ class SoundManager:
             print(f"⚠️  Could not load background music: {e}")
 
     def play_intro_audio(self):
-        """Play the day number audio followed by 'making my followers fight each other'"""
+        """Play the day number audio followed by 'making my followers fight each other' (skipped during video export)"""
+        # Skip intro audio during simulation if we're exporting video
+        if config.EXPORT_VIDEO:
+            print(f"🔊 Intro audio skipped during simulation (not needed for video)")
+            return
+
         import threading
 
         def play_sequence():

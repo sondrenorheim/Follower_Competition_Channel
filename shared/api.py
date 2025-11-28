@@ -169,7 +169,7 @@ class InstagramAPI:
 
     def _download_avatar(self, url: Optional[str]) -> Optional[Image.Image]:
         """
-        Download avatar image from URL
+        Download avatar image from URL with retry logic
 
         Args:
             url: URL of the avatar image
@@ -180,21 +180,37 @@ class InstagramAPI:
         if not url:
             return None
 
-        try:
-            # Add headers to mimic a browser (helps avoid some 403 errors)
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Referer': 'https://www.instagram.com/'
-            }
+        # Add headers to mimic a browser (helps avoid some 403 errors)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Referer': 'https://www.instagram.com/'
+        }
 
-            response = requests.get(url, headers=headers, timeout=5)
-            response.raise_for_status()
-            img = Image.open(io.BytesIO(response.content))
-            return img.convert("RGBA")
-        except Exception as e:
-            # Silently fail - just use colored circle instead
-            return None
+        # Retry up to 3 times with increasing timeout
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                timeout = 10 + (attempt * 5)  # 10s, 15s, 20s
+                response = requests.get(url, headers=headers, timeout=timeout)
+                response.raise_for_status()
+                img = Image.open(io.BytesIO(response.content))
+                return img.convert("RGBA")
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    print(f"      ⚠️ Timeout downloading avatar (attempt {attempt + 1}/{max_retries}), retrying...")
+                    continue
+                else:
+                    print(f"      ❌ Failed to download avatar after {max_retries} attempts (timeout)")
+                    return None
+            except requests.exceptions.HTTPError as e:
+                print(f"      ❌ HTTP error downloading avatar: {e.response.status_code}")
+                return None
+            except Exception as e:
+                print(f"      ❌ Error downloading avatar: {type(e).__name__}: {str(e)[:50]}")
+                return None
+
+        return None
 
     def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, any]]]:
         """
