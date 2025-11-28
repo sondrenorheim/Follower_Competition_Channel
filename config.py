@@ -29,12 +29,12 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
 TEST_MODE = True
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
-EXPORT_VIDEO = False
-DAY_NUMBER = 8  # Increment this each time you record a new video
+EXPORT_VIDEO = True
+DAY_NUMBER = 9  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
-EXPORT_TIME_SCALE = 0.5  # Run simulation at half speed during export for smoother results
+EXPORT_TIME_SCALE = 1  # Run simulation at half speed during export for smoother results
 
 # ===== ARENA SETTINGS =====
 ARENA_CENTER = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
@@ -212,10 +212,10 @@ FIGHTER_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, 500)
 FIGHTER_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
     "speed": 5,        # Pixels moved every 2 frames
-    "attack": 3.5,        # HP damage dealt per hit (halved from 10)
+    "attack": 7.5,        # HP damage dealt per hit (halved from 10)
     "regeneration": 5,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
     "knockback": 3,    # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
-    "attack_speed": 20  # Attacks per second = value / 10 (default: 2 attacks/sec)
+    "attack_speed": 30  # Attacks per second = value / 10 (default: 2 attacks/sec)
 }
 
 # Stat boosts for specific usernames
