@@ -13,10 +13,12 @@ import config
 from shared import (
     InstagramAPI,
     PlayerStatistics,
+    GameHistory,
     ScoringSystem,
     SoundManager,
     AudioLogger,
-    VideoRecorder
+    VideoRecorder,
+    auto_push
 )
 from .racer import Racer
 from .generator import CourseGenerator
@@ -60,6 +62,7 @@ class ObstacleCourseGame:
             offset_y=70
         )
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
 
         # Preload audio
@@ -398,6 +401,13 @@ class ObstacleCourseGame:
         total_participants = len(self.racers)
         game_results = []  # For current game leaderboard
 
+        # Game metadata
+        game_type = "obstacle_course"
+        game_display_name = "Obstacle Course"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
+        game_history_results = []
+
         for racer in sorted_racers:
             placement = racer.placement
             games_played = self.statistics.get_games_played(racer.username)
@@ -421,12 +431,36 @@ class ObstacleCourseGame:
                 placement=placement,
                 points_earned=points_earned,
                 survival_time=racer.get_survival_time(),
-                total_participants=total_participants
+                total_participants=total_participants,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
+
+            # Store for game history
+            game_history_results.append({
+                "username": racer.username,
+                "placement": placement,
+                "points": points_earned,
+                "survival_time": racer.get_survival_time(),
+                "kills": 0,
+                "damage": 0.0
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
 
         # Save
         self.statistics.save_statistics()
         print("Statistics saved!")
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
 
         # Generate leaderboards for display
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)

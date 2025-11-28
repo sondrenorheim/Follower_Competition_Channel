@@ -37,7 +37,9 @@ from shared import (
     SoundManager,
     ScoringSystem,
     PlayerStatistics,
-    AudioLogger
+    GameHistory,
+    AudioLogger,
+    auto_push
 )
 
 # Import battle royale specific modules
@@ -74,6 +76,7 @@ class FollowerBattleRoyale:
         self.particles = ParticleSystem()
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
 
         # Preload audio files before game starts (prevents delays during gameplay)
@@ -339,6 +342,12 @@ class FollowerBattleRoyale:
         # Calculate points for each follower
         total_participants = len(self.followers)
         game_results = []
+        game_history_results = []
+
+        # Game metadata
+        game_type = "battle_royale"
+        game_display_name = "Battle Royale"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
 
         for placement, follower in enumerate(sorted_followers, start=1):
             # Get number of games played before this game
@@ -362,7 +371,9 @@ class FollowerBattleRoyale:
                 points_earned=points_earned,
                 survival_time=survival_time,
                 total_participants=total_participants,
-                kills=follower.kills
+                kills=follower.kills,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
 
             # Store for leaderboard
@@ -373,8 +384,30 @@ class FollowerBattleRoyale:
                 survival_time
             ))
 
+            # Store for game history
+            game_history_results.append({
+                "username": follower.username,
+                "placement": placement,
+                "points": points_earned,
+                "survival_time": survival_time,
+                "kills": follower.kills,
+                "damage": 0.0  # Not tracked in Battle Royale
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
+
         # Save statistics to file
         self.statistics.save_statistics()
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
 
         # Store leaderboards for display
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)

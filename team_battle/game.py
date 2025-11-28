@@ -19,8 +19,10 @@ from shared import (
     SoundManager,
     ScoringSystem,
     PlayerStatistics,
+    GameHistory,
     VideoRecorder,
-    AudioLogger
+    AudioLogger,
+    auto_push
 )
 from .team_fighter import TeamFighter, Team, TEAM_COLORS
 from .team_arena import TeamArena
@@ -87,6 +89,7 @@ class TeamBattleGame:
         self.particles = ParticleSystem()
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
 
         # Use custom background music for team battle
@@ -906,6 +909,47 @@ class TeamBattleGame:
 
             overall_placement = team_base_placement + in_team_rank + 1
 
+            game_results.append((
+                fighter.username,
+                overall_placement,
+                total_points,
+                survival_time
+            ))
+
+        # Game metadata
+        game_type = "team_battle"
+        game_display_name = "Team Battle"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
+        game_history_results = []
+
+        for fighter in all_fighters:
+            # Calculate placement and team info
+            team_placement = team_placements[fighter.team]
+            team_base_placement = sum(
+                len(self.teams[t]) for t in team_placements
+                if team_placements[t] < team_placement
+            )
+
+            # Get in-team rank
+            fighters_in_team = self.teams[fighter.team]
+            sorted_team = sorted(
+                fighters_in_team,
+                key=lambda f: (not f.alive, -f.get_survival_time())
+            )
+            try:
+                in_team_rank = sorted_team.index(fighter)
+            except ValueError:
+                in_team_rank = len(sorted_team)
+
+            overall_placement = team_base_placement + in_team_rank + 1
+
+            # Calculate points
+            team_base_score = config.TEAM_PLACEMENT_SCORES.get(team_placement, 0)
+            individual_bonus = (1 - (in_team_rank / max(len(fighters_in_team), 1))) * 25
+            kill_bonus = fighter.kills * config.TEAM_BATTLE_KILL_BONUS
+            total_points = team_base_score + individual_bonus + kill_bonus
+
             # Update statistics
             survival_time = fighter.get_survival_time()
             games_played = self.statistics.get_games_played(fighter.username)
@@ -917,18 +961,36 @@ class TeamBattleGame:
                 survival_time=survival_time,
                 total_participants=total_participants,
                 kills=fighter.kills,
-                damage_dealt=fighter.damage_dealt
+                damage_dealt=fighter.damage_dealt,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
 
-            game_results.append((
-                fighter.username,
-                overall_placement,
-                total_points,
-                survival_time
-            ))
+            # Store for game history
+            game_history_results.append({
+                "username": fighter.username,
+                "placement": overall_placement,
+                "points": total_points,
+                "survival_time": survival_time,
+                "kills": fighter.kills,
+                "damage": fighter.damage_dealt
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
 
         # Save and display
         self.statistics.save_statistics()
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
+
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)
         self.all_time_leaderboard = self.statistics.get_all_time_leaderboard(top_n=10)
 

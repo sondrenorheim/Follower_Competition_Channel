@@ -9,7 +9,9 @@ from .sound_manager import SoundManager
 from .recorder import VideoRecorder
 from .scoring import ScoringSystem
 from .statistics import PlayerStatistics
+from .game_history import GameHistory
 from .audio_logger import AudioLogger, AudioEvent
+from . import auto_push
 
 # Templates for creating new games
 from .game_template import GameTemplate
@@ -27,8 +29,10 @@ __all__ = [
     'VideoRecorder',
     'ScoringSystem',
     'PlayerStatistics',
+    'GameHistory',
     'AudioLogger',
     'AudioEvent',
+    'auto_push',
     # Templates for new games
     'GameTemplate',
     'RendererTemplate',

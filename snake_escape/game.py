@@ -15,11 +15,13 @@ import config
 from shared import (
     InstagramAPI,
     PlayerStatistics,
+    GameHistory,
     ScoringSystem,
     SoundManager,
     AudioLogger,
     VideoRecorder,
-    ParticleSystem
+    ParticleSystem,
+    auto_push
 )
 
 from .arena import SnakeEscapeArena
@@ -71,6 +73,7 @@ class SnakeEscapeGame:
             offset_y=70
         )
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
         self.particles = ParticleSystem()
 
@@ -400,17 +403,60 @@ class SnakeEscapeGame:
                 follower.get_survival_time()
             ))
 
+        # Game metadata
+        game_type = "snake_escape"
+        game_display_name = "Snake Escape"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
+        game_history_results = []
+
+        for follower in sorted_followers:
+            games_played = self.statistics.get_games_played(follower.username)
+
+            points_breakdown = self.scoring.calculate_total_points(
+                placement=follower.placement,
+                total_participants=total_participants,
+                survival_time=follower.get_survival_time(),
+                games_played=games_played
+            )
+
+            points = points_breakdown["total_points"]
+
             self.statistics.update_player_stats(
                 username=follower.username,
                 placement=follower.placement,
                 points_earned=points,
                 survival_time=follower.get_survival_time(),
-                total_participants=total_participants
+                total_participants=total_participants,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
+
+            # Store for game history
+            game_history_results.append({
+                "username": follower.username,
+                "placement": follower.placement,
+                "points": points,
+                "survival_time": follower.get_survival_time(),
+                "kills": 0,
+                "damage": 0.0
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
 
         # Save statistics
         self.statistics.save_statistics()
         print("Statistics saved!")
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
 
         # Generate leaderboards
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)

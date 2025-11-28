@@ -18,8 +18,10 @@ from shared import (
     SoundManager,
     ScoringSystem,
     PlayerStatistics,
+    GameHistory,
     VideoRecorder,
-    AudioLogger
+    AudioLogger,
+    auto_push
 )
 from .fighter import Fighter
 from .arena import FighterArena
@@ -65,6 +67,7 @@ class FighterBattleArena:
         self.particles = ParticleSystem()
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
 
         # Preload audio
@@ -338,8 +341,14 @@ class FighterBattleArena:
             reverse=False
         )
 
+        # Game metadata
+        game_type = "fighter_arena"
+        game_display_name = "Fighter Arena"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
         total_participants = len(self.fighters)
         game_results = []
+        game_history_results = []
 
         for placement, fighter in enumerate(sorted_fighters, start=1):
             games_played = self.statistics.get_games_played(fighter.username)
@@ -361,7 +370,9 @@ class FighterBattleArena:
                 survival_time=survival_time,
                 total_participants=total_participants,
                 kills=fighter.kills,
-                damage_dealt=fighter.damage_dealt
+                damage_dealt=fighter.damage_dealt,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
 
             game_results.append((
@@ -371,8 +382,30 @@ class FighterBattleArena:
                 survival_time
             ))
 
+            # Store for game history
+            game_history_results.append({
+                "username": fighter.username,
+                "placement": placement,
+                "points": points_earned,
+                "survival_time": survival_time,
+                "kills": fighter.kills,
+                "damage": fighter.damage_dealt
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
+
         # Save statistics
         self.statistics.save_statistics()
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
 
         # Store leaderboards
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)

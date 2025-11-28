@@ -25,28 +25,48 @@ class PlayerStatistics:
         """
         self.stats_file = stats_file
         self.stats: Dict[str, Dict] = {}
+        self.metadata: Dict = {}  # Stores last_updated, total_games, etc.
         self.load_statistics()
 
     def load_statistics(self):
         """
         Load statistics from JSON file
         Creates new file if it doesn't exist
+        Supports both legacy format (dict of username->stats) and new format (with metadata)
         """
         if os.path.exists(self.stats_file):
             try:
                 with open(self.stats_file, 'r', encoding='utf-8') as f:
-                    self.stats = json.load(f)
+                    data = json.load(f)
+
+                # Check if new format with 'players' and metadata
+                if isinstance(data, dict) and "players" in data:
+                    self.stats = data.get("players", {})
+                    self.metadata = {
+                        "last_updated": data.get("last_updated", ""),
+                        "total_games_recorded": data.get("total_games_recorded", 0)
+                    }
+                else:
+                    # Legacy format: flat dict of username->stats
+                    self.stats = data
+                    self.metadata = {
+                        "last_updated": "",
+                        "total_games_recorded": 0
+                    }
+
                 print(f"Loaded statistics for {len(self.stats)} players")
             except Exception as e:
                 print(f"Error loading statistics: {e}")
                 self.stats = {}
+                self.metadata = {"last_updated": "", "total_games_recorded": 0}
         else:
             print("No existing statistics file, starting fresh")
             self.stats = {}
+            self.metadata = {"last_updated": "", "total_games_recorded": 0}
 
     def save_statistics(self):
         """
-        Save statistics to JSON file
+        Save statistics to JSON file in new format with metadata
         Skips saving if TEST_MODE is enabled in config
         """
         if config.TEST_MODE:
@@ -54,8 +74,18 @@ class PlayerStatistics:
             return
 
         try:
+            # Update metadata
+            self.metadata["last_updated"] = datetime.now().isoformat()
+
+            # Create new format with metadata
+            data = {
+                "last_updated": self.metadata.get("last_updated"),
+                "total_games_recorded": self.metadata.get("total_games_recorded", 0),
+                "players": self.stats
+            }
+
             with open(self.stats_file, 'w', encoding='utf-8') as f:
-                json.dump(self.stats, f, indent=2, ensure_ascii=False)
+                json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"💾 Statistics saved for {len(self.stats)} players")
         except Exception as e:
             print(f"❌ Error saving statistics: {e}")
@@ -71,6 +101,13 @@ class PlayerStatistics:
         """
         Get statistics for a specific player
         Creates new entry if player doesn't exist
+
+        New format (dict):
+        {
+            "stats": [array of 13 values],
+            "game_breakdown": {"game_type": count, ...},
+            "recent_games": ["game_id", ...]
+        }
 
         List format (index reference):
         [0]  total_points
@@ -97,29 +134,54 @@ class PlayerStatistics:
             List with player statistics
         """
         if username not in self.stats:
-            # Initialize new player with all stats
-            self.stats[username] = [0.0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0, 0.0]
+            # Initialize new player with enhanced format
+            self.stats[username] = {
+                "stats": [0.0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0, 0.0],
+                "game_breakdown": {},
+                "recent_games": []
+            }
 
-        # Handle legacy formats - extend list if needed
-        if isinstance(self.stats[username], dict):
-            old = self.stats[username]
-            self.stats[username] = [
-                old.get("p", old.get("total_points", 0.0)),
-                old.get("g", old.get("games_played", 0)),
-                old.get("b", old.get("best_placement", 0)),
-                old.get("t", old.get("total_placements", 0)),
-                old.get("w", old.get("wins", 0)),
-                old.get("t3", old.get("top_3_finishes", 0)),
-                old.get("t10", old.get("top_10_finishes", 0)),
-                old.get("s", old.get("total_survival_time", 0.0)),
-                0, 0, 0, 0, 0.0  # New fields default to 0
-            ]
-        elif isinstance(self.stats[username], list) and len(self.stats[username]) < 13:
-            # Extend existing list with new fields
-            while len(self.stats[username]) < 13:
-                self.stats[username].append(0)
+        # Handle legacy formats
+        player_data = self.stats[username]
 
-        return self.stats[username]
+        # If it's an old list format, convert to new dict format
+        if isinstance(player_data, list):
+            self.stats[username] = {
+                "stats": player_data if len(player_data) == 13 else player_data + [0] * (13 - len(player_data)),
+                "game_breakdown": {},
+                "recent_games": []
+            }
+        # If it's an old dict format (very legacy)
+        elif isinstance(player_data, dict) and "stats" not in player_data:
+            old = player_data
+            self.stats[username] = {
+                "stats": [
+                    old.get("p", old.get("total_points", 0.0)),
+                    old.get("g", old.get("games_played", 0)),
+                    old.get("b", old.get("best_placement", 0)),
+                    old.get("t", old.get("total_placements", 0)),
+                    old.get("w", old.get("wins", 0)),
+                    old.get("t3", old.get("top_3_finishes", 0)),
+                    old.get("t10", old.get("top_10_finishes", 0)),
+                    old.get("s", old.get("total_survival_time", 0.0)),
+                    0, 0, 0, 0, 0.0
+                ],
+                "game_breakdown": {},
+                "recent_games": []
+            }
+        # Ensure new format has all required fields
+        elif isinstance(player_data, dict):
+            if "stats" not in player_data:
+                player_data["stats"] = [0.0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0, 0.0]
+            if "game_breakdown" not in player_data:
+                player_data["game_breakdown"] = {}
+            if "recent_games" not in player_data:
+                player_data["recent_games"] = []
+            # Extend stats array if needed
+            while len(player_data["stats"]) < 13:
+                player_data["stats"].append(0)
+
+        return self.stats[username]["stats"]
 
     def update_player_stats(
         self,
@@ -129,7 +191,9 @@ class PlayerStatistics:
         survival_time: float,
         total_participants: int,
         kills: int = 0,
-        damage_dealt: float = 0.0
+        damage_dealt: float = 0.0,
+        game_type: str = "",
+        game_id: str = ""
     ):
         """
         Update statistics for a player after a game
@@ -142,6 +206,8 @@ class PlayerStatistics:
             total_participants: Total number of participants
             kills: Number of eliminations caused by this player
             damage_dealt: Total damage dealt (Fighter Arena)
+            game_type: Type of game (e.g., "battle_royale", "platformer_race")
+            game_id: Unique game session ID for tracking
         """
         s = self.get_player_stats(username)
 
@@ -181,6 +247,21 @@ class PlayerStatistics:
         if placement == total_participants:
             s[self.FIRST_OUT] += 1
 
+        # Update game breakdown (track games played by type)
+        if game_type:
+            player_data = self.stats[username]
+            if game_type not in player_data["game_breakdown"]:
+                player_data["game_breakdown"][game_type] = 0
+            player_data["game_breakdown"][game_type] += 1
+
+        # Track recent games (keep last 20)
+        if game_id:
+            player_data = self.stats[username]
+            if game_id not in player_data["recent_games"]:
+                player_data["recent_games"].insert(0, game_id)  # Add to front
+                # Keep only last 20 games
+                player_data["recent_games"] = player_data["recent_games"][:20]
+
     def get_all_time_leaderboard(self, top_n: int = 10) -> List[Tuple[str, float, list]]:
         """
         Get all-time leaderboard sorted by total points
@@ -192,12 +273,18 @@ class PlayerStatistics:
             List of (username, total_points, stats_list) tuples
         """
         leaderboard = []
-        for username, stats in self.stats.items():
-            # Handle both list and legacy dict formats
-            if isinstance(stats, list):
+        for username, player_data in self.stats.items():
+            # Handle both new dict format and legacy list format
+            if isinstance(player_data, dict) and "stats" in player_data:
+                stats = player_data["stats"]
+                points = stats[self.P]
+            elif isinstance(player_data, list):
+                stats = player_data
                 points = stats[self.P]
             else:
-                points = stats.get("p", stats.get("total_points", 0))
+                # Very legacy dict format
+                points = player_data.get("p", player_data.get("total_points", 0))
+                stats = player_data
             leaderboard.append((username, points, stats))
 
         # Sort by total points descending
@@ -233,10 +320,13 @@ class PlayerStatistics:
             Number of games played (0 for new players)
         """
         if username in self.stats:
-            s = self.stats[username]
-            if isinstance(s, list):
-                return s[self.G]
-            return s.get("g", s.get("games_played", 0))
+            player_data = self.stats[username]
+            if isinstance(player_data, dict) and "stats" in player_data:
+                return player_data["stats"][self.G]
+            elif isinstance(player_data, list):
+                return player_data[self.G]
+            else:
+                return player_data.get("g", player_data.get("games_played", 0))
         return 0
 
     def _get_stat(self, stats, index: int, fallback_keys: tuple = None) -> float:
@@ -253,7 +343,7 @@ class PlayerStatistics:
         """Calculate average placement for a player"""
         if username not in self.stats:
             return 0
-        s = self.get_player_stats(username)
+        s = self.get_player_stats(username)  # This returns the stats array
         games = s[self.G]
         if games == 0:
             return 0
@@ -317,15 +407,19 @@ class PlayerStatistics:
                 "highest_scorer": None
             }
 
-        def get_games(s):
-            if isinstance(s, list):
-                return s[self.G]
-            return s.get("g", s.get("games_played", 0))
+        def get_games(player_data):
+            if isinstance(player_data, dict) and "stats" in player_data:
+                return player_data["stats"][self.G]
+            elif isinstance(player_data, list):
+                return player_data[self.G]
+            return player_data.get("g", player_data.get("games_played", 0))
 
-        def get_points(s):
-            if isinstance(s, list):
-                return s[self.P]
-            return s.get("p", s.get("total_points", 0))
+        def get_points(player_data):
+            if isinstance(player_data, dict) and "stats" in player_data:
+                return player_data["stats"][self.P]
+            elif isinstance(player_data, list):
+                return player_data[self.P]
+            return player_data.get("p", player_data.get("total_points", 0))
 
         total_games_sum = sum(get_games(s) for s in self.stats.values())
         most_experienced = max(self.stats.items(), key=lambda x: get_games(x[1]))

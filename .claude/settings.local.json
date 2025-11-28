@@ -15,7 +15,14 @@
       "Bash(timeout 5 python:*)",
       "Bash(timeout 10 python:*)",
       "Bash(timeout 15 python:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(python3:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tailwindcss:*)",
+      "Bash(node:*)",
+      "Bash(copy:*)",
+      "Bash(npm run dev:*)"
     ],
     "deny": [],
     "ask": []

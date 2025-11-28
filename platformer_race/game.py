@@ -15,8 +15,10 @@ from shared import (
     SoundManager,
     ScoringSystem,
     PlayerStatistics,
+    GameHistory,
     VideoRecorder,
-    AudioLogger
+    AudioLogger,
+    auto_push
 )
 from .racer import PlatformerRacer
 from .level import PlatformerLevel
@@ -67,6 +69,7 @@ class PlatformerRaceGame:
         )
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
+        self.game_history = GameHistory()
         self.scoring = ScoringSystem()
 
         # Use Sydney Tour music
@@ -332,8 +335,16 @@ class PlatformerRaceGame:
 
     def _prepare_leaderboards(self):
         """Prepare leaderboard data after race finishes"""
+        # Game metadata
+        game_type = "platformer_race"
+        game_display_name = "Platformer Race"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
         # Update statistics for each racer
         total_participants = len(self.racers)
+        game_results = []
+        game_history_results = []
+
         for racer in self.racers:
             placement = racer.placement if racer.placement > 0 else total_participants
             self.statistics.update_player_stats(
@@ -341,19 +352,43 @@ class PlatformerRaceGame:
                 placement=placement,
                 points_earned=racer.points,
                 survival_time=racer.finish_time if racer.finished else 0.0,
-                total_participants=total_participants
+                total_participants=total_participants,
+                game_type=game_type,
+                game_id=""  # Will be set after game_history.record_game_session
             )
 
-        # Build game results for leaderboard display
-        game_results = []
-        for racer in self.racers:
-            placement = racer.placement if racer.placement > 0 else total_participants
+            # Build game results for leaderboard display
             game_results.append((
                 racer.username,
                 placement,
                 racer.points,
                 racer.finish_time if racer.finished else 0.0
             ))
+
+            # Store for game history
+            game_history_results.append({
+                "username": racer.username,
+                "placement": placement,
+                "points": racer.points,
+                "survival_time": racer.finish_time if racer.finished else 0.0,
+                "kills": 0,
+                "damage": 0.0
+            })
+
+        # Record complete game session to history
+        self.game_history.record_game_session(
+            game_type=game_type,
+            game_display_name=game_display_name,
+            day_number=day_number,
+            results=game_history_results
+        )
+
+        # Save statistics
+        self.statistics.save_statistics()
+
+        # Auto-push to GitHub (if not in test mode)
+        if not config.TEST_MODE:
+            auto_push.push_stats_to_github()
 
         # Get leaderboards
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)
