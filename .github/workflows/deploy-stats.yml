@@ -2,7 +2,7 @@ name: Deploy Stats Website
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, claude/initialize-repo-01NEJaF3TxJTeFxd3rcPuzvt]
     paths:
       - 'player_statistics.json'
       - 'game_history.json'
