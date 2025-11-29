@@ -9,9 +9,11 @@ import GameFilter from '../components/GameFilter';
  * Browse individual game episode results
  */
 export default function DailyResults() {
-  const [games, setGames] = useState([]);
+  const [allGames, setAllGames] = useState([]); // All games for checking availability
+  const [games, setGames] = useState([]); // Filtered games by type
   const [gameTypes, setGameTypes] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
+  const [selectedDayNumber, setSelectedDayNumber] = useState(null);
   const [selectedGame, setSelectedGame] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -25,15 +27,14 @@ export default function DailyResults() {
         const types = await getGameTypes();
         setGameTypes(types);
 
-        const allGames = await getGamesByType('all');
-        setGames(allGames);
+        const loadedGames = await getGamesByType('all');
+        setAllGames(loadedGames);
+        setGames(loadedGames);
 
-        // Select most recent game by default
-        if (allGames.length > 0) {
-          const sortedGames = [...allGames].sort(
-            (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
-          );
-          setSelectedGame(sortedGames[0]);
+        // Find highest day number
+        if (loadedGames.length > 0) {
+          const maxDay = Math.max(...loadedGames.map(g => g.day_number));
+          setSelectedDayNumber(maxDay);
         }
       } catch (error) {
         console.error('Error loading games:', error);
@@ -50,24 +51,56 @@ export default function DailyResults() {
       const filtered = await getGamesByType(selectedGameType);
       setGames(filtered);
 
-      // Auto-select most recent game of selected type
       if (filtered.length > 0) {
-        const sortedGames = [...filtered].sort(
-          (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
-        );
-        setSelectedGame(sortedGames[0]);
-      } else {
-        setSelectedGame(null);
+        const availableDays = filtered.map(g => g.day_number);
+        const maxDay = Math.max(...availableDays);
+
+        // If no day selected or current day not available for this game type, use highest day
+        if (selectedDayNumber === null || !availableDays.includes(selectedDayNumber)) {
+          setSelectedDayNumber(maxDay);
+        }
       }
     }
     filterGames();
   }, [selectedGameType]);
 
-  // Filter results by search query
+  // Update selected game when day number or filtered games change
+  useEffect(() => {
+    if (selectedDayNumber !== null && games.length > 0) {
+      // Find game matching both the selected game type and day number
+      const matchingGame = games.find(g => g.day_number === selectedDayNumber);
+      setSelectedGame(matchingGame || null);
+    }
+  }, [selectedDayNumber, games]);
+
+  // Sort all results and calculate ranks, then filter by search
   const filteredResults = selectedGame
-    ? selectedGame.results.filter((result) =>
-        result.username.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+    ? (() => {
+        // First, sort all results by points
+        const sortedResults = [...selectedGame.results].sort((a, b) => {
+          const pointsA = a.points || 0;
+          const pointsB = b.points || 0;
+          return pointsB - pointsA;
+        });
+
+        // Calculate ranks for all players (with tie handling)
+        const resultsWithRanks = sortedResults.map((result, index) => {
+          const pointValue = result.points || 0;
+          let rank = 1;
+          for (let i = 0; i < sortedResults.length; i++) {
+            const otherPoints = sortedResults[i].points || 0;
+            if (otherPoints > pointValue) {
+              rank++;
+            }
+          }
+          return { ...result, calculatedRank: rank };
+        });
+
+        // Then filter by search query
+        return resultsWithRanks.filter((result) =>
+          result.username.toLowerCase().includes(searchQuery.toLowerCase())
+        );
+      })()
     : [];
 
   if (loading) {
@@ -92,10 +125,9 @@ export default function DailyResults() {
           <h2 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary to-accent mb-6 tracking-tight">
             Daily Results
           </h2>
-          <p className="text-lg text-text-secondary max-w-3xl mx-auto font-medium leading-relaxed mb-4">
-            View the top performers from each daily follower race or use the search bar to find your result.
-            The top 50k followers are awarded points each day.
-          </p>
+           <p className="text-lg text-text-secondary max-w-3xl mx-auto font-medium leading-relaxed mb-4">
+            View the top performers from each follower race or use the search bar to find your result.
+            </p>
         </div>
 
         {/* Filters */}
@@ -110,30 +142,30 @@ export default function DailyResults() {
 
             {/* Day/Episode Selector */}
             <div className="group">
-              <label htmlFor="game-selector" className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
+              <label htmlFor="day-selector" className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
                 <span>📅</span>
-                <span>Episode</span>
+                <span>Day</span>
               </label>
               <div className="relative">
                 <select
-                  id="game-selector"
-                  value={selectedGame?.game_id || ''}
+                  id="day-selector"
+                  value={selectedDayNumber || ''}
                   onChange={(e) => {
-                    const game = games.find((g) => g.game_id === e.target.value);
-                    setSelectedGame(game);
+                    setSelectedDayNumber(Number(e.target.value));
                     setSearchQuery('');
                     setCurrentPage(1);
                   }}
                   className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
                 >
                   {games.length === 0 ? (
-                    <option className="bg-dark-bg-secondary text-text-primary">No games available</option>
+                    <option className="bg-dark-bg-secondary text-text-primary">No days available</option>
                   ) : (
-                    games
-                      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-                      .map((game) => (
-                        <option key={game.game_id} value={game.game_id} className="bg-dark-bg-secondary text-text-primary">
-                          Day {game.day_number} - {game.game_display_name} ({game.total_participants} players)
+                    // Get unique day numbers, sort descending
+                    [...new Set(games.map(g => g.day_number))]
+                      .sort((a, b) => b - a)
+                      .map((dayNum) => (
+                        <option key={dayNum} value={dayNum} className="bg-dark-bg-secondary text-text-primary">
+                          Day {dayNum}
                         </option>
                       ))
                   )}
@@ -188,7 +220,11 @@ export default function DailyResults() {
 
             <LeaderboardTable
               data={filteredResults}
-              columns={['rank', 'username', 'points', 'survivalTime', 'kills']}
+              columns={
+                selectedGame.game_type === 'platformer_race'
+                  ? ['rank', 'username', 'points']
+                  : ['rank', 'username', 'points', 'survivalTime', 'kills']
+              }
               currentPage={currentPage}
               onPageChange={setCurrentPage}
             />

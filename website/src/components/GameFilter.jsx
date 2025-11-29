@@ -25,10 +25,13 @@ export default function GameFilter({ value, onChange, gameTypes = [] }) {
           className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
         >
           {allGameTypes.map((gameType) => {
-            const info = getGameTypeInfo(gameType.type);
             return (
-              <option key={gameType.type} value={gameType.type} className="bg-dark-bg-secondary text-text-primary">
-                {info.name} {gameType.count ? `(${gameType.count})` : ''}
+              <option
+                key={gameType.type}
+                value={gameType.type}
+                className="bg-dark-bg-secondary text-text-primary"
+              >
+                {gameType.displayName}
               </option>
             );
           })}

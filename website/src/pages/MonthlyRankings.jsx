@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAllTimeLeaderboard, getMonthlyLeaderboard } from '../utils/dataLoader';
+import { getAllTimeLeaderboard, getMonthlyLeaderboard, loadGameHistory } from '../utils/dataLoader';
 import { parseStats } from '../utils/formatters';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
@@ -9,23 +9,67 @@ import SearchBar from '../components/SearchBar';
  * View all-time and monthly leaderboards
  */
 export default function MonthlyRankings() {
-  const [viewMode, setViewMode] = useState('all-time'); // 'all-time' or 'monthly'
+  const [viewMode, setViewMode] = useState('all-time'); // 'all-time', 'monthly', or 'top-stats'
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
+  const [availableMonths, setAvailableMonths] = useState([]);
+  const [selectedStatCategory, setSelectedStatCategory] = useState('points');
 
   // Current month/year
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
 
+  // Load available months from game history
+  useEffect(() => {
+    async function loadAvailableMonths() {
+      try {
+        const history = await loadGameHistory();
+        const monthSet = new Set();
+
+        (history.games || []).forEach(game => {
+          const gameDate = new Date(game.timestamp);
+          const key = `${gameDate.getFullYear()}-${gameDate.getMonth() + 1}`;
+          monthSet.add(key);
+        });
+
+        const months = Array.from(monthSet).map(key => {
+          const [year, month] = key.split('-').map(Number);
+          return {
+            month,
+            year,
+            label: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+          };
+        });
+
+        // Sort by year and month descending (most recent first)
+        months.sort((a, b) => {
+          if (a.year !== b.year) return b.year - a.year;
+          return b.month - a.month;
+        });
+
+        setAvailableMonths(months);
+
+        // Set selected month to most recent available
+        if (months.length > 0) {
+          setSelectedMonth(months[0].month);
+          setSelectedYear(months[0].year);
+        }
+      } catch (error) {
+        console.error('Error loading available months:', error);
+      }
+    }
+    loadAvailableMonths();
+  }, []);
+
   // Load leaderboard data
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
-        if (viewMode === 'all-time') {
+        if (viewMode === 'all-time' || viewMode === 'top-stats') {
           const data = await getAllTimeLeaderboard(1000);
           // Transform data for table
           const transformed = data.map((player) => {
@@ -36,9 +80,36 @@ export default function MonthlyRankings() {
               games: stats.gamesPlayed,
               wins: stats.wins,
               avgPlacement: stats.avgPlacement,
-              totalKills: stats.totalKills
+              totalKills: stats.totalKills,
+              top10PctFinishes: stats.top10PctFinishes,
+              top3Finishes: stats.top3Finishes
             };
           });
+
+          // Sort based on selected category for top stats view
+          if (viewMode === 'top-stats') {
+            transformed.sort((a, b) => {
+              switch (selectedStatCategory) {
+                case 'points':
+                  return b.points - a.points;
+                case 'kills':
+                  return b.totalKills - a.totalKills;
+                case 'wins':
+                  return b.wins - a.wins;
+                case 'top3':
+                  return b.top3Finishes - a.top3Finishes;
+                case 'top10pct':
+                  return b.top10PctFinishes - a.top10PctFinishes;
+                case 'avgPlacement':
+                  return parseFloat(a.avgPlacement) - parseFloat(b.avgPlacement); // Lower is better
+                case 'games':
+                  return b.games - a.games;
+                default:
+                  return b.points - a.points;
+              }
+            });
+          }
+
           setLeaderboardData(transformed);
         } else {
           const data = await getMonthlyLeaderboard(selectedYear, selectedMonth, 1000);
@@ -51,23 +122,15 @@ export default function MonthlyRankings() {
       }
     }
     loadData();
-  }, [viewMode, selectedMonth, selectedYear]);
+  }, [viewMode, selectedMonth, selectedYear, selectedStatCategory]);
 
   // Filter by search query
   const filteredData = leaderboardData.filter((player) =>
     player.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Generate month options (last 12 months)
-  const monthOptions = [];
-  for (let i = 0; i < 12; i++) {
-    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    monthOptions.push({
-      month: date.getMonth() + 1,
-      year: date.getFullYear(),
-      label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-    });
-  }
+  // Use available months only
+  const monthOptions = availableMonths;
 
   if (loading) {
     return (
@@ -92,8 +155,8 @@ export default function MonthlyRankings() {
             Monthly Rankings
           </h2>
           <p className="text-lg text-text-secondary max-w-3xl mx-auto font-medium leading-relaxed mb-4">
-            The top 50k places from each daily follower race are awarded points. At the end of the month,
-            the top 1000 ranked followers qualify for the monthly medal race to crown the monthly winner!
+            Every day each daily follower race count towards points. At the end of the month,
+            the top 10% ranked followers qualify for the monthly medal race to crown the monthly winner!
             Unfollowers will not qualify.
           </p>
         </div>
@@ -131,6 +194,20 @@ export default function MonthlyRankings() {
               >
                 📅 Monthly
               </button>
+              <button
+                onClick={() => {
+                  setViewMode('top-stats');
+                  setSearchQuery('');
+                  setCurrentPage(1);
+                }}
+                className={`px-8 py-4 rounded-lg font-bold transition-all duration-200 ${
+                  viewMode === 'top-stats'
+                    ? 'bg-gradient-to-r from-primary to-secondary text-white shadow-glow-primary border-accent scale-105'
+                    : 'text-text-muted hover:text-text-primary hover:bg-dark-surface/70 hover:scale-105'
+                }`}
+              >
+                📊 Top Stats
+              </button>
             </div>
 
             {/* Month Selector (only for monthly view) */}
@@ -162,6 +239,35 @@ export default function MonthlyRankings() {
               </div>
             )}
 
+            {/* Category Selector (only for top stats view) */}
+            {viewMode === 'top-stats' && (
+              <div className="flex-1 min-w-[200px]">
+                <div className="relative">
+                  <select
+                    value={selectedStatCategory}
+                    onChange={(e) => {
+                      setSelectedStatCategory(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
+                  >
+                    <option value="points" className="bg-dark-bg-secondary text-text-primary">Most Points</option>
+                    <option value="kills" className="bg-dark-bg-secondary text-text-primary">Most Kills</option>
+                    <option value="wins" className="bg-dark-bg-secondary text-text-primary">Most Wins</option>
+                    <option value="top3" className="bg-dark-bg-secondary text-text-primary">Most Top 3 Finishes</option>
+                    <option value="top10pct" className="bg-dark-bg-secondary text-text-primary">Most Top 10% Finishes</option>
+                    <option value="avgPlacement" className="bg-dark-bg-secondary text-text-primary">Best Average Placement</option>
+                    <option value="games" className="bg-dark-bg-secondary text-text-primary">Most Games Played</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Search */}
             <div className="flex-1 min-w-[200px]">
               <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search players..." />
@@ -169,11 +275,42 @@ export default function MonthlyRankings() {
           </div>
         </div>
 
+        {/* Disclaimer for All-Time view */}
+        {viewMode === 'all-time' && (
+          <div className="mb-6 p-4 bg-warning/10 border-l-4 border-warning rounded-card">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <p className="text-sm font-medium text-text-primary">
+                  <strong>Note:</strong> The first 8 days of competition did not have sufficient data tracking.
+                  Detailed statistics and game breakdowns are not available for those early days.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Leaderboard Table */}
         {filteredData.length > 0 ? (
           <LeaderboardTable
             data={filteredData}
-            columns={['rank', 'username', 'points', 'games', 'wins', 'avg']}
+            columns={
+              viewMode === 'top-stats'
+                ? selectedStatCategory === 'kills'
+                  ? ['rank', 'username', 'kills', 'points', 'games']
+                  : selectedStatCategory === 'wins'
+                    ? ['rank', 'username', 'wins', 'points', 'games']
+                    : selectedStatCategory === 'top3'
+                      ? ['rank', 'username', 'top3', 'points', 'games']
+                      : selectedStatCategory === 'top10pct'
+                        ? ['rank', 'username', 'top10pct', 'points', 'games']
+                        : selectedStatCategory === 'avgPlacement'
+                          ? ['rank', 'username', 'avg', 'points', 'games']
+                          : selectedStatCategory === 'games'
+                            ? ['rank', 'username', 'games', 'points', 'wins']
+                            : ['rank', 'username', 'points', 'games', 'wins', 'avg']
+                : ['rank', 'username', 'points', 'games', 'wins', 'avg']
+            }
             currentPage={currentPage}
             onPageChange={setCurrentPage}
           />

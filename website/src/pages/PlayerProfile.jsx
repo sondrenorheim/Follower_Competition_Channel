@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getPlayerStats, getPlayerGameHistory } from '../utils/dataLoader';
+import { getPlayerStats, getPlayerGameHistory, loadGameHistory, getGameTypes } from '../utils/dataLoader';
 import { parseStats, formatPoints, formatDate, getPlacementSuffix, getGameTypeInfo } from '../utils/formatters';
+import GameFilter from '../components/GameFilter';
 
 /**
  * PlayerProfile Page
@@ -11,6 +12,9 @@ export default function PlayerProfile() {
   const { username } = useParams();
   const [playerData, setPlayerData] = useState(null);
   const [gameHistory, setGameHistory] = useState([]);
+  const [allGameHistory, setAllGameHistory] = useState([]);
+  const [gameTypes, setGameTypes] = useState([]);
+  const [selectedGameType, setSelectedGameType] = useState('all');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,10 +22,13 @@ export default function PlayerProfile() {
       setLoading(true);
       try {
         const data = await getPlayerStats(username);
-        const history = await getPlayerGameHistory(username, 20);
+        const history = await getPlayerGameHistory(username, 1000);
+        const types = await getGameTypes();
 
         setPlayerData(data);
+        setAllGameHistory(history);
         setGameHistory(history);
+        setGameTypes(types);
       } catch (error) {
         console.error('Error loading player data:', error);
       } finally {
@@ -30,6 +37,16 @@ export default function PlayerProfile() {
     }
     loadPlayerData();
   }, [username]);
+
+  // Filter game history when game type changes
+  useEffect(() => {
+    if (selectedGameType === 'all') {
+      setGameHistory(allGameHistory);
+    } else {
+      const filtered = allGameHistory.filter(game => game.gameType === selectedGameType);
+      setGameHistory(filtered);
+    }
+  }, [selectedGameType, allGameHistory]);
 
   if (loading) {
     return (
@@ -53,7 +70,58 @@ export default function PlayerProfile() {
     );
   }
 
-  const stats = parseStats(playerData.stats);
+  // Calculate stats from filtered game history
+  const calculateStats = (games) => {
+    if (games.length === 0) {
+      return {
+        totalPoints: 0,
+        gamesPlayed: 0,
+        bestPlacement: 0,
+        avgPlacement: 0,
+        wins: 0,
+        top3Finishes: 0,
+        top10PctFinishes: 0,
+        totalKills: 0,
+        bestHotStreak: 0
+      };
+    }
+
+    const totalPoints = games.reduce((sum, g) => sum + (g.points || 0), 0);
+    const totalKills = games.reduce((sum, g) => sum + (g.kills || 0), 0);
+    const wins = games.filter(g => g.placement === 1).length;
+    const top3 = games.filter(g => g.placement <= 3).length;
+    const bestPlacement = Math.min(...games.map(g => g.placement || Infinity));
+    const avgPlacement = games.reduce((sum, g) => sum + (g.placement || 0), 0) / games.length;
+
+    // Calculate top 10% finishes (assuming max ~400 players per game)
+    const top10Pct = games.filter(g => g.placement <= 40).length;
+
+    // Simple hot streak calculation
+    let currentStreak = 0;
+    let bestStreak = 0;
+    games.forEach(g => {
+      if (g.placement <= 40) {
+        currentStreak++;
+        bestStreak = Math.max(bestStreak, currentStreak);
+      } else {
+        currentStreak = 0;
+      }
+    });
+
+    return {
+      totalPoints,
+      gamesPlayed: games.length,
+      bestPlacement,
+      avgPlacement: avgPlacement.toFixed(1),
+      wins,
+      top3Finishes: top3,
+      top10PctFinishes: top10Pct,
+      totalKills,
+      bestHotStreak: bestStreak
+    };
+  };
+
+  const stats = calculateStats(gameHistory);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
@@ -76,6 +144,15 @@ export default function PlayerProfile() {
             View your best and worst results and all-time stats below. Track your progress and see how your
             performance stacks up over time.
           </p>
+        </div>
+
+        {/* Game Filter */}
+        <div className="mb-6 max-w-xs">
+          <GameFilter
+            value={selectedGameType}
+            onChange={setSelectedGameType}
+            gameTypes={gameTypes}
+          />
         </div>
 
         {/* Stats Cards */}

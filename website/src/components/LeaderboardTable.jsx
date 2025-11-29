@@ -22,11 +22,33 @@ export default function LeaderboardTable({
     );
   }
 
+  // Calculate ranks with tie handling based on points (only if not already provided)
+  const dataWithRanks = data.map((row, index) => {
+    // If rank is already calculated (e.g., from filtered data), use it
+    if (row.calculatedRank) {
+      return row;
+    }
+
+    // Otherwise calculate rank based on points (with tie handling)
+    // Rank = 1 + number of players with strictly higher points
+    const pointValue = row.points || row.totalPoints || 0;
+    let rank = 1;
+    for (let i = 0; i < data.length; i++) {
+      if (i !== index) {
+        const otherPoints = data[i].points || data[i].totalPoints || 0;
+        if (otherPoints > pointValue) {
+          rank++;
+        }
+      }
+    }
+    return { ...row, calculatedRank: rank };
+  });
+
   // Pagination
-  const totalPages = Math.ceil(data.length / itemsPerPage);
+  const totalPages = Math.ceil(dataWithRanks.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
-  const paginatedData = data.slice(startIndex, endIndex);
+  const paginatedData = dataWithRanks.slice(startIndex, endIndex);
 
   return (
     <div className="w-full">
@@ -75,11 +97,21 @@ export default function LeaderboardTable({
                   ⏱️ Survival Time
                 </th>
               )}
+              {columns.includes('top3') && (
+                <th className="px-6 py-5 text-left text-xs font-black text-text-primary uppercase tracking-wider">
+                  🥉 Top 3
+                </th>
+              )}
+              {columns.includes('top10pct') && (
+                <th className="px-6 py-5 text-left text-xs font-black text-text-primary uppercase tracking-wider">
+                  🔥 Top 10%
+                </th>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y-2 divide-slate-700/50">
             {paginatedData.map((row, index) => {
-              const actualRank = startIndex + index + 1;
+              const actualRank = row.calculatedRank;
               const isTopThree = actualRank <= 3;
               const isFirst = actualRank === 1;
               const isSecond = actualRank === 2;
@@ -148,6 +180,16 @@ export default function LeaderboardTable({
                   {columns.includes('survivalTime') && (
                     <td className="px-6 py-5 whitespace-nowrap text-sm text-text-secondary">
                       {row.survivalTime || row.survival_time || 0}s
+                    </td>
+                  )}
+                  {columns.includes('top3') && (
+                    <td className="px-6 py-5 whitespace-nowrap text-sm font-bold text-success">
+                      {row.top3Finishes || 0}
+                    </td>
+                  )}
+                  {columns.includes('top10pct') && (
+                    <td className="px-6 py-5 whitespace-nowrap text-sm font-bold text-accent">
+                      {row.top10PctFinishes || 0}
                     </td>
                   )}
                 </tr>
