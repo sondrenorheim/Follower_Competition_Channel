@@ -27,11 +27,11 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
-TEST_MODE = True
+TEST_MODE = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
 DAY_NUMBER = 9  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
+DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 EXPORT_TIME_SCALE = 1  # Run simulation at half speed during export for smoother results

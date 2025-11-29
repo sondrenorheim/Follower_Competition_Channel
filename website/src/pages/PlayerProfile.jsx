@@ -56,20 +56,27 @@ export default function PlayerProfile() {
   const stats = parseStats(playerData.stats);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Back Button */}
-      <Link to="/" className="text-primary hover:underline mb-4 inline-block">
-        ← Back to results
-      </Link>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Back Button */}
+        <Link
+          to="/"
+          className="inline-flex items-center gap-2 text-primary hover:text-secondary font-medium mb-6 transition-colors group"
+        >
+          <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to results
+        </Link>
 
-      {/* Player Header */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">@{username}</h1>
-        <p className="text-gray-600">
-          View your best and worst results and all-time stats below. Track your progress and see how your
-          performance stacks up over time.
-        </p>
-      </div>
+        {/* Player Header */}
+        <div className="bg-gradient-to-r from-primary to-secondary rounded-xl shadow-xl p-8 mb-6 text-white">
+          <h1 className="text-4xl font-extrabold mb-3">@{username}</h1>
+          <p className="text-lg opacity-90">
+            View your best and worst results and all-time stats below. Track your progress and see how your
+            performance stacks up over time.
+          </p>
+        </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -180,9 +187,9 @@ export default function PlayerProfile() {
 
 function StatCard({ label, value }) {
   return (
-    <div className="bg-white rounded-lg shadow-md p-4">
-      <div className="text-sm text-gray-600 mb-1">{label}</div>
-      <div className="text-2xl font-bold text-gray-900">{value}</div>
+    <div className="bg-white rounded-xl shadow-lg p-5 hover:shadow-xl transition-shadow border-l-4 border-primary">
+      <div className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">{label}</div>
+      <div className="text-3xl font-extrabold text-gray-900">{value}</div>
     </div>
   );
 }

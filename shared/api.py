@@ -181,10 +181,12 @@ class InstagramAPI:
             return None
 
         # Add headers to mimic a browser (helps avoid some 403 errors)
+        # Detect if TikTok URL and use appropriate referer
+        referer = 'https://www.tiktok.com/' if 'tiktok' in url.lower() else 'https://www.instagram.com/'
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-            'Referer': 'https://www.instagram.com/'
+            'Referer': referer
         }
 
         # Retry up to 3 times with increasing timeout

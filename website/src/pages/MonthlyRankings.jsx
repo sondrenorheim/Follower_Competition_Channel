@@ -78,91 +78,108 @@ export default function MonthlyRankings() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Page Header */}
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Monthly Rankings</h2>
-        <p className="text-gray-600">
-          The top 50k places from each daily follower race are awarded points. At the end of the month,
-          the top 1000 ranked followers qualify for the monthly medal race to crown the monthly winner!
-          Unfollowers will not qualify.
-        </p>
-      </div>
-
-      {/* View Mode Toggle */}
-      <div className="flex flex-wrap items-center gap-4 mb-6">
-        <div className="flex bg-gray-200 rounded-lg p-1">
-          <button
-            onClick={() => {
-              setViewMode('all-time');
-              setSearchQuery('');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-md font-medium transition-colors ${
-              viewMode === 'all-time'
-                ? 'bg-white text-primary shadow-sm'
-                : 'text-gray-700 hover:text-gray-900'
-            }`}
-          >
-            All-Time
-          </button>
-          <button
-            onClick={() => {
-              setViewMode('monthly');
-              setSearchQuery('');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-md font-medium transition-colors ${
-              viewMode === 'monthly'
-                ? 'bg-white text-primary shadow-sm'
-                : 'text-gray-700 hover:text-gray-900'
-            }`}
-          >
-            Monthly
-          </button>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Page Header */}
+        <div className="mb-8 text-center">
+          <h2 className="text-4xl font-extrabold text-gray-900 mb-3 tracking-tight">
+            Monthly Rankings
+          </h2>
+          <p className="text-lg text-gray-600 max-w-3xl mx-auto">
+            The top 50k places from each daily follower race are awarded points. At the end of the month,
+            the top 1000 ranked followers qualify for the monthly medal race to crown the monthly winner!
+            Unfollowers will not qualify.
+          </p>
         </div>
 
-        {/* Month Selector (only for monthly view) */}
-        {viewMode === 'monthly' && (
-          <div className="flex-1 min-w-[200px]">
-            <select
-              value={`${selectedYear}-${selectedMonth}`}
-              onChange={(e) => {
-                const [year, month] = e.target.value.split('-').map(Number);
-                setSelectedYear(year);
-                setSelectedMonth(month);
-                setCurrentPage(1);
-              }}
-              className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-primary focus:border-primary sm:text-sm rounded-md bg-white"
-            >
-              {monthOptions.map((option) => (
-                <option key={`${option.year}-${option.month}`} value={`${option.year}-${option.month}`}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+        {/* Controls */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex flex-wrap items-center gap-4">
+            {/* View Mode Toggle */}
+            <div className="flex bg-gradient-to-r from-gray-100 to-gray-200 rounded-lg p-1 shadow-inner">
+              <button
+                onClick={() => {
+                  setViewMode('all-time');
+                  setSearchQuery('');
+                  setCurrentPage(1);
+                }}
+                className={`px-6 py-2.5 rounded-lg font-semibold transition-all ${
+                  viewMode === 'all-time'
+                    ? 'bg-white text-primary shadow-md scale-105'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                All-Time
+              </button>
+              <button
+                onClick={() => {
+                  setViewMode('monthly');
+                  setSearchQuery('');
+                  setCurrentPage(1);
+                }}
+                className={`px-6 py-2.5 rounded-lg font-semibold transition-all ${
+                  viewMode === 'monthly'
+                    ? 'bg-white text-primary shadow-md scale-105'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Monthly
+              </button>
+            </div>
+
+            {/* Month Selector (only for monthly view) */}
+            {viewMode === 'monthly' && (
+              <div className="flex-1 min-w-[200px]">
+                <select
+                  value={`${selectedYear}-${selectedMonth}`}
+                  onChange={(e) => {
+                    const [year, month] = e.target.value.split('-').map(Number);
+                    setSelectedYear(year);
+                    setSelectedMonth(month);
+                    setCurrentPage(1);
+                  }}
+                  className="block w-full pl-3 pr-10 py-2.5 text-base border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent rounded-lg bg-white hover:border-gray-300 transition-colors"
+                >
+                  {monthOptions.map((option) => (
+                    <option key={`${option.year}-${option.month}`} value={`${option.year}-${option.month}`}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Search */}
+            <div className="flex-1 min-w-[200px]">
+              <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search players..." />
+            </div>
+          </div>
+        </div>
+
+        {/* Leaderboard Table */}
+        {filteredData.length > 0 ? (
+          <LeaderboardTable
+            data={filteredData}
+            columns={['rank', 'username', 'points', 'games', 'wins', 'avg']}
+            currentPage={currentPage}
+            onPageChange={setCurrentPage}
+          />
+        ) : (
+          <div className="text-center py-16 bg-white rounded-xl shadow-lg">
+            <div className="text-gray-400 mb-4">
+              <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            </div>
+            <p className="text-xl font-semibold text-gray-600 mb-2">
+              {searchQuery ? 'No Players Found' : 'No Data Available'}
+            </p>
+            <p className="text-gray-500">
+              {searchQuery ? 'Try a different search term' : 'Rankings will appear after games are played'}
+            </p>
           </div>
         )}
-
-        {/* Search */}
-        <div className="flex-1 min-w-[200px]">
-          <SearchBar value={searchQuery} onChange={setSearchQuery} />
-        </div>
       </div>
-
-      {/* Leaderboard Table */}
-      {filteredData.length > 0 ? (
-        <LeaderboardTable
-          data={filteredData}
-          columns={['rank', 'username', 'points', 'games', 'wins', 'avg']}
-          currentPage={currentPage}
-          onPageChange={setCurrentPage}
-        />
-      ) : (
-        <div className="text-center py-12 text-gray-500">
-          {searchQuery ? 'No players found matching your search' : 'No data available'}
-        </div>
-      )}
     </div>
   );
 }

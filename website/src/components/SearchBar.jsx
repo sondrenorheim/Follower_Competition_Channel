@@ -26,7 +26,7 @@ export default function SearchBar({ value, onChange, placeholder = 'Search usern
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="block w-full pl-10 pr-10 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary focus:border-primary sm:text-sm"
+        className="block w-full pl-10 pr-10 py-2.5 border-2 border-gray-200 rounded-lg leading-5 bg-white placeholder-gray-400 focus:outline-none focus:placeholder-gray-500 focus:ring-2 focus:ring-primary focus:border-transparent hover:border-gray-300 transition-colors sm:text-sm"
         placeholder={placeholder}
       />
       {value && (
