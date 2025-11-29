@@ -27,7 +27,7 @@ def push_stats_to_github(
     """
     # Skip if in test mode
     if config.TEST_MODE:
-        print("🧪 TEST MODE: Skipping git push")
+        print("TEST MODE: Skipping git push")
         return True
 
     # Default files to commit
@@ -44,7 +44,7 @@ def push_stats_to_github(
         day_number = getattr(config, 'DAY_NUMBER', 0)
         commit_message = f"Auto-update stats - {game_mode} Day {day_number} - {timestamp}"
 
-    print(f"\n📤 Pushing stats to GitHub...")
+    print(f"\nPushing stats to GitHub...")
     print(f"   Files: {', '.join(files)}")
     print(f"   Message: {commit_message}")
 
@@ -58,16 +58,16 @@ def push_stats_to_github(
         )
 
         if result.returncode != 0:
-            print("❌ Not a git repository. Skipping push.")
+            print("ERROR: Not a git repository. Skipping push.")
             return False
 
         # Add files
         for file in files:
             if os.path.exists(file):
                 subprocess.run(['git', 'add', file], check=True)
-                print(f"   ✓ Added {file}")
+                print(f"   + Added {file}")
             else:
-                print(f"   ⚠️  File not found: {file}")
+                print(f"   ! File not found: {file}")
 
         # Check if there are changes to commit
         result = subprocess.run(
@@ -78,7 +78,7 @@ def push_stats_to_github(
 
         if result.returncode == 0:
             # No changes to commit
-            print("   ℹ️  No changes to commit")
+            print("   i No changes to commit")
             return True
 
         # Commit changes
@@ -88,7 +88,7 @@ def push_stats_to_github(
             capture_output=True,
             text=True
         )
-        print("   ✓ Committed changes")
+        print("   + Committed changes")
 
         # Push to remote
         push_result = subprocess.run(
@@ -98,24 +98,24 @@ def push_stats_to_github(
             text=True,
             timeout=30  # 30 second timeout
         )
-        print("   ✓ Pushed to GitHub")
+        print("   + Pushed to GitHub")
 
-        print("✅ Stats successfully pushed to GitHub!")
-        print("   → Website will auto-update via GitHub Actions\n")
+        print("SUCCESS: Stats successfully pushed to GitHub!")
+        print("   -> Website will auto-update via GitHub Actions\n")
         return True
 
     except subprocess.TimeoutExpired:
-        print("❌ Git push timed out (check network connection)")
+        print("ERROR: Git push timed out (check network connection)")
         return False
 
     except subprocess.CalledProcessError as e:
-        print(f"❌ Git command failed: {e}")
+        print(f"ERROR: Git command failed: {e}")
         if e.stderr:
             print(f"   Error: {e.stderr}")
 
         # Check if it's an authentication error
         if "authentication" in str(e).lower() or "permission" in str(e).lower():
-            print("\n🔑 Authentication Error:")
+            print("\nAuthentication Error:")
             print("   You need to set up git authentication. Choose one:")
             print("   1. SSH Keys (Recommended):")
             print("      - Generate: ssh-keygen -t ed25519")
@@ -129,7 +129,7 @@ def push_stats_to_github(
         return False
 
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"ERROR: Unexpected error: {e}")
         return False
 
 

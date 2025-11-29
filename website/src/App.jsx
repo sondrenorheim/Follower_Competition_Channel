@@ -7,7 +7,7 @@ import PlayerProfile from './pages/PlayerProfile';
 function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-gray-100">
+      <div className="min-h-screen bg-dark-bg-primary">
         <Header />
         <Routes>
           <Route path="/" element={<DailyResults />} />

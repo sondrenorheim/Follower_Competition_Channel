@@ -12,25 +12,33 @@ export default function GameFilter({ value, onChange, gameTypes = [] }) {
   ];
 
   return (
-    <div className="relative">
-      <label htmlFor="game-filter" className="block text-sm font-semibold text-gray-700 mb-2">
-        Game Type
+    <div className="relative group">
+      <label htmlFor="game-filter" className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
+        <span>🎮</span>
+        <span>Game Type</span>
       </label>
-      <select
-        id="game-filter"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="block w-full pl-3 pr-10 py-2.5 text-base border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent rounded-lg bg-white hover:border-gray-300 transition-colors"
-      >
-        {allGameTypes.map((gameType) => {
-          const info = getGameTypeInfo(gameType.type);
-          return (
-            <option key={gameType.type} value={gameType.type}>
-              {info.name} {gameType.count ? `(${gameType.count})` : ''}
-            </option>
-          );
-        })}
-      </select>
+      <div className="relative">
+        <select
+          id="game-filter"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
+        >
+          {allGameTypes.map((gameType) => {
+            const info = getGameTypeInfo(gameType.type);
+            return (
+              <option key={gameType.type} value={gameType.type} className="bg-dark-bg-secondary text-text-primary">
+                {info.name} {gameType.count ? `(${gameType.count})` : ''}
+              </option>
+            );
+          })}
+        </select>
+        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+          <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </div>
     </div>
   );
 }

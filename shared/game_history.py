@@ -40,7 +40,7 @@ class GameHistory:
                     # Ensure 'games' key exists
                     if "games" not in self.history:
                         self.history["games"] = []
-                print(f"📜 Loaded history for {len(self.history['games'])} games")
+                print(f"Loaded history for {len(self.history['games'])} games")
             except Exception as e:
                 print(f"Error loading game history: {e}")
                 self.history = {"games": []}
@@ -54,15 +54,15 @@ class GameHistory:
         Skips saving if TEST_MODE is enabled in config
         """
         if config.TEST_MODE:
-            print("🧪 TEST MODE: Game history not saved")
+            print("TEST MODE: Game history not saved")
             return
 
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, indent=2, ensure_ascii=False)
-            print(f"💾 Game history saved ({len(self.history['games'])} total games)")
+            print(f"Game history saved ({len(self.history['games'])} total games)")
         except Exception as e:
-            print(f"❌ Error saving game history: {e}")
+            print(f"Error saving game history: {e}")
 
     def record_game_session(
         self,
@@ -121,7 +121,7 @@ class GameHistory:
         # Add to history
         self.history["games"].append(game_record)
 
-        print(f"\n📊 Game session recorded:")
+        print(f"\nGame session recorded:")
         print(f"   ID: {game_id}")
         print(f"   Type: {game_display_name}")
         print(f"   Day: {day_number}")

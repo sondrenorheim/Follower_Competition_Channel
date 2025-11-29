@@ -3,9 +3,7 @@
  * Fetches and caches game statistics and history data
  */
 
-const DATA_BASE_PATH = import.meta.env.DEV
-  ? 'http://localhost:5173/' // Development: serve from root
-  : '/'; // Production: Custom domain
+const DATA_BASE_PATH = '/'; // Serve from root (works in both dev and production)
 
 // Cache for loaded data
 let cachedPlayerStats = null;

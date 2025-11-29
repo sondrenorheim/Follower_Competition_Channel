@@ -1,6 +1,70 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  /* Dark theme backgrounds (layered depth) */
+  --color-dark-bg-primary: #0a0e27;
+  --color-dark-bg-secondary: #13172b;
+  --color-dark-bg-tertiary: #1a1f3a;
+  --color-dark-surface: #232946;
+
+  /* Brand colors (optimized for dark theme) */
+  --color-primary: #7c80ff;
+  --color-primary-bright: #8b8fff;
+  --color-secondary: #a78bfa;
+  --color-secondary-bright: #c4b5fd;
+  --color-accent: #22d3ee;
+  --color-accent-bright: #67e8f9;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #fb7185;
+
+  /* Text colors */
+  --color-text-primary: #e2e8f0;
+  --color-text-secondary: #cbd5e1;
+  --color-text-muted: #94a3b8;
+
+  /* Ranking highlights (Top 3) */
+  --color-rank-gold-bg: #422006;
+  --color-rank-gold-border: #fbbf24;
+  --color-rank-gold-text: #fde68a;
+  --color-rank-silver-bg: #1e293b;
+  --color-rank-silver-border: #94a3b8;
+  --color-rank-bronze-bg: #431407;
+  --color-rank-bronze-border: #fb923c;
+  --color-rank-bronze-text: #fed7aa;
+
+  /* Box shadows */
+  --shadow-card-dark: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover-dark: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+  --shadow-glow-primary: 0 0 20px rgba(124, 128, 255, 0.3);
+  --shadow-glow-accent: 0 0 20px rgba(34, 211, 238, 0.3);
+  --shadow-inner-subtle: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+
+  /* Border radius */
+  --radius-card: 1rem;
+
+  /* Animations */
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-bounce-slow: bounce 2s infinite;
+  --animate-fade-in: fadeIn 0.5s ease-in;
+  --animate-slide-up: slideUp 0.3s ease-out;
+  --animate-shimmer: shimmer 2s linear infinite;
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes slideUp {
+  0% { transform: translateY(10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
 
 body {
   margin: 0;

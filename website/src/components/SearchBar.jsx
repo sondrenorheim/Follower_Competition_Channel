@@ -6,10 +6,12 @@ import React from 'react';
  */
 export default function SearchBar({ value, onChange, placeholder = 'Search username...' }) {
   return (
-    <div className="relative">
+    <div className="relative group">
       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
         <svg
-          className="h-5 w-5 text-gray-400"
+          className={`h-5 w-5 transition-colors duration-200 ${
+            value ? 'text-accent' : 'text-text-muted group-hover:text-primary'
+          }`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -26,16 +28,16 @@ export default function SearchBar({ value, onChange, placeholder = 'Search usern
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="block w-full pl-10 pr-10 py-2.5 border-2 border-gray-200 rounded-lg leading-5 bg-white placeholder-gray-400 focus:outline-none focus:placeholder-gray-500 focus:ring-2 focus:ring-primary focus:border-transparent hover:border-gray-300 transition-colors sm:text-sm"
+        className="block w-full pl-10 pr-10 py-3 border-2 border-slate-600 rounded-xl leading-5 bg-dark-bg-tertiary placeholder-text-muted text-text-primary focus:outline-none focus:placeholder-text-secondary focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent hover:border-primary/50 transition-all duration-200 sm:text-sm font-medium shadow-inner-subtle"
         placeholder={placeholder}
       />
       {value && (
         <button
           onClick={() => onChange('')}
-          className="absolute inset-y-0 right-0 pr-3 flex items-center"
+          className="absolute inset-y-0 right-0 pr-3 flex items-center group/clear"
         >
           <svg
-            className="h-5 w-5 text-gray-400 hover:text-gray-600"
+            className="h-5 w-5 text-text-muted hover:text-danger transition-all duration-200 group-hover/clear:rotate-90"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"

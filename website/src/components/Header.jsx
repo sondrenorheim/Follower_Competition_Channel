@@ -21,14 +21,20 @@ export default function Header() {
   };
 
   return (
-    <header className="bg-gradient-to-r from-primary to-secondary shadow-2xl">
+    <header className="bg-gradient-to-r from-dark-bg-secondary via-dark-bg-tertiary to-dark-bg-secondary border-b-2 border-slate-700 shadow-2xl shadow-black/50 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Title */}
-        <div className="py-8 text-center">
-          <h1 className="text-5xl font-black text-white tracking-tight mb-2 drop-shadow-lg">
-            The Follower Games
-          </h1>
-          <p className="text-white text-sm opacity-90 font-medium">Compete. Survive. Dominate.</p>
+        <div className="py-10 text-center">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <span className="text-5xl animate-bounce-slow">🏆</span>
+            <h1 className="text-5xl font-black text-white tracking-tight drop-shadow-lg animate-fade-in">
+              The Follower Battles
+            </h1>
+            <span className="text-5xl animate-bounce-slow">🏆</span>
+          </div>
+          <p className="text-text-secondary text-sm font-medium tracking-wide">
+            Compete. Survive. Dominate.
+          </p>
         </div>
 
         {/* Navigation Tabs */}
@@ -37,10 +43,10 @@ export default function Header() {
             <Link
               key={tab.path}
               to={tab.path}
-              className={`px-8 py-4 text-sm font-bold rounded-t-xl transition-all ${
+              className={`px-8 py-4 text-sm font-bold rounded-t-xl transition-all duration-300 transform border-2 ${
                 isActive(tab.path)
-                  ? 'bg-white text-primary shadow-lg scale-105'
-                  : 'bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm'
+                  ? 'bg-gradient-to-r from-primary to-secondary text-white border-primary shadow-glow-primary scale-105 -translate-y-1'
+                  : 'bg-dark-surface/50 text-text-muted border-slate-600 hover:bg-dark-surface hover:border-accent hover:shadow-glow-accent hover:text-text-primary hover:scale-105'
               }`}
             >
               {tab.name}
