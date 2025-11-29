@@ -40,9 +40,8 @@ jobs:
 
       - name: Copy stats files to public
         run: |
-          mkdir -p website/public/data
-          cp player_statistics.json website/public/data/
-          cp game_history.json website/public/data/ || echo "{\"games\":{},\"metadata\":{\"total_games\":0}}" > website/public/data/game_history.json
+          cp player_statistics.json website/public/
+          cp game_history.json website/public/ || echo "{\"games\":{},\"metadata\":{\"total_games\":0}}" > website/public/game_history.json
 
       - name: Build website
         working-directory: ./website
