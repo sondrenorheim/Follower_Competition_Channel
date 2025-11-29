@@ -78,8 +78,8 @@ export default function PlayerProfile() {
           </p>
         </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Points" value={formatPoints(stats.totalPoints)} />
         <StatCard label="Games Played" value={stats.gamesPlayed} />
         <StatCard label="Best Result" value={getPlacementSuffix(stats.bestPlacement)} />
@@ -87,12 +87,12 @@ export default function PlayerProfile() {
         <StatCard label="Wins" value={stats.wins} />
         <StatCard label="Top 3 Finishes" value={stats.top3Finishes} />
         <StatCard label="Top 10% Finishes" value={stats.top10PctFinishes} />
-        <StatCard label="Total Kills" value={stats.totalKills} />
-      </div>
+          <StatCard label="Total Kills" value={stats.totalKills} />
+        </div>
 
-      {/* Streaks & Unlucky */}
-      {(stats.bestHotStreak > 0 || stats.firstEliminations > 0) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {/* Streaks & Unlucky */}
+        {(stats.bestHotStreak > 0 || stats.firstEliminations > 0) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {stats.bestHotStreak > 0 && (
             <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded">
               <div className="flex items-center">
@@ -118,13 +118,13 @@ export default function PlayerProfile() {
                 </div>
               </div>
             </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {/* Game Breakdown */}
-      {playerData.game_breakdown && Object.keys(playerData.game_breakdown).length > 0 && (
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+        {/* Game Breakdown */}
+        {playerData.game_breakdown && Object.keys(playerData.game_breakdown).length > 0 && (
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4">Game Breakdown</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             {Object.entries(playerData.game_breakdown).map(([gameType, count]) => {
@@ -137,13 +137,13 @@ export default function PlayerProfile() {
                   </span>
                 </div>
               );
-            })}
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Recent Game History */}
-      <div className="bg-white rounded-lg shadow-md p-6">
+        {/* Recent Game History */}
+        <div className="bg-white rounded-lg shadow-md p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Recent Games</h2>
 
         {gameHistory.length > 0 ? (
@@ -177,9 +177,10 @@ export default function PlayerProfile() {
               </tbody>
             </table>
           </div>
-        ) : (
-          <p className="text-gray-500">No game history available</p>
-        )}
+          ) : (
+            <p className="text-gray-500">No game history available</p>
+          )}
+        </div>
       </div>
     </div>
   );
