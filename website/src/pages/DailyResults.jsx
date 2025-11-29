@@ -9,7 +9,6 @@ import GameFilter from '../components/GameFilter';
  * Browse individual game episode results
  */
 export default function DailyResults() {
-  const [allGames, setAllGames] = useState([]); // All games for checking availability
   const [games, setGames] = useState([]); // Filtered games by type
   const [gameTypes, setGameTypes] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
@@ -28,7 +27,6 @@ export default function DailyResults() {
         setGameTypes(types);
 
         const loadedGames = await getGamesByType('all');
-        setAllGames(loadedGames);
         setGames(loadedGames);
 
         // Find highest day number
@@ -62,7 +60,7 @@ export default function DailyResults() {
       }
     }
     filterGames();
-  }, [selectedGameType]);
+  }, [selectedGameType, selectedDayNumber]);
 
   // Update selected game when day number or filtered games change
   useEffect(() => {
@@ -84,7 +82,7 @@ export default function DailyResults() {
         });
 
         // Calculate ranks for all players (with tie handling)
-        const resultsWithRanks = sortedResults.map((result, index) => {
+        const resultsWithRanks = sortedResults.map((result) => {
           const pointValue = result.points || 0;
           let rank = 1;
           for (let i = 0; i < sortedResults.length; i++) {
