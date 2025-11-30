@@ -847,9 +847,16 @@ class TeamBattleGame:
                 self.team_placements[team] = 4
 
         total_participants = len(self.fighters)
-        game_results = []
 
-        # Get fighters from winning team sorted by survival
+        # Game metadata
+        game_type = "team_battle"
+        game_display_name = "Team Battle"
+        day_number = getattr(config, 'DAY_NUMBER', 1)
+
+        game_results = []  # For current game leaderboard display
+        game_history_results = []
+
+        # Get fighters from winning team (free-for-all survivors) sorted by survival
         winning_team_fighters = sorted(
             self.teams[self.winning_team] if self.winning_team else [],
             key=lambda f: (not f.alive, -f.get_survival_time()),
@@ -860,35 +867,46 @@ class TeamBattleGame:
         for fighter in self.fighters:
             team_placement = self.team_placements.get(fighter.team, 4)
 
-            # Winning team: points based on percentile placement in free-for-all
-            # 1st place gets 100, others: 100 - (25 * (placement / team_size))
-            # Last place gets 75 (same as 2nd place team)
-            # Other teams: fixed points based on team placement (25, 50, 75)
-            if fighter.team == self.winning_team and winning_team_fighters:
-                if fighter == self.winner:
-                    # Winner gets flat 100 base points
-                    base_points = 100.0
-                else:
+            # Base points based on team placement
+            # 4th place team (eliminated first): 2500 points
+            # 3rd place team (eliminated second): 5000 points
+            # 2nd place team (eliminated third): 7500 points
+            # 1st place team (free-for-all winners): 7500-10000 points based on individual placement
+            if team_placement == 4:
+                base_points = 2500.0
+            elif team_placement == 3:
+                base_points = 5000.0
+            elif team_placement == 2:
+                base_points = 7500.0
+            else:  # team_placement == 1 (winning team / free-for-all)
+                if winning_team_fighters:
                     try:
-                        # individual_rank is 0-indexed, so add 1 for actual placement
+                        # Find this fighter's rank in the winning team
                         individual_rank = winning_team_fighters.index(fighter)
-                        placement = individual_rank + 1  # 1-indexed placement
                         team_size = len(winning_team_fighters)
-                        # Formula: 100 - (25 * (placement / team_size))
-                        base_points = 100 - (25 * (placement / team_size))
+
+                        # Calculate percentile: how many players they beat
+                        # If rank 0 (1st place), they beat everyone: (team_size - 1) / (team_size - 1) = 1.0
+                        # If last place, they beat no one: 0 / (team_size - 1) = 0.0
+                        if team_size > 1:
+                            percentile = (team_size - 1 - individual_rank) / (team_size - 1)
+                        else:
+                            percentile = 1.0
+
+                        # Points: 7500 + (2500 * percentile)
+                        # 1st place: 7500 + 2500 = 10000
+                        # Last place: 7500 + 0 = 7500
+                        base_points = 7500.0 + (2500.0 * percentile)
                     except ValueError:
-                        base_points = 75.0  # Fallback to 2nd place team score
-            else:
-                base_points = float(self.TEAM_PLACEMENT_SCORES[team_placement])
+                        base_points = 7500.0  # Fallback
+                else:
+                    base_points = 7500.0  # Fallback if no winning team
 
-            # Kill bonus (+1 per kill)
-            kill_bonus = fighter.kills
+            # Kill bonus: 100 points per kill
+            kill_bonus = fighter.kills * 100
 
-            # Win bonus for the actual winner (+10 points)
-            win_bonus = 10 if fighter == self.winner else 0
-
-            # Total points (1 decimal place)
-            total_points = round(base_points + kill_bonus + win_bonus, 1)
+            # Total points
+            total_points = round(base_points + kill_bonus, 1)
 
             # Determine overall placement for stats
             # Team placement determines bulk placement, then individual within team
@@ -909,6 +927,11 @@ class TeamBattleGame:
 
             overall_placement = team_base_placement + in_team_rank + 1
 
+            # Get survival time
+            survival_time = fighter.get_survival_time()
+            games_played = self.statistics.get_games_played(fighter.username)
+
+            # Add to game results for leaderboard display
             game_results.append((
                 fighter.username,
                 overall_placement,
@@ -916,44 +939,7 @@ class TeamBattleGame:
                 survival_time
             ))
 
-        # Game metadata
-        game_type = "team_battle"
-        game_display_name = "Team Battle"
-        day_number = getattr(config, 'DAY_NUMBER', 1)
-
-        game_history_results = []
-
-        for fighter in all_fighters:
-            # Calculate placement and team info
-            team_placement = team_placements[fighter.team]
-            team_base_placement = sum(
-                len(self.teams[t]) for t in team_placements
-                if team_placements[t] < team_placement
-            )
-
-            # Get in-team rank
-            fighters_in_team = self.teams[fighter.team]
-            sorted_team = sorted(
-                fighters_in_team,
-                key=lambda f: (not f.alive, -f.get_survival_time())
-            )
-            try:
-                in_team_rank = sorted_team.index(fighter)
-            except ValueError:
-                in_team_rank = len(sorted_team)
-
-            overall_placement = team_base_placement + in_team_rank + 1
-
-            # Calculate points
-            team_base_score = config.TEAM_PLACEMENT_SCORES.get(team_placement, 0)
-            individual_bonus = (1 - (in_team_rank / max(len(fighters_in_team), 1))) * 25
-            kill_bonus = fighter.kills * config.TEAM_BATTLE_KILL_BONUS
-            total_points = team_base_score + individual_bonus + kill_bonus
-
             # Update statistics
-            survival_time = fighter.get_survival_time()
-            games_played = self.statistics.get_games_played(fighter.username)
-
             self.statistics.update_player_stats(
                 username=fighter.username,
                 placement=overall_placement,

@@ -48,7 +48,18 @@ class TeamFighter(Fighter):
             position: (x, y) starting position
             team: Team enum value
         """
+        # Temporarily override stats to use team battle stats
+        original_default_stats = config.FIGHTER_DEFAULT_STATS
+        original_stat_boosts = config.FIGHTER_STAT_BOOSTS
+
+        config.FIGHTER_DEFAULT_STATS = config.TEAM_BATTLE_DEFAULT_STATS
+        config.FIGHTER_STAT_BOOSTS = config.TEAM_BATTLE_STAT_BOOSTS
+
         super().__init__(follower_data, position)
+
+        # Restore original stats
+        config.FIGHTER_DEFAULT_STATS = original_default_stats
+        config.FIGHTER_STAT_BOOSTS = original_stat_boosts
 
         # Team assignment
         self.team = team

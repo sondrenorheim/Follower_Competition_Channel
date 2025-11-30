@@ -26,11 +26,11 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "obstacle_course" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
+GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
 TEST_MODE = True
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
-DAY_NUMBER = 10  # Increment this each time you record a new video
+DAY_NUMBER = 11  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
@@ -172,9 +172,9 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
     if total_players <= 100:
         start_radius = FOLLOWER_BASE_RADIUS
     else:
-        # Scale down for large player counts
-        # 1000 players → ~8px, 10000 → ~6.5px, 100000 → ~6px
-        scale_factor = math.sqrt(100.0 / total_players)
+        # Scale down for large player counts (less aggressive for moderate counts)
+        # 500 players → ~11px, 1000 players → ~9px, 10000 → ~6.5px
+        scale_factor = math.pow(100.0 / total_players, 0.35)  # Less aggressive (was 0.5)
         start_radius = max(FOLLOWER_MIN_RADIUS, FOLLOWER_BASE_RADIUS * scale_factor)
 
     # Step 2: Calculate growth based on elimination progress
@@ -223,6 +223,22 @@ FIGHTER_DEFAULT_STATS = {
 # Example: {"cooluser": {"attack": 10}, "tankuser": {"hp": 20, "speed": -5}}
 FIGHTER_STAT_BOOSTS = {
     # Add usernames here to give them boosted stats
+}
+
+# ===== TEAM BATTLE SETTINGS =====
+# Team battle uses separate stats from fighter arena
+TEAM_BATTLE_DEFAULT_STATS = {
+    "hp": 40,           # Number of attack points it can survive
+    "speed": 5,         # Pixels moved every 2 frames
+    "attack": 7.5,      # HP damage dealt per hit
+    "regeneration": 0,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
+    "knockback": 3,     # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
+    "attack_speed": 30  # Attacks per second = value / 10 (default: 3 attacks/sec)
+}
+
+# Stat boosts for team battle (separate from fighter arena)
+TEAM_BATTLE_STAT_BOOSTS = {
+    # Add usernames here to give them boosted stats in team battle
 }
 
 # ===== BATTLE ROYALE FOLLOWER STATS =====

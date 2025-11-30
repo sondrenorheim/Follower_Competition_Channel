@@ -119,13 +119,32 @@ class SnakeEscapeGame:
         follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
         random.shuffle(follower_data)
 
+        # Store initial count for dynamic scaling
+        self.initial_follower_count = len(follower_data)
+
+        # Calculate initial dynamic radius based on player count
+        if config.USE_DYNAMIC_SCALING:
+            arena_bounds = self.arena.get_bounds()
+            arena_width = arena_bounds[2] - arena_bounds[0]
+            arena_height = arena_bounds[3] - arena_bounds[1]
+            arena_radius = min(arena_width, arena_height) // 2
+
+            initial_radius = config.calculate_dynamic_follower_radius(
+                total_players=self.initial_follower_count,
+                alive_count=self.initial_follower_count,
+                safe_zone_radius=arena_radius,
+                initial_zone_radius=arena_radius
+            )
+            config.FOLLOWER_RADIUS = initial_radius
+            config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
+
+            print(f"🔧 Dynamic scaling: follower radius = {initial_radius:.1f}px")
+
         # Create followers at random positions
         for data in follower_data:
             position = self.arena.get_random_position(config.FOLLOWER_RADIUS + 10)
             follower = SnakeEscapeFollower(data, position)
             self.followers.append(follower)
-
-        self.initial_follower_count = len(self.followers)
 
         print(f"{len(self.followers)} {self.PLAYER_LABEL} ready!\n")
 
@@ -214,6 +233,29 @@ class SnakeEscapeGame:
         # Update particles
         self.particles.update(dt)
 
+        # Update dynamic radius as players are eliminated
+        if config.USE_DYNAMIC_SCALING:
+            arena_bounds = self.arena.get_bounds()
+            arena_width = arena_bounds[2] - arena_bounds[0]
+            arena_height = arena_bounds[3] - arena_bounds[1]
+            arena_radius = min(arena_width, arena_height) // 2
+
+            new_radius = config.calculate_dynamic_follower_radius(
+                total_players=self.initial_follower_count,
+                alive_count=alive_count,
+                safe_zone_radius=arena_radius,
+                initial_zone_radius=arena_radius
+            )
+
+            # Only update if radius changed significantly
+            if abs(new_radius - config.FOLLOWER_RADIUS) > 0.5:
+                config.FOLLOWER_RADIUS = new_radius
+                config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
+
+                # Update follower radius
+                for follower in self.followers:
+                    follower.radius = config.FOLLOWER_RADIUS
+
         # Update music
         self.sound.update_music_volume()
         self.sound.update_music_intensity(alive_count, self.initial_follower_count)
@@ -286,7 +328,17 @@ class SnakeEscapeGame:
                     self.running = False
                     return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
+
             current_time = time.time()
 
             # Update snakes (moving but not eating)
@@ -330,7 +382,16 @@ class SnakeEscapeGame:
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     self.running = False
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
 
             self.update(dt)
             self.render()

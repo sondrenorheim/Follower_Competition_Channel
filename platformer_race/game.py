@@ -27,6 +27,8 @@ from .physics import PlatformerPhysics
 from .ai import JumpAI
 from .renderer import PlatformerRenderer
 
+# Scale legacy 100-point scheme up to 10,000 to match other game modes
+PLATFORMER_SCORE_MULTIPLIER = ScoringSystem.MAX_POINTS / 100
 
 class PlatformerRaceGame:
     """
@@ -312,18 +314,18 @@ class PlatformerRaceGame:
         # Assign placements and points for finishers
         for i, racer in enumerate(finishers):
             racer.placement = i + 1
-            # Top 10 get 100, 99, 98... down to 91 points
+            # Top 10 get 10,000, 9,900... down to 9,100 points
             if i < 10:
-                racer.points = 100 - i
+                racer.points = (100 - i) * PLATFORMER_SCORE_MULTIPLIER
             else:
                 # Other finishers get checkpoint-based points (they reached all checkpoints)
-                racer.points = 80  # All 4 checkpoints
+                racer.points = 80 * PLATFORMER_SCORE_MULTIPLIER  # All 4 checkpoints
 
         # Assign points for non-finishers based on checkpoints reached
         non_finishers = [r for r in self.racers if not r.finished]
         for racer in non_finishers:
             # 20 points per checkpoint reached
-            racer.points = racer.checkpoint_index * 20
+            racer.points = racer.checkpoint_index * 20 * PLATFORMER_SCORE_MULTIPLIER
             racer.placement = 0  # DNF
 
         # Get top 10
