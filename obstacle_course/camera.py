@@ -38,8 +38,8 @@ class ObstacleCourseCamera:
         if leader_position is None:
             return
 
-        # Target camera position: keep leader at 1/3 from left of screen
-        self.target_x = leader_position[0] - (config.SCREEN_WIDTH * 0.33)
+        # Target camera position: keep leader at 60% from left (shows more racers behind)
+        self.target_x = leader_position[0] - (config.SCREEN_WIDTH * 0.6)
 
         # Smooth camera movement using linear interpolation (X only)
         self.camera_x += (self.target_x - self.camera_x) * self.smoothing
@@ -52,8 +52,8 @@ class ObstacleCourseCamera:
 
         # Stop camera at finish line if provided, otherwise use course length
         if finish_line_x is not None:
-            # Stop when finish line is at 1/3 width from left of screen
-            max_camera_x = finish_line_x - (config.SCREEN_WIDTH * 0.33)
+            # Stop when finish line is at 60% width from left of screen
+            max_camera_x = finish_line_x - (config.SCREEN_WIDTH * 0.6)
         else:
             max_camera_x = course_length - config.SCREEN_WIDTH
 

@@ -48,7 +48,7 @@ class Racer(Follower):
         self.placement = None
 
         # Dynamic speed multiplier that varies throughout the race
-        self.speed_multiplier = random.uniform(0.5, 1.5)
+        self.speed_multiplier = random.uniform(0.85, 1.15)  # Tighter speed variance (was 0.5-1.5)
         self.next_speed_change_time = time.time() + random.uniform(0.5, 1.5)
 
         # Simple racing direction - primarily moves right with random Y adjustments
@@ -131,7 +131,7 @@ class Racer(Follower):
         # Update speed multiplier periodically (varies throughout race)
         if current_time >= self.next_speed_change_time:
             # Change speed multiplier to a new random value
-            self.speed_multiplier = random.uniform(0.5, 1.5)
+            self.speed_multiplier = random.uniform(0.85, 1.15)  # Tighter speed variance (was 0.5-1.5)
             # Next change in 0.5-1.5 seconds
             self.next_speed_change_time = current_time + random.uniform(0.5, 1.5)
 

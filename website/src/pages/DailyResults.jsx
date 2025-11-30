@@ -219,7 +219,7 @@ export default function DailyResults() {
             <LeaderboardTable
               data={filteredResults}
               columns={
-                selectedGame.game_type === 'platformer_race'
+                selectedGame.game_type === 'platformer_race' || selectedGame.game_type === 'obstacle_course'
                   ? ['rank', 'username', 'points']
                   : ['rank', 'username', 'points', 'survivalTime', 'kills']
               }
