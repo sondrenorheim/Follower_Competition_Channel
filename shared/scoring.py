@@ -10,27 +10,27 @@ from typing import Dict, List, Tuple
 class ScoringSystem:
     """
     Manages scoring for the battle royale and obstacle course
-    Simple placement-based scoring: 1st place = 100 points, last place = 1 point
+    Simple placement-based scoring: 1st place = 10000 points, last place = ~100 points
     """
 
     # Scoring constants
-    MAX_POINTS = 100
+    MAX_POINTS = 10000
 
     @staticmethod
     def calculate_placement_points(placement: int, total_participants: int) -> float:
         """
         Calculate points based on placement using simple linear formula.
-        1st place gets 100 points, last place gets ~1 point.
+        1st place gets 10000 points, last place gets ~100 points.
 
-        Formula: points = ((total - placement + 1) / total) * 100
-        Example: 39th out of 100 racers = ((100 - 39 + 1) / 100) * 100 = 62 points
+        Formula: points = ((total - placement + 1) / total) * 10000
+        Example: 39th out of 100 racers = ((100 - 39 + 1) / 100) * 10000 = 6200 points
 
         Args:
             placement: Final placement (1 = winner, higher = worse)
             total_participants: Total number of participants
 
         Returns:
-            Points for this placement (1-100)
+            Points for this placement (100-10000)
         """
         # Calculate percentage of racers you beat (including yourself)
         # placement 1 out of 100 = 100%, placement 100 out of 100 = 1%

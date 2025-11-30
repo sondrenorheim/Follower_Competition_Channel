@@ -72,7 +72,15 @@ class FollowerBattleRoyale:
         self.physics = PhysicsEngine()
         self.renderer = Renderer(self.screen)
         self.audio_logger = AudioLogger()
-        self.recorder = VideoRecorder(audio_logger=self.audio_logger)
+        self.recorder = VideoRecorder(
+            audio_logger=self.audio_logger,
+            countdown_audio_path='assets/smash_countdown_audio.wav'
+        )
+        self.recorder.set_greenscreen_overlay(
+            video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
+            scale=1.0,  # 100% size
+            offset_y=0  # Centered vertically
+        )
         self.particles = ParticleSystem()
         self.sound = SoundManager(audio_logger=self.audio_logger)
         self.statistics = PlayerStatistics()
@@ -87,10 +95,13 @@ class FollowerBattleRoyale:
         self.running = True
         self.game_over = False
         self.game_start_time = time.time()
+        self.game_time = 0.0  # Track game time (for consistent video recording)
+        self.recording_start_time = 0.0  # When recording started
 
         # Game phases: "intro", "countdown", "playing", "finished"
         self.game_phase = "intro"
         self.phase_start_time = 0
+        self.phase_start_game_time = 0.0  # Track phase start in game time (for countdown)
         self.countdown_number = 3
 
         # Statistics
@@ -169,7 +180,7 @@ class FollowerBattleRoyale:
 
         # Handle countdown phase
         if self.game_phase == "countdown":
-            elapsed = time.time() - self.phase_start_time
+            elapsed = self.game_time - self.phase_start_game_time
             # Wait for countdown video/audio to finish before starting game
             countdown_duration = self.sound.countdown_audio_duration
 
@@ -293,7 +304,8 @@ class FollowerBattleRoyale:
 
         # Record frame for video (only from countdown onwards, skip intro)
         if self.game_phase in ("countdown", "playing", "finished"):
-            self.recorder.capture_frame(self.screen)
+            recording_time = self.game_time - self.recording_start_time
+            self.recorder.capture_frame(self.screen, current_time=recording_time)
 
         # Update display
         pygame.display.flip()
@@ -474,7 +486,18 @@ class FollowerBattleRoyale:
                         self.running = False
                         return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
+
+            self.game_time += dt  # Track game time
 
             # Update followers so they move around during intro
             for follower in self.followers:
@@ -497,8 +520,10 @@ class FollowerBattleRoyale:
         print("\n⏱️  Starting countdown...")
         self.game_phase = "countdown"
         self.phase_start_time = time.time()
+        self.phase_start_game_time = self.game_time  # Track phase start in game time
+        self.recording_start_time = self.game_time  # Mark when recording starts
         self.countdown_number = 3
-        self.renderer.start_countdown_video()  # Start the video overlay
+        self.renderer.start_countdown_video()  # Start the video overlay (for non-export display)
         self.sound.play_countdown_audio()  # Play the countdown video audio
 
         # Track time for podium display
@@ -515,7 +540,18 @@ class FollowerBattleRoyale:
                         self.running = False
 
             # Calculate delta time
-            dt = self.clock.tick(config.FPS) / 1000.0  # Convert to seconds
+            # Use lower FPS during video export for better performance
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0  # Convert to seconds
+
+            # Cap delta time to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
+
+            # Apply time scaling during video export to slow down simulation
+            if config.EXPORT_VIDEO:
+                dt *= config.EXPORT_TIME_SCALE
+
+            self.game_time += dt  # Track game time
 
             # Update game state
             self.update(dt)

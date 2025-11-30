@@ -36,6 +36,9 @@ class SnakeEscapeFollower:
         self.avatar_image = follower_data.get("avatar")  # PIL Image or None
         self.color = follower_data.get("color", random.choice(config.RANDOM_COLORS))
 
+        # Load default stats
+        self.stats = config.SNAKE_ESCAPE_DEFAULT_STATS.copy()
+
         # Position and movement
         self.x, self.y = position
         self.vx = 0.0
@@ -64,7 +67,7 @@ class SnakeEscapeFollower:
         self.last_direction_change = time.time()
 
         # Pushing behavior
-        self.push_cooldown = config.BUMP_COOLDOWN
+        self.push_cooldown = self.stats['bump_cooldown']
         self.push_aggression = random.uniform(0.3, 0.8)  # How likely to push others
 
         # Surface caching
@@ -109,14 +112,14 @@ class SnakeEscapeFollower:
         # Apply push velocity from collisions
         self.x += self.push_vx
         self.y += self.push_vy
-        self.push_vx *= config.FRICTION
-        self.push_vy *= config.FRICTION
+        self.push_vx *= self.stats['friction']
+        self.push_vy *= self.stats['friction']
 
         # Apply regular velocity
         self.x += self.vx * dt * 60
         self.y += self.vy * dt * 60
-        self.vx *= config.FRICTION
-        self.vy *= config.FRICTION
+        self.vx *= self.stats['friction']
+        self.vy *= self.stats['friction']
 
         # Keep inside arena (bounce off walls)
         self._handle_arena_bounds(arena)
@@ -146,7 +149,7 @@ class SnakeEscapeFollower:
 
         # Speed boost when fleeing
         speed_multiplier = 1.5 if panic else 1.2
-        flee_speed = config.BASE_SPEED * speed_multiplier
+        flee_speed = self.stats['base_speed'] * speed_multiplier
 
         # Add some randomness to prevent all followers moving identically
         if not panic:
@@ -186,13 +189,13 @@ class SnakeEscapeFollower:
         dy /= distance
 
         # Add randomness
-        randomness = config.MOVEMENT_RANDOMNESS
+        randomness = self.stats['movement_randomness']
         dx += random.uniform(-randomness, randomness)
         dy += random.uniform(-randomness, randomness)
 
         # Apply velocity
-        target_vx = dx * config.BASE_SPEED
-        target_vy = dy * config.BASE_SPEED
+        target_vx = dx * self.stats['base_speed']
+        target_vy = dy * self.stats['base_speed']
 
         smoothing = 0.15
         self.vx += (target_vx - self.vx) * smoothing

@@ -210,7 +210,7 @@ class ObstacleCourseGame:
         import random
         random.shuffle(follower_data)
 
-        # Place all racers at starting line within track boundaries
+        # Place racers at starting line - spread out vertically for visibility
         start_x = self.course.start_line[0]
         start_y = self.course.start_line[1]
 
@@ -222,29 +222,26 @@ class ObstacleCourseGame:
         # Calculate available space
         available_height = track_bottom - track_top
 
-        # Calculate grid dimensions to fit all racers within track bounds
-        # Use smaller spacing to allow overlap (racers can overlap at start)
-        spacing = config.FOLLOWER_RADIUS * 1.5  # Allow overlap
+        # All racers spread out vertically (same as intro animation layout)
+        num_racers = len(follower_data)
 
-        # Calculate how many racers fit per column within track height
-        racers_per_column = max(1, int(available_height / spacing))
+        # Small horizontal offset to ensure all racers start behind the starting line
+        start_offset = config.FOLLOWER_RADIUS * 2  # Push back from start line
 
-        # Calculate how many columns we need
-        num_columns = (len(follower_data) + racers_per_column - 1) // racers_per_column
-
-        # Offset to ensure all racers start behind the starting line
-        start_offset = config.FOLLOWER_RADIUS * 3  # Push back from start line
+        # Use the same layout as intro animation - 30 players per vertical line
+        max_racers_per_vertical_line = 30
 
         for i, data in enumerate(follower_data):
-            col = i // racers_per_column
-            row = i % racers_per_column
+            # Determine position in spread-out layout (same as intro)
+            position_in_line = i % max_racers_per_vertical_line
 
-            # Calculate position in grid (left of starting line, within track bounds)
-            x = start_x - start_offset - (col * spacing)  # Behind start line
+            # All racers at the same X position (single vertical column at start line)
+            x = start_x - start_offset
 
-            # Distribute vertically within track bounds
-            if racers_per_column > 1:
-                y = track_top + (row / (racers_per_column - 1)) * available_height
+            # Distribute vertically within track bounds (30 per column)
+            if max_racers_per_vertical_line > 1:
+                vertical_spacing = available_height / (max_racers_per_vertical_line - 1)
+                y = track_top + (position_in_line * vertical_spacing)
             else:
                 y = start_y
 
@@ -290,7 +287,7 @@ class ObstacleCourseGame:
             self.grace_timer -= dt
 
             if self.grace_timer <= 0:
-                print("\nTime's up! Ranking remaining racers...")
+                print("\nTime's up! Ranking remaining racers by distance from finish...")
                 self._finish_race()
 
         # Find leader for camera
@@ -475,13 +472,133 @@ class ObstacleCourseGame:
         # Setup
         self.setup_racers()
 
-        # Countdown phase
-        print("\nStarting countdown...")
-        self.countdown_start_time = time.time()
-
         # Start background music at low volume
         self.sound.start_background_music()
         self.sound.set_music_volume_low()
+
+        # INTRO PHASE - Racers slide in from left in vertical lines
+        print("\nIntro animation: Racers entering...")
+        intro_duration = 8.0  # 8 seconds for intro animation (extended for more vertical lines)
+        intro_start_time = time.time()
+
+        # Get track boundaries to keep intro rows within finish line area
+        start_y = self.course.start_line[1]
+        track_half_width = config.OBSTACLE_COURSE_WIDTH / 2
+        track_top = start_y - track_half_width + config.FOLLOWER_RADIUS
+        track_bottom = start_y + track_half_width - config.FOLLOWER_RADIUS
+        available_height = track_bottom - track_top
+
+        # Store original positions and arrange racers in vertical lines
+        original_positions = []
+
+        # Max 30 players per vertical line
+        max_racers_per_vertical_line = 30
+
+        # Calculate how many vertical lines we need
+        num_vertical_lines = (len(self.racers) + max_racers_per_vertical_line - 1) // max_racers_per_vertical_line
+
+        # Horizontal spacing between vertical lines
+        horizontal_line_spacing = 30  # pixels between each vertical line
+
+        for i, racer in enumerate(self.racers):
+            original_positions.append((racer.x, racer.y))
+
+            # Determine which vertical line this racer is in
+            vertical_line_index = i // max_racers_per_vertical_line
+            position_in_line = i % max_racers_per_vertical_line
+
+            # Calculate vertical position within the line (spread within track bounds)
+            if max_racers_per_vertical_line > 1:
+                # Distribute the 10 (or fewer) racers evenly within track height
+                vertical_spacing = available_height / (max_racers_per_vertical_line - 1)
+                intro_y = track_top + (position_in_line * vertical_spacing)
+            else:
+                intro_y = start_y
+
+            # Calculate horizontal starting position (off-screen, each vertical line staggered)
+            # Each vertical line starts further back from the previous one
+            intro_x = -300 - (vertical_line_index * horizontal_line_spacing)
+
+            # Set racer to intro position
+            racer.x = intro_x
+            racer.y = intro_y  # Y stays constant during intro - no vertical movement
+
+        # Intro animation loop
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    return
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.running = False
+                        return
+
+            dt = self.clock.tick(config.FPS) / 1000.0
+
+            # Calculate intro animation progress (0.0 to 1.0)
+            elapsed = time.time() - intro_start_time
+            progress = min(1.0, elapsed / intro_duration)
+
+            # Use easing function for smooth animation (ease-out)
+            eased_progress = 1.0 - (1.0 - progress) ** 3  # Cubic ease-out
+
+            # Animate each racer sliding in horizontally (NO vertical movement during intro)
+            # All racers move at the SAME SPEED, so lines arrive sequentially
+            constant_speed = 150  # pixels per second (slower for better viewing)
+            distance_traveled = constant_speed * elapsed  # All racers travel the same distance
+
+            all_racers_in_position = True  # Track if all racers have arrived
+
+            for i, racer in enumerate(self.racers):
+                vertical_line_index = i // max_racers_per_vertical_line
+                position_in_line = i % max_racers_per_vertical_line
+
+                # Intro Y position (within track bounds) - stays constant
+                if max_racers_per_vertical_line > 1:
+                    vertical_spacing = available_height / (max_racers_per_vertical_line - 1)
+                    intro_y = track_top + (position_in_line * vertical_spacing)
+                else:
+                    intro_y = start_y
+
+                # Intro X position (off-screen left, each vertical line staggered)
+                intro_x = -300 - (vertical_line_index * horizontal_line_spacing)
+
+                # Target X position (from original_positions)
+                target_x = original_positions[i][0]
+
+                # All racers move at SAME SPEED from their starting position
+                # This means lines arrive sequentially (first line arrives first, etc.)
+                current_x = intro_x + distance_traveled
+
+                # Clamp to target position (don't overshoot)
+                racer.x = min(current_x, target_x)
+                racer.y = intro_y  # Y stays constant - NO VERTICAL MOVEMENT
+
+                # Check if this racer has reached their position
+                if racer.x < target_x:
+                    all_racers_in_position = False
+
+            self.render()
+
+            # End intro when ALL racers have reached their starting positions
+            if all_racers_in_position:
+                print("All racers have lined up!")
+                break
+
+        # After intro completes, move racers to their actual starting positions
+        for i, racer in enumerate(self.racers):
+            racer.x, racer.y = original_positions[i]
+
+        if not self.running:
+            return
+
+        # COUNTDOWN PHASE - Start countdown AFTER lineup is complete
+        print("\nAll racers ready! Starting countdown...")
+        self.countdown_start_time = time.time()
+
+        # Mark this frame as the countdown start for video overlay
+        self.recorder.mark_countdown_start()
 
         # Play the Smash Ultimate countdown audio
         self.sound.play_smash_countdown_audio()

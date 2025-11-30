@@ -868,10 +868,17 @@ class Renderer:
     def _draw_countdown(self, number: int):
         """
         Draw countdown using video overlay or fallback to text
+        Skip if exporting video (recorder handles it with greenscreen)
 
         Args:
             number: Countdown number (0 for "FIGHT!")
         """
+        import config
+
+        # Don't draw countdown overlay during video export - the recorder's greenscreen handles it
+        if config.EXPORT_VIDEO:
+            return
+
         # Try to use video overlay
         if self.countdown_video_loaded and hasattr(self, 'countdown_start_time'):
             self._draw_countdown_video()

@@ -31,6 +31,9 @@ class Follower:
         self.avatar_image = follower_data.get("avatar")  # PIL Image or None
         self.color = follower_data.get("color", random.choice(config.RANDOM_COLORS))
 
+        # Load default stats
+        self.stats = config.BATTLE_ROYALE_DEFAULT_STATS.copy()
+
         # Position and movement
         self.x, self.y = position
         self.vx = 0.0  # Velocity X
@@ -89,14 +92,14 @@ class Follower:
         # Apply push velocity from collisions
         self.x += self.push_vx
         self.y += self.push_vy
-        self.push_vx *= config.FRICTION
-        self.push_vy *= config.FRICTION
+        self.push_vx *= self.stats['friction']
+        self.push_vy *= self.stats['friction']
 
         # Apply regular velocity
         self.x += self.vx * dt * 60  # Scale by 60 for consistent speed across framerates
         self.y += self.vy * dt * 60
-        self.vx *= config.FRICTION
-        self.vy *= config.FRICTION
+        self.vx *= self.stats['friction']
+        self.vy *= self.stats['friction']
 
         # Keep within arena bounds (can't go outside the main arena)
         max_distance = config.ARENA_INITIAL_RADIUS - config.FOLLOWER_RADIUS
@@ -158,7 +161,7 @@ class Follower:
         distance_from_edge = safe_radius - distance_from_center - config.FOLLOWER_RADIUS
 
         # Start avoiding when within this distance from edge
-        avoidance_threshold = 80  # Start avoiding 80 pixels from edge
+        avoidance_threshold = 60  # Start avoiding 60 pixels from edge
 
         if distance_from_edge < avoidance_threshold:
             # Normalize direction to center
@@ -173,10 +176,10 @@ class Follower:
                 # Apply strong force when very close to or in danger zone
                 if distance_from_edge < 0:
                     # In danger zone - panic mode!
-                    avoidance_strength = 2.0
+                    avoidance_strength = 1.3
 
                 # Return force toward center
-                force_magnitude = config.BASE_SPEED * avoidance_strength * 2.0
+                force_magnitude = self.stats['base_speed'] * avoidance_strength * 1.2
                 return (dx_to_center * force_magnitude, dy_to_center * force_magnitude)
 
         return (0.0, 0.0)
@@ -207,15 +210,15 @@ class Follower:
         dy /= distance
 
         # Add randomness for natural movement
-        random_angle = (random.random() - 0.5) * config.MOVEMENT_RANDOMNESS * math.pi
+        random_angle = (random.random() - 0.5) * self.stats['movement_randomness'] * math.pi
         cos_r = math.cos(random_angle)
         sin_r = math.sin(random_angle)
         new_dx = dx * cos_r - dy * sin_r
         new_dy = dx * sin_r + dy * cos_r
 
         # Calculate base target velocity
-        target_vx = new_dx * config.BASE_SPEED
-        target_vy = new_dy * config.BASE_SPEED
+        target_vx = new_dx * self.stats['base_speed']
+        target_vy = new_dy * self.stats['base_speed']
 
         # Add zone avoidance force
         if safe_radius is not None:
@@ -240,8 +243,8 @@ class Follower:
         # Occasionally change direction
         if random.random() < 0.02:  # 2% chance per frame
             angle = random.random() * 2 * math.pi
-            target_vx = math.cos(angle) * config.BASE_SPEED
-            target_vy = math.sin(angle) * config.BASE_SPEED
+            target_vx = math.cos(angle) * self.stats['base_speed']
+            target_vy = math.sin(angle) * self.stats['base_speed']
 
             # Add zone avoidance force
             if arena_center is not None and safe_radius is not None:
@@ -299,7 +302,7 @@ class Follower:
             return False
 
         # Check if on cooldown
-        if current_time - self.last_bump_time < config.BUMP_COOLDOWN:
+        if current_time - self.last_bump_time < self.stats['bump_cooldown']:
             return False
 
         # Calculate distance
@@ -318,7 +321,7 @@ class Follower:
             force_multiplier = 1.5 if moving_toward else 1.0
 
             # Apply push force to other follower
-            push_force = config.PUSH_FORCE * force_multiplier
+            push_force = self.stats['push_force'] * force_multiplier
             other.push_vx += push_dx * push_force
             other.push_vy += push_dy * push_force
 

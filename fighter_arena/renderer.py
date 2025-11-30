@@ -37,8 +37,9 @@ class FighterRenderer:
         self.font_large = pygame.font.Font(None, 48)
         self.font_huge = pygame.font.Font(None, 72)
 
-        # Cache for fighter surfaces
+        # Cache for fighter surfaces - stores (surface, radius) tuples
         self.fighter_surfaces = {}
+        self.cached_radius = {}
 
         # Animation state
         self.show_podium = False
@@ -174,8 +175,19 @@ class FighterRenderer:
         Returns:
             Pygame surface with rendered avatar
         """
-        if fighter.id in self.fighter_surfaces and not fighter.surface_needs_update:
-            return self.fighter_surfaces[fighter.id]
+        # Use composite key (id, username) to prevent any ID collisions
+        cache_key = (fighter.id, fighter.username)
+
+        # Check if cache is valid (same radius and no update needed)
+        cache_valid = (
+            cache_key in self.fighter_surfaces and
+            not fighter.surface_needs_update and
+            cache_key in self.cached_radius and
+            abs(self.cached_radius[cache_key] - config.FOLLOWER_RADIUS) < 0.01
+        )
+
+        if cache_valid:
+            return self.fighter_surfaces[cache_key]
 
         # Create new surface
         size = int(config.FOLLOWER_RADIUS * 2)
@@ -211,8 +223,10 @@ class FighterRenderer:
             int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier)
         )
 
-        # Cache the surface
-        self.fighter_surfaces[fighter.id] = surface
+        # Cache the surface along with the radius it was created at
+        cache_key = (fighter.id, fighter.username)
+        self.fighter_surfaces[cache_key] = surface
+        self.cached_radius[cache_key] = config.FOLLOWER_RADIUS
         fighter.surface_needs_update = False
 
         return surface
@@ -231,6 +245,7 @@ class FighterRenderer:
     def _draw_hp_bar(self, fighter: Fighter):
         """
         Draw HP bar above a fighter
+        HP bar scales with fighter size (dynamic scaling)
 
         Args:
             fighter: Fighter to draw HP bar for
@@ -238,18 +253,13 @@ class FighterRenderer:
         pos = fighter.get_position()
         hp_pct = fighter.get_hp_percentage()
 
-        # HP bar dimensions
-        bar_width = config.FIGHTER_HP_BAR_WIDTH
-        bar_height = config.FIGHTER_HP_BAR_HEIGHT
+        # HP bar dimensions - scale with current follower radius
+        # Base dimensions are for FOLLOWER_BASE_RADIUS (14px)
+        scale_factor = config.FOLLOWER_RADIUS / config.FOLLOWER_BASE_RADIUS
+        bar_width = max(int(config.FIGHTER_HP_BAR_WIDTH * scale_factor), 18)  # Min 18px width
+        bar_height = max(int(config.FIGHTER_HP_BAR_HEIGHT * scale_factor), 3)  # Min 3px height
         bar_x = int(pos[0] - bar_width // 2)
-        bar_y = int(pos[1] - config.FOLLOWER_RADIUS - 8)
-
-        # Draw background
-        pygame.draw.rect(
-            self.screen,
-            config.COLOR_HP_BAR_BG,
-            (bar_x, bar_y, bar_width, bar_height)
-        )
+        bar_y = int(pos[1] - config.FOLLOWER_RADIUS - max(int(8 * scale_factor), 5))
 
         # Determine HP color based on percentage
         if hp_pct > 0.6:
@@ -259,16 +269,25 @@ class FighterRenderer:
         else:
             hp_color = config.COLOR_HP_BAR_LOW
 
-        # Draw HP fill
-        fill_width = int(bar_width * hp_pct)
+        # Draw HP fill (with 1px padding to create border effect)
+        fill_width = int((bar_width - 2) * hp_pct)  # -2 for 1px border on each side
         if fill_width > 0:
             pygame.draw.rect(
                 self.screen,
                 hp_color,
-                (bar_x, bar_y, fill_width, bar_height)
+                (bar_x + 1, bar_y + 1, fill_width, bar_height - 2)  # +1 for border, -2 for top/bottom border
             )
 
-        # Draw border
+        # Draw background for unfilled portion
+        unfilled_width = (bar_width - 2) - fill_width
+        if unfilled_width > 0:
+            pygame.draw.rect(
+                self.screen,
+                config.COLOR_HP_BAR_BG,
+                (bar_x + 1 + fill_width, bar_y + 1, unfilled_width, bar_height - 2)
+            )
+
+        # Draw border around entire bar
         pygame.draw.rect(
             self.screen,
             (0, 0, 0),

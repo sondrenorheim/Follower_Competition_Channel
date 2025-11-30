@@ -26,11 +26,11 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
+GAME_MODE = "obstacle_course" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
 TEST_MODE = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
-DAY_NUMBER = 9  # Increment this each time you record a new video
+DAY_NUMBER = 10  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
@@ -225,6 +225,16 @@ FIGHTER_STAT_BOOSTS = {
     # Add usernames here to give them boosted stats
 }
 
+# ===== BATTLE ROYALE FOLLOWER STATS =====
+# Battle royale follower physics stats
+BATTLE_ROYALE_DEFAULT_STATS = {
+    "base_speed": 2.0,           # Movement speed (pixels per frame)
+    "friction": 0.75,            # Velocity decay multiplier (0-1)
+    "push_force": 16.0,           # Force applied during collisions
+    "bump_cooldown": 0.5,        # Cooldown between bumps (seconds)
+    "movement_randomness": 0.2   # Movement direction randomness (0-1)
+}
+
 # Fighter arena colors
 COLOR_FIGHTER_ARENA = (180, 180, 190)  # Slightly darker gray for arena floor
 COLOR_HP_BAR_BG = (60, 60, 60)         # Dark gray HP bar background
@@ -239,7 +249,7 @@ FIGHTER_HP_BAR_HEIGHT = 4             # Height of HP bar
 
 # ===== OBSTACLE COURSE SETTINGS =====
 # Course dimensions
-OBSTACLE_COURSE_LENGTH = 9000      # Total course length in pixels
+OBSTACLE_COURSE_LENGTH = 18000     # Total course length in pixels (doubled)
 OBSTACLE_COURSE_WIDTH = 500        # Track width in pixels
 
 # Track generation settings - simple horizontal race with gentle vertical waves
@@ -282,6 +292,14 @@ SNAKE_MAX_SPEED_MULTIPLIER = 2.0         # Maximum speed multiplier (at end of g
 # Follower flee behavior
 SNAKE_FLEE_DISTANCE = 150    # Distance at which followers start fleeing from snake
 SNAKE_PANIC_DISTANCE = 80    # Distance at which followers enter panic mode (max speed flee)
+
+# Snake escape follower physics stats
+SNAKE_ESCAPE_DEFAULT_STATS = {
+    "base_speed": 2.0,           # Movement speed (pixels per frame)
+    "friction": 0.75,            # Velocity decay multiplier (0-1)
+    "bump_cooldown": 0.5,        # Cooldown between bumps (seconds)
+    "movement_randomness": 0.1   # Movement direction randomness (0-1)
+}
 
 # ===== TEAM BATTLE SETTINGS =====
 # Team colors (RGB) - used for team rings around fighters

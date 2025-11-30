@@ -247,14 +247,21 @@ class FighterBattleArena:
                     initial_zone_radius=min(arena_rect[2], arena_rect[3]) // 2
                 )
 
-                if abs(new_radius - self.last_fighter_radius) > 0.5:
+                # Invalidate surfaces when radius changes (even slightly)
+                if abs(new_radius - self.last_fighter_radius) > 0.01:
                     for fighter in self.fighters:
                         fighter.surface_needs_update = True
+
+                    # Clear the renderer's cache to force complete regeneration
+                    self.renderer.fighter_surfaces.clear()
+                    self.renderer.cached_radius.clear()
+
                     self.last_fighter_radius = new_radius
 
-                config.FOLLOWER_RADIUS = new_radius
-                config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
-                config.FIGHTER_ATTACK_RANGE = config.FOLLOWER_RADIUS * 2.5
+                    # Update radius and dependent values
+                    config.FOLLOWER_RADIUS = new_radius
+                    config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
+                    config.FIGHTER_ATTACK_RANGE = config.FOLLOWER_RADIUS * 2.5
 
             # Update music intensity
             self.sound.update_music_intensity(alive_count, len(self.fighters))

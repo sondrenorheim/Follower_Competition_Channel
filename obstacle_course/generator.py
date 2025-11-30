@@ -99,7 +99,7 @@ class CourseGenerator:
             ('moving', 10),      # Moving walls - common
             ('spinner', 8),      # Spinners - moderate
             ('bumper', 12),      # Bumpers - moderate
-            ('speed_boost', 6),  # Speed boosts - occasional
+            # ('speed_boost', 6),  # Speed boosts - REMOVED
             ('slow_zone', 6),    # Slow zones - occasional
             ('crusher', 4),      # Crushers - rare, timing-based
         ]

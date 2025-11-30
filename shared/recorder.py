@@ -48,6 +48,7 @@ class VideoRecorder:
         self.greenscreen_video_path = None
         self.greenscreen_scale = 0.5  # Scale factor for overlay
         self.greenscreen_offset_y = 120  # Pixels to move down from center
+        self.greenscreen_start_frame = None  # Frame index where countdown starts
 
         print(f"📹 Video Recorder initialized: {self.output_path} @ {self.fps} FPS")
         print(f"   Using time-based capture (1 frame every {self.frame_time*1000:.1f}ms)")
@@ -197,13 +198,18 @@ class VideoRecorder:
                 mixed_audio = mixed_audio.overlay(looped_bg, position=0)
                 print(f"   ✓ Background music added (ending synced)")
 
-            # 2. Add countdown audio at the start (video starts from countdown phase)
+            # 2. Add countdown audio at the correct position (when countdown actually starts)
             if os.path.exists(audio_files['countdown']):
                 print(f"   Adding countdown audio...")
                 countdown_audio = AudioSegment.from_wav(audio_files['countdown'])
                 countdown_audio = countdown_audio + 3  # Boost volume slightly
-                mixed_audio = mixed_audio.overlay(countdown_audio, position=0)
-                print(f"   ✓ Countdown audio added at 0s")
+
+                # Calculate countdown start position in milliseconds
+                countdown_start_frame = self.greenscreen_start_frame if self.greenscreen_start_frame is not None else 0
+                countdown_start_time_ms = int((countdown_start_frame / self.fps) * 1000)
+
+                mixed_audio = mixed_audio.overlay(countdown_audio, position=countdown_start_time_ms)
+                print(f"   ✓ Countdown audio added at {countdown_start_time_ms/1000:.1f}s (frame {countdown_start_frame})")
 
             # Save final audio mix
             output_file = tempfile.mktemp(suffix='.wav')
@@ -235,9 +241,14 @@ class VideoRecorder:
         self.greenscreen_offset_y = offset_y
         print(f"🎬 Green screen overlay set: {video_path}")
 
+    def mark_countdown_start(self):
+        """Mark the current frame as the start of the countdown for green screen overlay"""
+        self.greenscreen_start_frame = len(self.frames)
+        print(f"🎬 Countdown start marked at frame {self.greenscreen_start_frame}")
+
     def _apply_greenscreen_overlay(self, frames: List[np.ndarray]) -> List[np.ndarray]:
         """
-        Apply green screen video overlay to the first frames
+        Apply green screen video overlay starting from the countdown start frame
 
         Args:
             frames: List of frames to modify
@@ -249,10 +260,14 @@ class VideoRecorder:
             print(f"⚠️  Green screen video not found: {self.greenscreen_video_path}")
             return frames
 
+        # If countdown start frame not marked, default to frame 0
+        start_frame_idx = self.greenscreen_start_frame if self.greenscreen_start_frame is not None else 0
+
         try:
             import cv2
 
             print(f"🎬 Applying green screen overlay: {self.greenscreen_video_path}")
+            print(f"   Starting from frame {start_frame_idx}")
 
             # Open the green screen video
             gs_video = cv2.VideoCapture(self.greenscreen_video_path)
@@ -267,7 +282,8 @@ class VideoRecorder:
 
             # Calculate how many output frames the overlay covers
             overlay_frame_count = int(gs_duration * self.fps)
-            overlay_frame_count = min(overlay_frame_count, len(frames))
+            # Ensure we don't exceed available frames after start point
+            overlay_frame_count = min(overlay_frame_count, len(frames) - start_frame_idx)
 
             print(f"   Overlay duration: {gs_duration:.1f}s ({overlay_frame_count} frames)")
             print(f"   Green screen video: {gs_frame_count} frames @ {gs_fps:.1f} FPS")
@@ -297,8 +313,11 @@ class VideoRecorder:
             print(f"   Actual scale factor: {actual_scale:.3f}")
             print(f"   Overlay offset_y: {self.greenscreen_offset_y} -> {adjusted_offset_y}")
 
-            # Process each frame that needs overlay
+            # Process each frame that needs overlay (starting from countdown start frame)
             for i in range(overlay_frame_count):
+                # Calculate actual frame index in the frames array
+                frame_idx = start_frame_idx + i
+
                 # Calculate which green screen frame to use
                 gs_frame_idx = int((i / overlay_frame_count) * gs_frame_count)
                 gs_video.set(cv2.CAP_PROP_POS_FRAMES, gs_frame_idx)
@@ -367,14 +386,14 @@ class VideoRecorder:
                 dest_h, dest_w = cropped_gs.shape[:2]
 
                 # Blend the green screen frame onto the game frame
-                frame = frames[i].copy()
+                frame = frames[frame_idx].copy()
                 for c in range(3):
                     frame[y_pos:y_pos+dest_h, x_pos:x_pos+dest_w, c] = (
                         frame[y_pos:y_pos+dest_h, x_pos:x_pos+dest_w, c] * (1 - cropped_alpha/255.0) +
                         cropped_gs[:, :, c] * (cropped_alpha/255.0)
                     ).astype(np.uint8)
 
-                frames[i] = frame
+                frames[frame_idx] = frame
 
             gs_video.release()
             print(f"   ✓ Green screen overlay applied to {overlay_frame_count} frames")
