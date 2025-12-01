@@ -16,8 +16,37 @@ import random
 import os
 import json
 import csv
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import config
+
+# In-memory follower cache (used when running multiple games in a row)
+_PREFETCHED_FOLLOWERS: Optional[List[Dict[str, Any]]] = None
+
+def set_prefetched_followers(followers: Optional[List[Dict[str, Any]]]):
+    """Store followers in memory for reuse across multiple games."""
+    global _PREFETCHED_FOLLOWERS
+    if followers is None:
+        _PREFETCHED_FOLLOWERS = None
+        return
+    # Shallow copy keeps avatars in memory without duplicating image bytes
+    _PREFETCHED_FOLLOWERS = [dict(f) for f in followers]
+
+
+def clear_prefetched_followers():
+    """Clear any cached followers."""
+    global _PREFETCHED_FOLLOWERS
+    _PREFETCHED_FOLLOWERS = None
+
+
+def _get_prefetched_followers(count: int) -> Optional[List[Dict[str, Any]]]:
+    """Return a slice of prefetched followers if available."""
+    if _PREFETCHED_FOLLOWERS is None:
+        return None
+    if not _PREFETCHED_FOLLOWERS:
+        return []
+    # Use as many as requested, fall back to all available
+    slice_count = min(count, len(_PREFETCHED_FOLLOWERS))
+    return [dict(f) for f in _PREFETCHED_FOLLOWERS[:slice_count]]
 
 
 class InstagramAPI:
@@ -46,7 +75,7 @@ class InstagramAPI:
         self.import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
         self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
 
-    def fetch_followers(self, count: int = 500) -> List[Dict[str, any]]:
+    def fetch_followers(self, count: int = 500) -> List[Dict[str, Any]]:
         """
         Fetch followers using configured method (Import, API, Scraper, or Offline)
 
@@ -56,6 +85,15 @@ class InstagramAPI:
         Returns:
             List of follower dictionaries with 'id', 'username', and 'avatar' keys
         """
+        # Reuse prefetched followers when available (avoids repeated downloads)
+        cached_followers = _get_prefetched_followers(count)
+        if cached_followers is not None:
+            if len(cached_followers) == 0:
+                print("�s��,? Prefetched follower cache is empty, falling back to data sources")
+            else:
+                print(f"�o. Using prefetched followers from memory ({len(cached_followers)}/{count})")
+                return cached_followers
+
         # Priority 1: Import from file(s) if specified (SAFE!)
         instagram_followers = []
         tiktok_followers = []
@@ -119,7 +157,7 @@ class InstagramAPI:
         print(f"Running in OFFLINE MODE - Generating {count} placeholder followers")
         return self._generate_placeholder_followers(count)
 
-    def _fetch_from_api(self, count: int) -> Optional[List[Dict[str, any]]]:
+    def _fetch_from_api(self, count: int) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch real followers from Instagram Graph API
 
@@ -214,7 +252,7 @@ class InstagramAPI:
 
         return None
 
-    def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, any]]]:
+    def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch followers using Instaloader web scraping library
 
@@ -343,7 +381,7 @@ class InstagramAPI:
             print(f"❌ Error fetching followers: {e}")
             return None
 
-    def _import_from_file(self, file_path: str, count: int) -> Optional[List[Dict[str, any]]]:
+    def _import_from_file(self, file_path: str, count: int) -> Optional[List[Dict[str, Any]]]:
         """
         Import followers from CSV or JSON file
 
@@ -502,7 +540,7 @@ class InstagramAPI:
             print(f"❌ Error reading file: {e}")
             return None
 
-    def _generate_placeholder_followers(self, count: int) -> List[Dict[str, any]]:
+    def _generate_placeholder_followers(self, count: int) -> List[Dict[str, Any]]:
         """
         Generate placeholder followers for offline mode
         Creates followers with random colored avatars

@@ -15,7 +15,7 @@ TTL: 3600 (or default)
 ```
 
 **Option B: Using A Records (for apex domain)**
-If you want both `followerbattleground.com` AND `www.followerbattleground.com`:
+If you want both `followerbattlegrounds.com` AND `www.followerbattlegrounds.com`:
 
 ```
 Type: A
@@ -49,14 +49,14 @@ TTL: 3600
 1. Push your code to GitHub:
    ```bash
    git add .
-   git commit -m "Configure custom domain www.followerbattleground.com"
+   git commit -m "Configure custom domain www.followerbattlegrounds.com"
    git push
    ```
 
 2. Go to your GitHub repository settings:
    - Navigate to **Settings** → **Pages**
    - Under "Source", select **GitHub Actions**
-   - Under "Custom domain", enter: `www.followerbattleground.com`
+   - Under "Custom domain", enter: `www.followerbattlegrounds.com`
    - Check the box "Enforce HTTPS" (wait for DNS to propagate first)
    - Click **Save**
 
@@ -69,7 +69,7 @@ You can check DNS propagation at: https://www.whatsmydns.net/
 ### Step 4: Verify It Works
 
 Once DNS has propagated:
-1. Visit `http://www.followerbattleground.com`
+1. Visit `http://www.followerbattlegrounds.com`
 2. GitHub will automatically redirect to HTTPS
 3. Your website should load!
 
@@ -79,7 +79,7 @@ When you run a game, the auto-push system will:
 1. Update `player_statistics.json` and `game_history.json`
 2. Commit and push to GitHub
 3. Trigger GitHub Actions to rebuild and deploy
-4. Your website updates automatically at `www.followerbattleground.com`
+4. Your website updates automatically at `www.followerbattlegrounds.com`
 
 ## Troubleshooting
 
@@ -100,7 +100,7 @@ When you run a game, the auto-push system will:
 
 ## Files Already Configured
 
-✅ `website/public/CNAME` - Contains `www.followerbattleground.com`
+✅ `website/public/CNAME` - Contains `www.followerbattlegrounds.com`
 ✅ `website/vite.config.js` - Base path set to `/` for custom domain
 ✅ `website/src/App.jsx` - Router basename removed
 ✅ `website/src/utils/dataLoader.js` - Data path updated for custom domain

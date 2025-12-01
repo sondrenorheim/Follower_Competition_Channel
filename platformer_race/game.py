@@ -389,7 +389,7 @@ class PlatformerRaceGame:
         self.statistics.save_statistics()
 
         # Auto-push to GitHub (if not in test mode)
-        if not config.TEST_MODE:
+        if not config.TEST_MODE and getattr(config, "AUTO_PUSH_STATS", False):
             auto_push.push_stats_to_github()
 
         # Get leaderboards

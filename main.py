@@ -15,6 +15,7 @@ import time
 import sys
 import os
 from typing import List
+import shared.api as shared_api
 
 # Fix Windows console encoding to support UTF-8 characters
 if os.name == 'nt':  # Windows
@@ -418,7 +419,7 @@ class FollowerBattleRoyale:
         self.statistics.save_statistics()
 
         # Auto-push to GitHub (if not in test mode)
-        if not config.TEST_MODE:
+        if not config.TEST_MODE and getattr(config, "AUTO_PUSH_STATS", False):
             auto_push.push_stats_to_github()
 
         # Store leaderboards for display
@@ -603,6 +604,53 @@ class FollowerBattleRoyale:
         print("\n👋 Thanks for playing!")
 
 
+def _create_game_instance(game_mode: str):
+    """Instantiate the correct game class for the given mode."""
+    if game_mode == "fighter_arena":
+        from fighter_arena import FighterBattleArena
+        print("Starting Fighter Arena mode...")
+        return FighterBattleArena()
+    elif game_mode == "obstacle_course":
+        from obstacle_course import ObstacleCourseGame
+        print("Starting Obstacle Course mode...")
+        return ObstacleCourseGame()
+    elif game_mode == "snake_escape":
+        from snake_escape import SnakeEscapeGame
+        print("Starting Snake Escape mode...")
+        return SnakeEscapeGame()
+    elif game_mode == "team_battle":
+        from team_battle import TeamBattleGame
+        print("Starting Team Battle mode...")
+        return TeamBattleGame()
+    elif game_mode == "platformer_race":
+        from platformer_race import PlatformerRaceGame
+        print("Starting Platformer Race mode...")
+        return PlatformerRaceGame()
+
+    print("Starting Battle Royale mode...")
+    return FollowerBattleRoyale()
+
+
+def _prefetch_followers_for_all() -> list:
+    """Prefetch followers (including avatars) once so ALL mode can reuse them."""
+    try:
+        api_client = InstagramAPI()
+        followers = api_client.fetch_followers(config.FOLLOWER_COUNT)
+        shared_api.set_prefetched_followers(followers)
+        return followers
+    except Exception as e:
+        print(f"Warning: Failed to prefetch followers once for ALL mode: {e}")
+        return []
+
+
+def _run_single_mode(game_mode: str):
+    """Set per-game config and run one game mode."""
+    config.GAME_MODE = game_mode
+    config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode=game_mode)
+    game = _create_game_instance(game_mode)
+    game.run()
+
+
 def main():
     """
     Entry point for the game
@@ -612,37 +660,21 @@ def main():
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
 
-        if game_mode == "fighter_arena":
-            # Import and run Fighter Arena
-            from fighter_arena import FighterBattleArena
-            print("Starting Fighter Arena mode...")
-            game = FighterBattleArena()
-        elif game_mode == "obstacle_course":
-            # Import and run Obstacle Course
-            from obstacle_course import ObstacleCourseGame
-            print("Starting Obstacle Course mode...")
-            game = ObstacleCourseGame()
-        elif game_mode == "snake_escape":
-            # Import and run Snake Escape
-            from snake_escape import SnakeEscapeGame
-            print("Starting Snake Escape mode...")
-            game = SnakeEscapeGame()
-        elif game_mode == "team_battle":
-            # Import and run Team Battle
-            from team_battle import TeamBattleGame
-            print("Starting Team Battle mode...")
-            game = TeamBattleGame()
-        elif game_mode == "platformer_race":
-            # Import and run Platformer Race
-            from platformer_race import PlatformerRaceGame
-            print("Starting Platformer Race mode...")
-            game = PlatformerRaceGame()
+        if game_mode == "ALL":
+            print("Running ALL game modes sequentially:")
+            print(" -> " + ", ".join(getattr(config, "ALL_GAME_MODES", [])))
+            prefetched = _prefetch_followers_for_all()
+            for mode in getattr(config, "ALL_GAME_MODES", []):
+                # Refresh the cache reference before each run
+                if prefetched:
+                    shared_api.set_prefetched_followers(prefetched)
+                _run_single_mode(mode)
+            shared_api.clear_prefetched_followers()
+            # Restore GAME_MODE for downstream references (e.g., manual push)
+            config.GAME_MODE = "ALL"
+            config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
         else:
-            # Default to Battle Royale
-            print("Starting Battle Royale mode...")
-            game = FollowerBattleRoyale()
-
-        game.run()
+            _run_single_mode(game_mode)
     except KeyboardInterrupt:
         print("\n\nGame interrupted by user")
         pygame.quit()

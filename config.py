@@ -4,9 +4,10 @@ Modify these values to customize game behavior
 """
 
 # ===== GAME MODE =====
-# Options: "battle_royale" or "fighter_arena"
-
-# GAME_MODE = "battle_royale"
+# Options: "battle_royale", "fighter_arena", "obstacle_course",
+#          "snake_escape", "team_battle", "platformer_race", "ALL"
+# When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
+ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
 # ===== GAME SETTINGS =====
 SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
 SCREEN_HEIGHT = 960  # 9:16 aspect ratio for Instagram Reels / TikTok
@@ -26,12 +27,14 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "platformer_race" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"
+GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
 TEST_MODE = True
+# Control whether stats auto-push after each game (set False to review then push manually)
+AUTO_PUSH_STATS = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
 DAY_NUMBER = 11  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
+DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 EXPORT_TIME_SCALE = 1  # Run simulation at half speed during export for smoother results
@@ -92,11 +95,20 @@ COLOR_BORDER = (255, 255, 255)
 
 # ===== VIDEO EXPORT SETTINGS =====
 
-# Determine output video filename based on test mode
-if TEST_MODE:
-    OUTPUT_VIDEO_PATH = "follower_battle_royale_test_video.mp4"
-else:
-    OUTPUT_VIDEO_PATH = f"follower_battle_royale_day_{DAY_NUMBER}.mp4"
+def get_output_video_path(game_mode: str = None, day_number: int = None, test_mode: bool = None) -> str:
+    """
+    Build output video filename based on game mode, day number, and test flag.
+    Example: team_battle_day_10.mp4 or snake_escape_test_video.mp4
+    """
+    gm = (game_mode or GAME_MODE) if (game_mode or GAME_MODE) else "battle_royale"
+    day = day_number if day_number is not None else DAY_NUMBER
+    is_test = TEST_MODE if test_mode is None else test_mode
+    if is_test:
+        return f"{gm}_test_video.mp4"
+    return f"{gm}_day_{day}.mp4"
+
+# Default output path (can be overridden per game run)
+OUTPUT_VIDEO_PATH = get_output_video_path()
 
 VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
