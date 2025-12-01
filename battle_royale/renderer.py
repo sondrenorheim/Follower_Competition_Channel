@@ -601,55 +601,30 @@ class Renderer:
 
     def _draw_leaderboards(self, game_state: dict, followers: list):
         """
-        Draw current game and all-time leaderboards
-
-        Args:
-            game_state: Game state dictionary with leaderboard data
-            followers: List of all followers for avatar lookup
+        Draw current game leaderboard (centered).
         """
         current_lb = game_state.get("current_game_leaderboard", [])
-        all_time_lb = game_state.get("all_time_leaderboard", [])
-
-        if not current_lb and not all_time_lb:
+        if not current_lb:
             return
 
         # Create username to follower mapping for avatar lookup
         follower_map = {f.username: f for f in followers}
 
-        # Starting Y position (below podium) - scaled to screen size
+        # Position centered below podium
         start_y = int(self.height * 0.365)  # ~36.5% down the screen
-        board_width = int(self.width * 0.44)  # ~44% of screen width per panel
-        spacing = int(self.width * 0.037)     # ~3.7% of screen width
-        left_x = (self.width - board_width * 2 - spacing) // 2
-        right_x = left_x + board_width + spacing
+        board_width = int(self.width * 0.6)  # widen since single board
+        left_x = (self.width - board_width) // 2
 
-        # Draw current game leaderboard (left)
-        if current_lb:
-            self._draw_leaderboard_panel(
-                "CURRENT GAME",
-                "TOP 10",
-                current_lb[:10],
-                left_x,
-                start_y,
-                board_width,
-                (0, 200, 255),  # Cyan
-                follower_map
-            )
-
-        # Draw all-time leaderboard (right)
-        if all_time_lb:
-            # Convert all-time format to (username, points) tuples
-            all_time_formatted = [(username, points) for username, points, _ in all_time_lb]
-            self._draw_leaderboard_panel(
-                "ALL-TIME",
-                "TOP 10",
-                all_time_formatted[:10],
-                right_x,
-                start_y,
-                board_width,
-                (255, 215, 0),  # Gold
-                follower_map
-            )
+        self._draw_leaderboard_panel(
+            "CURRENT GAME",
+            "TOP 10",
+            current_lb[:10],
+            left_x,
+            start_y,
+            board_width,
+            (0, 200, 255),  # Cyan
+            follower_map
+        )
 
     def _draw_leaderboard_panel(self, title_line1: str, title_line2: str, leaderboard: list, x: int, y: int, width: int, color: tuple, follower_map: dict):
         """

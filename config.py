@@ -28,7 +28,7 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = True
+TEST_MODE = False
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
@@ -53,7 +53,8 @@ SHRINK_RATE = 0.10          # Pixels per second the zone shrinks (smooth continu
 ARENA_SHAPE = "circle"
 
 # ===== FOLLOWER SETTINGS =====
-FOLLOWER_COUNT = 500        # Number of followers (can be 500-1000)
+# Set to an integer to cap followers, or None to use all available from data/API.
+FOLLOWER_COUNT = None
 FOLLOWER_RADIUS = 14        # Radius of each follower circle (will be dynamically adjusted)
 FOLLOWER_BORDER_WIDTH = 2   # White border thickness
 FOLLOWER_NAME_FONT_SIZE = 16  # Increased from 12 for better readability
@@ -242,7 +243,7 @@ FIGHTER_STAT_BOOSTS = {
 TEAM_BATTLE_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
     "speed": 5,         # Pixels moved every 2 frames
-    "attack": 7.5,      # HP damage dealt per hit
+    "attack": 15,      # HP damage dealt per hit
     "regeneration": 0,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
     "knockback": 3,     # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
     "attack_speed": 30  # Attacks per second = value / 10 (default: 3 attacks/sec)

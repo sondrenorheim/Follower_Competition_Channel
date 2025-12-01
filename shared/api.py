@@ -38,13 +38,14 @@ def clear_prefetched_followers():
     _PREFETCHED_FOLLOWERS = None
 
 
-def _get_prefetched_followers(count: int) -> Optional[List[Dict[str, Any]]]:
-    """Return a slice of prefetched followers if available."""
+def _get_prefetched_followers(count: Optional[int]) -> Optional[List[Dict[str, Any]]]:
+    """Return prefetched followers (all if count is None or <= 0)."""
     if _PREFETCHED_FOLLOWERS is None:
         return None
     if not _PREFETCHED_FOLLOWERS:
         return []
-    # Use as many as requested, fall back to all available
+    if count is None or count <= 0:
+        return [dict(f) for f in _PREFETCHED_FOLLOWERS]
     slice_count = min(count, len(_PREFETCHED_FOLLOWERS))
     return [dict(f) for f in _PREFETCHED_FOLLOWERS[:slice_count]]
 
@@ -75,12 +76,12 @@ class InstagramAPI:
         self.import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
         self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
 
-    def fetch_followers(self, count: int = 500) -> List[Dict[str, Any]]:
+    def fetch_followers(self, count: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Fetch followers using configured method (Import, API, Scraper, or Offline)
 
         Args:
-            count: Number of followers to fetch/generate
+            count: Number of followers to fetch/generate (None = use all available)
 
         Returns:
             List of follower dictionaries with 'id', 'username', and 'avatar' keys
@@ -89,9 +90,9 @@ class InstagramAPI:
         cached_followers = _get_prefetched_followers(count)
         if cached_followers is not None:
             if len(cached_followers) == 0:
-                print("�s��,? Prefetched follower cache is empty, falling back to data sources")
+                print("Prefetched follower cache is empty, falling back to data sources")
             else:
-                print(f"�o. Using prefetched followers from memory ({len(cached_followers)}/{count})")
+                print(f"Using prefetched followers from memory ({len(cached_followers)}/{count})")
                 return cached_followers
 
         # Priority 1: Import from file(s) if specified (SAFE!)
@@ -121,8 +122,9 @@ class InstagramAPI:
             combined_followers = instagram_followers + tiktok_followers
             # Shuffle to mix Instagram and TikTok followers
             random.shuffle(combined_followers)
-            # Limit to requested count
-            combined_followers = combined_followers[:count]
+            # Limit to requested count if provided
+            if count:
+                combined_followers = combined_followers[:count]
             print(f"✅ Combined total: {len(combined_followers)} followers ({len(instagram_followers)} IG + {len(tiktok_followers)} TikTok)")
             return combined_followers
 
@@ -137,7 +139,6 @@ class InstagramAPI:
             except Exception as e:
                 print(f"❌ Scraper failed: {e}")
                 print(f"Falling back to offline mode")
-                return self._generate_placeholder_followers(count)
 
         # Priority 3: Use official API if credentials available (SAFE)
         if not config.USE_OFFLINE_MODE and self.access_token and self.user_id:
@@ -154,10 +155,13 @@ class InstagramAPI:
                 print(f"Falling back to offline mode")
 
         # Priority 4: Offline mode (default, safe)
-        print(f"Running in OFFLINE MODE - Generating {count} placeholder followers")
-        return self._generate_placeholder_followers(count)
+        offline_count = count if count else (len(instagram_followers) + len(tiktok_followers))
+        if offline_count <= 0:
+            offline_count = config.FOLLOWER_COUNT or 500
+        print(f"Running in OFFLINE MODE - Generating {offline_count} placeholder followers")
+        return self._generate_placeholder_followers(offline_count)
 
-    def _fetch_from_api(self, count: int) -> Optional[List[Dict[str, Any]]]:
+    def _fetch_from_api(self, count: Optional[int]) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch real followers from Instagram Graph API
 
@@ -168,14 +172,15 @@ class InstagramAPI:
             List of follower data or None if failed
         """
         followers = []
+        target_count = count if count and count > 0 else 10000  # fetch a lot when uncapped
         url = f"{self.base_url}/{self.user_id}/followers"
         params = {
             "access_token": self.access_token,
-            "limit": min(count, 100),  # API limit per request
+            "limit": min(target_count, 100),  # API limit per request
             "fields": "id,username,profile_picture_url"
         }
 
-        while len(followers) < count:
+        while len(followers) < target_count:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
@@ -185,7 +190,7 @@ class InstagramAPI:
 
             # Process each follower
             for follower_data in data["data"]:
-                if len(followers) >= count:
+                if count and len(followers) >= count:
                     break
 
                 follower = {
@@ -252,7 +257,7 @@ class InstagramAPI:
 
         return None
 
-    def _fetch_via_instaloader(self, count: int) -> Optional[List[Dict[str, Any]]]:
+    def _fetch_via_instaloader(self, count: Optional[int]) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch followers using Instaloader web scraping library
 
@@ -325,18 +330,20 @@ class InstagramAPI:
 
             print(f"Found @{target_username}: {profile.full_name}")
             print(f"Total followers: {profile.followers}")
-            print(f"Fetching up to {count} followers (this may take a while)...")
+            target_count = count if count and count > 0 else profile.followers
+            print(f"Fetching up to {target_count} followers (this may take a while)...")
 
             followers = []
 
             # Iterate through followers
             for i, follower in enumerate(profile.get_followers()):
-                if i >= count:
+                if count and i >= count:
                     break
 
                 # Progress indicator
                 if (i + 1) % 50 == 0:
-                    print(f"   Scraped {i + 1}/{count} followers...")
+                    progress_total = count if count else profile.followers
+                    print(f"   Scraped {i + 1}/{progress_total} followers...")
 
                 # Download profile picture
                 avatar_img = None
@@ -381,7 +388,7 @@ class InstagramAPI:
             print(f"❌ Error fetching followers: {e}")
             return None
 
-    def _import_from_file(self, file_path: str, count: int) -> Optional[List[Dict[str, Any]]]:
+    def _import_from_file(self, file_path: str, count: Optional[int]) -> Optional[List[Dict[str, Any]]]:
         """
         Import followers from CSV or JSON file
 
@@ -394,7 +401,7 @@ class InstagramAPI:
 
         Args:
             file_path: Path to CSV or JSON file
-            count: Maximum number of followers to import
+            count: Maximum number of followers to import (None = all)
 
         Returns:
             List of follower data or None if failed
@@ -428,7 +435,7 @@ class InstagramAPI:
 
                     # Extract usernames from various formats
                     for i, item in enumerate(follower_list):
-                        if i >= count:
+                        if count and i >= count:
                             break
 
                         username = None
@@ -474,7 +481,7 @@ class InstagramAPI:
                         print(f"📸 Profile picture downloading enabled - this may take a while...")
 
                     for i, row in enumerate(reader):
-                        if i >= count:
+                        if count and i >= count:
                             break
 
                         # Look for username column (case-insensitive)
@@ -513,7 +520,7 @@ class InstagramAPI:
             elif file_ext == '.txt':
                 with open(file_path, 'r', encoding='utf-8') as f:
                     for i, line in enumerate(f):
-                        if i >= count:
+                        if count and i >= count:
                             break
 
                         username = line.strip()

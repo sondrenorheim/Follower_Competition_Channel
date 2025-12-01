@@ -356,12 +356,7 @@ class RendererTemplate:
     def _draw_end_game_display(self, current_game_board: list, all_time_board: list,
                                winner=None):
         """
-        Draw end-game display with winner and leaderboards.
-
-        Args:
-            current_game_board: Current game top 10 [(username, points), ...]
-            all_time_board: All-time top 10 [(username, total_points, stats), ...]
-            winner: Winner player object (optional)
+        Draw end-game display with winner and a single current-game leaderboard.
         """
         # Draw semi-transparent overlay
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -373,35 +368,21 @@ class RendererTemplate:
             self._draw_winner_display(winner)
 
         # Calculate panel dimensions
-        panel_width = int(self.width * PANEL_WIDTH_PCT)
-        panel_spacing = int(self.width * PANEL_SPACING_PCT)
+        panel_width = int(self.width * PANEL_WIDTH_PCT * 1.2)  # widen since single panel
         start_y = int(self.height * PANEL_START_Y_PCT)
 
-        left_panel_x = (self.width - (panel_width * 2 + panel_spacing)) // 2
-        right_panel_x = left_panel_x + panel_width + panel_spacing
+        center_panel_x = (self.width - panel_width) // 2
 
-        # Draw left panel - Current Game
+        # Draw centered panel - Current Game
         self._draw_leaderboard_panel(
             entries=current_game_board[:10],
-            x=left_panel_x,
+            x=center_panel_x,
             y=start_y,
             width=panel_width,
             title_line1="CURRENT GAME",
             title_line2="TOP 10",
             title_color=(0, 200, 255),  # Cyan
             is_current_game=True
-        )
-
-        # Draw right panel - All-Time
-        self._draw_leaderboard_panel(
-            entries=all_time_board[:10],
-            x=right_panel_x,
-            y=start_y,
-            width=panel_width,
-            title_line1="ALL-TIME",
-            title_line2="TOP 10",
-            title_color=(255, 215, 0),  # Gold
-            is_current_game=False
         )
 
     def _draw_winner_display(self, winner):

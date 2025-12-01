@@ -559,24 +559,22 @@ class ObstacleCourseRenderer:
         if winner:
             self._draw_winner_display(winner)
 
-        # Panel dimensions (matching battle royale layout)
-        panel_width = int(screen_w * 0.44)  # 44% of screen width
-        panel_spacing = int(screen_w * 0.037)  # 3.7% spacing between panels
+        # Panel dimensions (single centered panel)
+        panel_width = int(screen_w * 0.55)
 
         # Positioning
         start_y = int(screen_h * 0.365)  # 36.5% down screen
-        left_panel_x = (screen_w - (panel_width * 2 + panel_spacing)) // 2
-        right_panel_x = left_panel_x + panel_width + panel_spacing
+        center_panel_x = (screen_w - panel_width) // 2
 
         # Fonts
         font_header = pygame.font.Font(None, 28)
         font_entry = pygame.font.Font(None, 14)
         font_medium = pygame.font.Font(None, 18)
 
-        # Draw left panel - Current Race
+        # Draw centered panel - Current Race
         self._draw_leaderboard_panel(
             current_game_board[:10],
-            left_panel_x,
+            center_panel_x,
             start_y,
             panel_width,
             "CURRENT RACE",
@@ -585,20 +583,6 @@ class ObstacleCourseRenderer:
             font_header,
             font_entry,
             is_current_game=True
-        )
-
-        # Draw right panel - All-Time
-        self._draw_leaderboard_panel(
-            all_time_board[:10],
-            right_panel_x,
-            start_y,
-            panel_width,
-            "ALL-TIME",
-            "TOP 10",
-            (255, 215, 0),  # Gold
-            font_header,
-            font_entry,
-            is_current_game=False
         )
 
     def _draw_leaderboard_panel(self, entries: list, x: int, y: int, width: int,

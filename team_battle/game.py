@@ -978,7 +978,7 @@ class TeamBattleGame:
             auto_push.push_stats_to_github()
 
         self.current_game_leaderboard = self.statistics.get_current_game_leaderboard(game_results)
-        self.all_time_leaderboard = self.statistics.get_all_time_leaderboard(top_n=10)
+        self.all_time_leaderboard = []  # All-time leaderboard display removed
 
         print(self.scoring.format_leaderboard(
             self.current_game_leaderboard,

@@ -64,12 +64,60 @@ export default function DailyResults() {
 
   // Update selected game when day number or filtered games change
   useEffect(() => {
-    if (selectedDayNumber !== null && games.length > 0) {
-      // Find game matching both the selected game type and day number
-      const matchingGame = games.find(g => g.day_number === selectedDayNumber);
-      setSelectedGame(matchingGame || null);
+    if (selectedDayNumber === null || games.length === 0) {
+      return;
     }
-  }, [selectedDayNumber, games]);
+
+    // When "all" is selected, aggregate all games for that day into one summary entry
+    if (selectedGameType === 'all') {
+      const dayGames = games.filter(g => g.day_number === selectedDayNumber);
+      if (dayGames.length === 0) {
+        setSelectedGame(null);
+        return;
+      }
+
+      // Aggregate points (and kills/survival_time when available) per player across all games that day
+      const aggregated = new Map();
+      dayGames.forEach(game => {
+        game.results.forEach(result => {
+          if (!aggregated.has(result.username)) {
+            aggregated.set(result.username, {
+              username: result.username,
+              points: 0,
+              kills: 0,
+              survival_time: 0,
+              appearances: 0
+            });
+          }
+          const entry = aggregated.get(result.username);
+          entry.points += result.points || 0;
+          entry.kills += result.kills || 0;
+          entry.survival_time += result.survival_time || 0;
+          entry.appearances += 1;
+        });
+      });
+
+      const aggregatedResults = Array.from(aggregated.values());
+      const totalParticipants = aggregatedResults.length;
+
+      const syntheticGame = {
+        game_id: `all_day_${selectedDayNumber}`,
+        game_type: 'all',
+        game_display_name: 'All Games',
+        day_number: selectedDayNumber,
+        timestamp: dayGames[0]?.timestamp || new Date().toISOString(),
+        total_participants: totalParticipants,
+        results: aggregatedResults
+      };
+
+      setSelectedGame(syntheticGame);
+      return;
+    }
+
+    // Otherwise, pick the game matching the day for the selected type
+    const matchingGame = games.find(g => g.day_number === selectedDayNumber);
+    setSelectedGame(matchingGame || null);
+  }, [selectedDayNumber, games, selectedGameType]);
 
   // Sort all results and calculate ranks, then filter by search
   const filteredResults = selectedGame
@@ -219,7 +267,7 @@ export default function DailyResults() {
             <LeaderboardTable
               data={filteredResults}
               columns={
-                selectedGame.game_type === 'platformer_race' || selectedGame.game_type === 'obstacle_course'
+                selectedGame.game_type === 'platformer_race' || selectedGame.game_type === 'obstacle_course' || selectedGame.game_type === 'all'
                   ? ['rank', 'username', 'points']
                   : ['rank', 'username', 'points', 'survivalTime', 'kills']
               }
