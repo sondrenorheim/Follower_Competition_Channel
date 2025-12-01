@@ -177,10 +177,15 @@ export default function MonthlyRankings() {
     loadData();
   }, [viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, historyData]);
 
-  // Filter by search query
-  const filteredData = leaderboardData.filter((player) =>
-    player.username.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter by search query but keep original ranks from the full sorted set
+  const filteredData = leaderboardData
+    .map((player, index) => ({
+      ...player,
+      calculatedRank: index + 1
+    }))
+    .filter((player) =>
+      player.username.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
   // Use available months only
   const monthOptions = availableMonths;
