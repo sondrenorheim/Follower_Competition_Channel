@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAllTimeLeaderboard, getMonthlyLeaderboard, loadGameHistory } from '../utils/dataLoader';
-import { parseStats } from '../utils/formatters';
+import { loadGameHistory } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 
@@ -16,6 +15,8 @@ export default function MonthlyRankings() {
   const [currentPage, setCurrentPage] = useState(1);
   const [availableMonths, setAvailableMonths] = useState([]);
   const [selectedStatCategory, setSelectedStatCategory] = useState('points');
+  const [historyData, setHistoryData] = useState(null);
+  const [gameTypeFilter, setGameTypeFilter] = useState('all'); // 'all' or specific game_type
 
   // Current month/year
   const now = new Date();
@@ -27,6 +28,7 @@ export default function MonthlyRankings() {
     async function loadAvailableMonths() {
       try {
         const history = await loadGameHistory();
+        setHistoryData(history);
         const monthSet = new Set();
 
         (history.games || []).forEach(game => {
@@ -59,36 +61,83 @@ export default function MonthlyRankings() {
         }
       } catch (error) {
         console.error('Error loading available months:', error);
+      } finally {
+        setLoading(false);
       }
     }
     loadAvailableMonths();
   }, []);
 
+  // Helper to build leaderboard from history data with optional filters
+  const buildAggregatedLeaderboard = (history, { month = null, year = null, gameType = 'all' }) => {
+    const players = new Map();
+    const games = history?.games || [];
+
+    games.forEach((game) => {
+      // Game type filter
+      if (gameType !== 'all' && game.game_type !== gameType) return;
+
+      // Month/year filter
+      if (month && year) {
+        const d = new Date(game.timestamp);
+        if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return;
+      }
+
+      (game.results || []).forEach((result) => {
+        if (!players.has(result.username)) {
+          players.set(result.username, {
+            username: result.username,
+            points: 0,
+            games: 0,
+            wins: 0,
+            totalPlacement: 0,
+            totalKills: 0,
+            top3Finishes: 0,
+            top10PctFinishes: 0
+          });
+        }
+        const p = players.get(result.username);
+        const points = result.points || 0;
+        const placement = result.placement || game.total_participants || 0;
+        const kills = result.kills || 0;
+
+        p.points += points;
+        p.games += 1;
+        p.wins += placement === 1 ? 1 : 0;
+        p.totalPlacement += placement;
+        p.totalKills += kills;
+
+        // Top 3 and Top 10%
+        if (placement <= 3) p.top3Finishes += 1;
+        const top10Threshold = Math.max(1, Math.floor((game.total_participants || 0) * 0.1));
+        if (top10Threshold > 0 && placement <= top10Threshold) {
+          p.top10PctFinishes += 1;
+        }
+      });
+    });
+
+    const leaderboard = Array.from(players.values()).map((p) => ({
+      ...p,
+      avgPlacement: p.games > 0 ? (p.totalPlacement / p.games).toFixed(1) : '0.0'
+    }));
+
+    // Default sort by points desc
+    leaderboard.sort((a, b) => b.points - a.points);
+    return leaderboard;
+  };
+
   // Load leaderboard data
   useEffect(() => {
     async function loadData() {
+      if (!historyData) return;
       setLoading(true);
       try {
         if (viewMode === 'all-time' || viewMode === 'top-stats') {
-          const data = await getAllTimeLeaderboard(1000);
-          // Transform data for table
-          const transformed = data.map((player) => {
-            const stats = parseStats(player.stats);
-            return {
-              username: player.username,
-              points: player.totalPoints,
-              games: stats.gamesPlayed,
-              wins: stats.wins,
-              avgPlacement: stats.avgPlacement,
-              totalKills: stats.totalKills,
-              top10PctFinishes: stats.top10PctFinishes,
-              top3Finishes: stats.top3Finishes
-            };
-          });
+          const aggregated = buildAggregatedLeaderboard(historyData, { gameType: gameTypeFilter });
 
           // Sort based on selected category for top stats view
           if (viewMode === 'top-stats') {
-            transformed.sort((a, b) => {
+            aggregated.sort((a, b) => {
               switch (selectedStatCategory) {
                 case 'points':
                   return b.points - a.points;
@@ -110,10 +159,14 @@ export default function MonthlyRankings() {
             });
           }
 
-          setLeaderboardData(transformed);
+          setLeaderboardData(aggregated);
         } else {
-          const data = await getMonthlyLeaderboard(selectedYear, selectedMonth, 1000);
-          setLeaderboardData(data);
+          const monthly = buildAggregatedLeaderboard(historyData, {
+            month: selectedMonth,
+            year: selectedYear,
+            gameType: gameTypeFilter
+          });
+          setLeaderboardData(monthly);
         }
       } catch (error) {
         console.error('Error loading leaderboard:', error);
@@ -122,7 +175,7 @@ export default function MonthlyRankings() {
       }
     }
     loadData();
-  }, [viewMode, selectedMonth, selectedYear, selectedStatCategory]);
+  }, [viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, historyData]);
 
   // Filter by search query
   const filteredData = leaderboardData.filter((player) =>
@@ -131,6 +184,12 @@ export default function MonthlyRankings() {
 
   // Use available months only
   const monthOptions = availableMonths;
+
+  // Derive available game types from history (for filter)
+  const gameTypes =
+    historyData?.games
+      ? ['all', ...Array.from(new Set(historyData.games.map((g) => g.game_type)))]
+      : ['all'];
 
   if (loading) {
     return (
@@ -238,6 +297,31 @@ export default function MonthlyRankings() {
                 </div>
               </div>
             )}
+
+            {/* Game Type Selector */}
+            <div className="flex-1 min-w-[200px]">
+              <div className="relative">
+                <select
+                  value={gameTypeFilter}
+                  onChange={(e) => {
+                    setGameTypeFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
+                >
+                  {gameTypes.map((type) => (
+                    <option key={type} value={type} className="bg-dark-bg-secondary text-text-primary">
+                      {type === 'all' ? 'All Games' : type.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                  <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
 
             {/* Category Selector (only for top stats view) */}
             {viewMode === 'top-stats' && (
