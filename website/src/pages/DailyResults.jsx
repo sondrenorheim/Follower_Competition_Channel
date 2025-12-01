@@ -267,8 +267,16 @@ export default function DailyResults() {
             <LeaderboardTable
               data={filteredResults}
               columns={
-                selectedGame.game_type === 'platformer_race' || selectedGame.game_type === 'obstacle_course' || selectedGame.game_type === 'all'
+                selectedGame.game_type === 'platformer_race' ||
+                selectedGame.game_type === 'obstacle_course' ||
+                selectedGame.game_type === 'all'
                   ? ['rank', 'username', 'points']
+                : selectedGame.game_type === 'fighter_arena'
+                  ? ['rank', 'username', 'points', 'kills']
+                : selectedGame.game_type === 'team_battle'
+                  ? ['rank', 'username', 'points', 'kills']
+                : selectedGame.game_type === 'snake_escape'
+                  ? ['rank', 'username', 'points', 'survivalTime']
                   : ['rank', 'username', 'points', 'survivalTime', 'kills']
               }
               currentPage={currentPage}

@@ -179,7 +179,10 @@ export default function LeaderboardTable({
                   )}
                   {columns.includes('survivalTime') && (
                     <td className="px-6 py-5 whitespace-nowrap text-sm text-text-secondary">
-                      {row.survivalTime || row.survival_time || 0}s
+                      {(row.survivalTime !== undefined
+                        ? Number(row.survivalTime)
+                        : Number(row.survival_time || 0)
+                      ).toFixed(1)}s
                     </td>
                   )}
                   {columns.includes('top3') && (
