@@ -39,6 +39,19 @@ def load_client(session_file: Path) -> Client:
     return cl
 
 
+def load_tiktok_session(session_file: Path) -> str:
+    if not session_file.exists():
+        raise FileNotFoundError(f"TikTok session file not found: {session_file}")
+    import json
+
+    with open(session_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    session_id = data.get("sessionid")
+    if not session_id:
+        raise ValueError(f"Missing 'sessionid' in {session_file}")
+    return session_id
+
+
 def upload_videos(cl: Client, video_paths: list[Path], caption_template: str, delay_seconds: int):
     for idx, video_path in enumerate(video_paths):
         if not video_path.exists():
@@ -50,10 +63,141 @@ def upload_videos(cl: Client, video_paths: list[Path], caption_template: str, de
         media = cl.clip_upload(str(video_path), caption=caption)
         print(f"✅ Uploaded: {video_path.name} -> {media.pk}")
 
-        # Delay before next upload (except after last one)
-        if delay_seconds > 0 and idx < len(video_paths) - 1:
-            print(f"⏳ Waiting {delay_seconds/3600:.2f} hours before next upload...")
-            time.sleep(delay_seconds)
+        # Delay handled after TikTok upload
+def upload_instagram(cl: Client, video_path: Path, caption: str) -> bool:
+    try:
+        media = cl.clip_upload(str(video_path), caption=caption)
+        print(f"✅ IG uploaded: {video_path.name} -> {media.pk}")
+        return True
+    except Exception as e:
+        print(f"⚠️ IG upload failed for {video_path.name}: {e}")
+        # One quick retry
+        try:
+            time.sleep(5)
+            media = cl.clip_upload(str(video_path), caption=caption)
+            print(f"✅ IG uploaded on retry: {video_path.name} -> {media.pk}")
+            return True
+        except Exception as e2:
+            print(f"❌ IG upload retry failed for {video_path.name}: {e2}")
+            return False
+
+
+def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "SingingNarrator", schedule_hours: int = 0):
+    """
+    Upload to TikTok using TiktokAutoUploader (cookie-based, more reliable)
+    """
+    # Use local TiktokAutoUploader in this project
+    uploader_dir = Path(__file__).parent / "TiktokAutoUploader"
+    cli_script = uploader_dir / "cli.py"
+
+    if not cli_script.exists():
+        print(f"❌ TiktokAutoUploader not found at: {uploader_dir}")
+        print("   Install it or update the path in post_run_publish.py")
+        return False
+
+    if not video_path.exists():
+        print(f"⚠️ Skipping missing video for TikTok: {video_path}")
+        return False
+
+    # Check if cookie file exists
+    cookie_path = uploader_dir / "CookiesDir" / f"tiktok_session-{username}.cookie"
+    if not cookie_path.exists():
+        print(f"❌ TikTok cookie not found: {cookie_path}")
+        print(f"   Run the TiktokAutoUploader authentication for user '{username}' first")
+        return False
+
+    # Schedule time in seconds (0 = post immediately)
+    schedule_time = schedule_hours * 3600 if schedule_hours > 0 else 0
+    schedule_msg = f" (scheduled {schedule_hours}h from now)" if schedule_hours > 0 else ""
+
+    # TikTok uploader expects videos in VideosDirPath folder
+    # Copy video there temporarily
+    import shutil
+    videos_dir = uploader_dir / "VideosDirPath"
+    videos_dir.mkdir(exist_ok=True)
+
+    temp_video_path = videos_dir / video_path.name
+    try:
+        shutil.copy2(video_path, temp_video_path)
+        print(f"📋 Copied video to TikTok uploader folder")
+    except Exception as e:
+        print(f"❌ Failed to copy video: {e}")
+        return False
+
+    # Use just the filename (not full path) since it's now in VideosDirPath
+    cmd = [
+        "python",
+        str(cli_script),
+        "upload",
+        "-u", username,
+        "-v", video_path.name,  # Just filename, not full path
+        "-t", caption,
+        "-st", str(schedule_time)
+    ]
+
+    print(f"▶️ Uploading to TikTok{schedule_msg}...")
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
+            cwd=str(uploader_dir)  # Run from uploader directory
+        )
+
+        # Print output
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
+
+        # Clean up temporary video file
+        try:
+            temp_video_path.unlink()
+        except:
+            pass
+
+        if result.returncode == 0:
+            print(f"✅ TikTok upload successful!")
+            return True
+        else:
+            print(f"❌ TikTok upload failed (exit code: {result.returncode})")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print("❌ TikTok upload timed out after 5 minutes")
+        # Clean up
+        try:
+            temp_video_path.unlink()
+        except:
+            pass
+        return False
+    except Exception as e:
+        print(f"❌ TikTok upload failed: {e}")
+        # Clean up
+        try:
+            temp_video_path.unlink()
+        except:
+            pass
+        return False
+
+
+def upload_tiktok(session_id: str, video_path: Path, caption: str):
+    """
+    Legacy function - redirects to cookie-based uploader
+    The session_id parameter is ignored in favor of cookie-based auth
+    """
+    # TODO: Change this to your follower battle TikTok username
+    tiktok_username = "followerbattlegro"  # Update this with your actual TikTok username
+
+    return upload_tiktok_cookie_based(
+        video_path=video_path,
+        caption=caption,
+        username=tiktok_username,
+        schedule_hours=0  # Post immediately
+    )
 
 
 def push_stats(commit_message: str | None):
@@ -69,8 +213,14 @@ def parse_args():
     parser.add_argument(
         "--session-file",
         type=Path,
-        default=None,
+        default=Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json"),
         help="Path to instagrapi session JSON (or set IG_SESSION_FILE env var).",
+    )
+    parser.add_argument(
+        "--tiktok-session-file",
+        type=Path,
+        default=Path(r"C:\Users\SondreNorheim\Documents\tiktok_follower_account_sessionid.json"),
+        help="Path to TikTok session JSON with {'sessionid': '...'} (or set TIKTOK_SESSION_FILE env var).",
     )
     parser.add_argument(
         "--caption-template",
@@ -80,8 +230,8 @@ def parse_args():
     parser.add_argument(
         "--delay-seconds",
         type=int,
-        default=0,
-        help="Delay between uploads in seconds (default 0). Use 7200 for 2 hours.",
+        default=10800,
+        help="Delay between uploads in seconds (default 0). Use 10800 for 3 hours.",
     )
     parser.add_argument(
         "--push-message",
@@ -97,6 +247,7 @@ def main():
     if not session_path:
         raise SystemExit("Missing session file. Provide --session-file or set IG_SESSION_FILE.")
     session_path = Path(session_path)
+    tiktok_session_path = args.tiktok_session_file or os.getenv("TIKTOK_SESSION_FILE")
 
     # Build expected videos from ALL_GAME_MODES
     game_modes = getattr(config, "ALL_GAME_MODES", [])
@@ -105,9 +256,36 @@ def main():
     print("📦 Pushing stats/history to GitHub...")
     push_stats(args.push_message)
 
-    print("📤 Uploading videos as Reels...")
+    print("📤 Uploading videos as Reels/TikTok...")
     client = load_client(session_path)
-    upload_videos(client, video_paths, args.caption_template, args.delay_seconds)
+    tiktok_session_id = None
+    if tiktok_session_path:
+        try:
+            tiktok_session_id = load_tiktok_session(Path(tiktok_session_path))
+        except Exception as e:
+            print(f"⚠️ TikTok session load failed: {e}. TikTok uploads will be skipped.")
+
+    for idx, video_path in enumerate(video_paths):
+        if not video_path.exists():
+            print(f"⚠️ Skipping missing video: {video_path}")
+            continue
+        game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
+        caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
+
+        # Instagram upload
+        print(f"▶️ IG: Uploading {video_path.name}")
+        ig_ok = upload_instagram(client, video_path, caption)
+
+        # TikTok upload
+        if tiktok_session_id:
+            print(f"▶️ TikTok: Uploading {video_path.name}")
+            upload_tiktok(tiktok_session_id, video_path, caption)
+
+        # Delay before next upload (except after last one)
+        if args.delay_seconds > 0 and idx < len(video_paths) - 1:
+            print(f"⏳ Waiting {args.delay_seconds/3600:.2f} hours before next upload...")
+            time.sleep(args.delay_seconds)
+
     print("✅ Done.")
 
 

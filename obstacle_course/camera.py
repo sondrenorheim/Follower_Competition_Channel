@@ -21,7 +21,11 @@ class ObstacleCourseCamera:
         self.target_y = self.camera_y
 
         # Smoothing factor for camera movement (0.0 = no smoothing, 1.0 = instant)
-        self.smoothing = 0.08
+        self.smoothing = 0.15  # Increased from 0.08 for more responsive camera
+
+        # Adaptive smoothing based on distance to target
+        self.min_smoothing = 0.15  # Minimum smoothing when leader is close
+        self.max_smoothing = 0.35  # Maximum smoothing when leader is far (faster catch-up)
 
         # Minimum camera X (allows seeing behind starting line)
         self.min_camera_x = -150
@@ -41,8 +45,21 @@ class ObstacleCourseCamera:
         # Target camera position: keep leader at 60% from left (shows more racers behind)
         self.target_x = leader_position[0] - (config.SCREEN_WIDTH * 0.6)
 
-        # Smooth camera movement using linear interpolation (X only)
-        self.camera_x += (self.target_x - self.camera_x) * self.smoothing
+        # Adaptive smoothing: speed up camera when leader is far ahead
+        distance_to_target = abs(self.target_x - self.camera_x)
+
+        # If leader is more than 200 pixels ahead of ideal position, use faster smoothing
+        if distance_to_target > 200:
+            adaptive_smoothing = self.max_smoothing
+        elif distance_to_target > 100:
+            # Interpolate between min and max smoothing based on distance
+            t = (distance_to_target - 100) / 100  # 0 to 1 as distance goes from 100 to 200
+            adaptive_smoothing = self.min_smoothing + (self.max_smoothing - self.min_smoothing) * t
+        else:
+            adaptive_smoothing = self.min_smoothing
+
+        # Smooth camera movement using adaptive linear interpolation (X only)
+        self.camera_x += (self.target_x - self.camera_x) * adaptive_smoothing
 
         # Lock Y to screen center for straight horizontal track
         self.camera_y = config.SCREEN_HEIGHT / 2

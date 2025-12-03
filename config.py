@@ -2,6 +2,7 @@
 Configuration file for Follower Battle Royale & Fighter Arena
 Modify these values to customize game behavior
 """
+from pathlib import Path
 
 # ===== GAME MODE =====
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
@@ -33,7 +34,7 @@ TEST_MODE = False
 AUTO_PUSH_STATS = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
-DAY_NUMBER = 11  # Increment this each time you record a new video
+DAY_NUMBER = 13  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
@@ -62,9 +63,9 @@ SHOW_FOLLOWER_NAMES = False  # Show usernames below profile pictures during batt
 
 # ===== DYNAMIC SCALING SETTINGS =====
 USE_DYNAMIC_SCALING = True  # Enable dynamic follower size based on player count
-FOLLOWER_BASE_RADIUS = 14   # Base radius for ~100 final contestants (good size)
-FOLLOWER_MIN_RADIUS = 6     # Minimum radius for very large player counts (100K+)
-FOLLOWER_MAX_RADIUS = 20    # Maximum radius when only a few players remain
+FOLLOWER_BASE_RADIUS = 12   # Base radius for ~100 final contestants (good size)
+FOLLOWER_MIN_RADIUS = 0     # No enforced minimum; allows very dense packing
+FOLLOWER_MAX_RADIUS = 18    # Maximum radius when only a few players remain
 SCALING_GROWTH_RATE = 0.5   # How quickly players grow as others are eliminated (0.0-1.0)
 
 # ===== PHYSICS SETTINGS =====
@@ -95,6 +96,8 @@ COLOR_TEXT = (0, 0, 0)                 # Black text
 COLOR_BORDER = (255, 255, 255)
 
 # ===== VIDEO EXPORT SETTINGS =====
+# Base directory to store exported videos (will create day subfolders under this)
+VIDEO_OUTPUT_BASE = Path("Videos")
 
 def get_output_video_path(game_mode: str = None, day_number: int = None, test_mode: bool = None) -> str:
     """
@@ -104,9 +107,12 @@ def get_output_video_path(game_mode: str = None, day_number: int = None, test_mo
     gm = (game_mode or GAME_MODE) if (game_mode or GAME_MODE) else "battle_royale"
     day = day_number if day_number is not None else DAY_NUMBER
     is_test = TEST_MODE if test_mode is None else test_mode
+    # Organize by day folder: VIDEO_OUTPUT_BASE/Day_<N>/filename.mp4
+    day_folder = VIDEO_OUTPUT_BASE / f"Day_{day}"
+    day_folder.mkdir(parents=True, exist_ok=True)
     if is_test:
-        return f"{gm}_test_video.mp4"
-    return f"{gm}_day_{day}.mp4"
+        return str(day_folder / f"{gm}_test_video.mp4")
+    return str(day_folder / f"{gm}_day_{day}.mp4")
 
 # Default output path (can be overridden per game run)
 OUTPUT_VIDEO_PATH = get_output_video_path()
@@ -125,8 +131,9 @@ VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 # Option 1: Import from File (✅ BEST - Safe, Legal, Recommended!)
 # Use Instagram's "Download Your Data" feature to get followers.json
 # Or use a Chrome extension like "IG Exporter & Scraper" for instant export
+# Or use fetch_followers_v2.py to fetch followers using instagrapi
 # Or create your own CSV/JSON/TXT file with usernames
-FOLLOWER_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegrounds_Followers.csv"
+FOLLOWER_IMPORT_FILE = "followers_20251203.json"
 
 # TikTok followers import file (optional - will be combined with Instagram followers)
 TIKTOK_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegro-followers.csv"
@@ -148,7 +155,7 @@ INSTAGRAM_PASSWORD = ""          # Your Instagram password (for scraping)
 INSTAGRAM_TARGET_USERNAME = ""   # Target account to scrape followers from (leave empty to use your own)
 
 # Option 4: Offline Mode (Safe, generates random followers)
-USE_OFFLINE_MODE = True      # Set to False to attempt API/scraper fetching
+USE_OFFLINE_MODE = False      # Set to False to attempt API/scraper fetching (or use import file)
 
 # ===== RANDOM AVATAR COLORS (for offline mode) =====
 RANDOM_COLORS = [
@@ -179,7 +186,7 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
         return FOLLOWER_BASE_RADIUS
 
     # Step 1: Calculate starting radius based on total player count
-    # For 100 players: use base radius (14px)
+    # For 100 players: use base radius (12px)
     # For more players: scale down proportionally
     # For fewer players: can start slightly larger
     if total_players <= 100:
@@ -187,7 +194,7 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
     else:
         # Scale down for large player counts (less aggressive for moderate counts)
         # 500 players → ~11px, 1000 players → ~9px, 10000 → ~6.5px
-        scale_factor = math.pow(100.0 / total_players, 0.35)  # Less aggressive (was 0.5)
+        scale_factor = math.pow(100.0 / total_players, 0.6)  # Less aggressive (was 0.5)
         start_radius = max(FOLLOWER_MIN_RADIUS, FOLLOWER_BASE_RADIUS * scale_factor)
 
     # Step 2: Calculate growth based on elimination progress
@@ -210,8 +217,8 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
         max_safe_radius = (safe_zone_radius * 0.8) / math.sqrt(alive_count / 2.0)
         current_radius = min(current_radius, max_safe_radius)
 
-    # Step 4: Clamp to min/max bounds
-    current_radius = max(FOLLOWER_MIN_RADIUS, min(FOLLOWER_MAX_RADIUS, current_radius))
+    # Step 4: Clamp to max bound only (allow very small radii when crowded)
+    current_radius = min(FOLLOWER_MAX_RADIUS, current_radius)
 
     return current_radius
 

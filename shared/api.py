@@ -16,11 +16,19 @@ import random
 import os
 import json
 import csv
+import time
 from typing import List, Dict, Optional, Any
 import config
 
 # In-memory follower cache (used when running multiple games in a row)
 _PREFETCHED_FOLLOWERS: Optional[List[Dict[str, Any]]] = None
+
+# In-memory avatar cache to avoid repeated downloads for the same URL
+_AVATAR_CACHE: Dict[str, Optional[Image.Image]] = {}
+_LAST_AVATAR_FETCH_TS: float = 0.0
+# Throttle and backoff to reduce 403/429 responses from CDN
+_MIN_AVATAR_INTERVAL = 0.25   # seconds between avatar fetch attempts
+_AVATAR_BACKOFF_429 = 2.0     # extra seconds to sleep on 403/429 before retry
 
 def set_prefetched_followers(followers: Optional[List[Dict[str, Any]]]):
     """Store followers in memory for reuse across multiple games."""
@@ -212,19 +220,24 @@ class InstagramAPI:
 
     def _download_avatar(self, url: Optional[str]) -> Optional[Image.Image]:
         """
-        Download avatar image from URL with retry logic
-
-        Args:
-            url: URL of the avatar image
-
-        Returns:
-            PIL Image object or None if failed
+        Download avatar image from URL with retry logic and caching.
         """
         if not url:
             return None
 
+        # Return cached if already fetched this run
+        if url in _AVATAR_CACHE:
+            return _AVATAR_CACHE[url]
+
+        # Throttle requests to reduce 429s
+        global _LAST_AVATAR_FETCH_TS
+        now = time.time()
+        elapsed = now - _LAST_AVATAR_FETCH_TS
+        if elapsed < _MIN_AVATAR_INTERVAL:
+            time.sleep(_MIN_AVATAR_INTERVAL - elapsed)
+        _LAST_AVATAR_FETCH_TS = time.time()
+
         # Add headers to mimic a browser (helps avoid some 403 errors)
-        # Detect if TikTok URL and use appropriate referer
         referer = 'https://www.tiktok.com/' if 'tiktok' in url.lower() else 'https://www.instagram.com/'
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -232,27 +245,37 @@ class InstagramAPI:
             'Referer': referer
         }
 
-        # Retry up to 3 times with increasing timeout
-        max_retries = 3
+        max_retries = 5
+        backoff = 0.5  # seconds
         for attempt in range(max_retries):
             try:
-                timeout = 10 + (attempt * 5)  # 10s, 15s, 20s
+                timeout = 10 + (attempt * 5)
+                if attempt:
+                    time.sleep(backoff * attempt)
                 response = requests.get(url, headers=headers, timeout=timeout)
                 response.raise_for_status()
-                img = Image.open(io.BytesIO(response.content))
-                return img.convert("RGBA")
+                img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+                _AVATAR_CACHE[url] = img
+                return img
             except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    print(f"      ⚠️ Timeout downloading avatar (attempt {attempt + 1}/{max_retries}), retrying...")
-                    continue
-                else:
-                    print(f"      ❌ Failed to download avatar after {max_retries} attempts (timeout)")
+                if attempt >= max_retries - 1:
+                    print(f"      Failed to download avatar after {max_retries} attempts (timeout): {url}")
+                    _AVATAR_CACHE[url] = None
                     return None
+                print(f"      Timeout downloading avatar (attempt {attempt + 1}/{max_retries}), retrying...: {url}")
+                continue
             except requests.exceptions.HTTPError as e:
-                print(f"      ❌ HTTP error downloading avatar: {e.response.status_code}")
+                status = e.response.status_code if e.response is not None else "unknown"
+                if status in (403, 429) and attempt < max_retries - 1:
+                    print(f"      HTTP {status} downloading avatar (attempt {attempt + 1}/{max_retries}), backing off...: {url}")
+                    time.sleep(_AVATAR_BACKOFF_429 * (attempt + 1))
+                    continue
+                print(f"      HTTP error downloading avatar: {status} -> {url}")
+                _AVATAR_CACHE[url] = None
                 return None
             except Exception as e:
-                print(f"      ❌ Error downloading avatar: {type(e).__name__}: {str(e)[:50]}")
+                print(f"      Error downloading avatar: {type(e).__name__}: {str(e)[:50]} -> {url}")
+                _AVATAR_CACHE[url] = None
                 return None
 
         return None
@@ -439,15 +462,20 @@ class InstagramAPI:
                             break
 
                         username = None
+                        profile_pic_url = None
+                        full_name = None
 
                         # Instagram export format
                         if isinstance(item, dict):
                             # Format 1: {"string_list_data": [{"value": "username"}]}
                             if 'string_list_data' in item:
                                 username = item['string_list_data'][0].get('value')
-                            # Format 2: {"username": "username"}
+                            # Format 2: {"username": "username", "profile_pic_url": "...", "full_name": "..."}
+                            # (from fetch_followers_v2.py using instagrapi)
                             elif 'username' in item:
                                 username = item['username']
+                                profile_pic_url = item.get('profile_pic_url')
+                                full_name = item.get('full_name')
                             # Format 3: {"value": "username"}
                             elif 'value' in item:
                                 username = item['value']
@@ -456,10 +484,19 @@ class InstagramAPI:
                             username = item
 
                         if username:
+                            # Download profile picture if URL provided and downloading is enabled
+                            avatar_img = None
+                            download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
+                            if profile_pic_url and download_pics:
+                                avatar_img = self._download_avatar(profile_pic_url)
+                                # Show progress every 10 downloads
+                                if (i + 1) % 10 == 0:
+                                    print(f"   📥 Downloaded {i + 1} profile pictures...")
+
                             followers.append({
                                 "id": f"imported_{i}",
                                 "username": username,
-                                "avatar": None,
+                                "avatar": avatar_img,
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
 
@@ -490,9 +527,18 @@ class InstagramAPI:
 
                         for key in row.keys():
                             key_lower = key.lower().strip('"')
-                            if key_lower in ['username', 'user', 'name', 'follower']:
+                            if key_lower in ['username', 'user', 'name', 'follower', 'user name']:
                                 username = row[key].strip('"')
-                            elif key_lower in ['profile_pic_url', 'profile_picture_url', 'profile picture', 'avatar_url', 'picture_url']:
+                            elif key_lower in [
+                                'profile_pic_url',
+                                'profile_picture_url',
+                                'profile picture',
+                                'profile picture link',
+                                'profile_picture_link',
+                                'avatar_url',
+                                'picture_url',
+                                'avatarurl'
+                            ]:
                                 profile_pic_url = row[key].strip('"')
 
                         if username:
