@@ -6,9 +6,11 @@ from pathlib import Path
 
 # ===== GAME MODE =====
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
-#          "snake_escape", "team_battle", "platformer_race", "ALL"
+#          "snake_escape", "team_battle", "platformer_race", "spleef", "ALL"
 # When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
-ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
+# ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
+ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
+
 # ===== GAME SETTINGS =====
 SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
 SCREEN_HEIGHT = 960  # 9:16 aspect ratio for Instagram Reels / TikTok
@@ -30,11 +32,16 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
 TEST_MODE = False
+# Minimal test players - when True, use generated test users instead of real followers
+TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
+TEST_MINIMAL_PLAYER_COUNT = 400  # Number of test users to generate
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
+# Control whether video files are included in auto-push (set False to only push stats data)
+AUTO_PUSH_INCLUDE_VIDEOS = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
 EXPORT_VIDEO = True
-DAY_NUMBER = 13  # Increment this each time you record a new video
+DAY_NUMBER = 17  # Increment this each time you record a new video
 DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
@@ -133,10 +140,10 @@ VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 # Or use a Chrome extension like "IG Exporter & Scraper" for instant export
 # Or use fetch_followers_v2.py to fetch followers using instagrapi
 # Or create your own CSV/JSON/TXT file with usernames
-FOLLOWER_IMPORT_FILE = "followers_20251203.json"
+FOLLOWER_IMPORT_FILE = "followers_safe_20251204.json"
 
 # TikTok followers import file (optional - will be combined with Instagram followers)
-TIKTOK_IMPORT_FILE = "C:\\Users\\SondreNorheim\\Downloads\\followerbattlegro-followers.csv"
+TIKTOK_IMPORT_FILE = ""  # Disabled - only using Instagram followers
 
 # Download real profile pictures from CSV (if profile_pic_url column exists)
 # Set to True to download real Instagram profile pictures (takes longer, uses bandwidth)
@@ -356,3 +363,42 @@ TEAM_PLACEMENT_SCORES = {
 
 # Kill bonus points
 TEAM_BATTLE_KILL_BONUS = 1  # Points per kill
+
+# ===== SPLEEF SETTINGS =====
+# Arena dimensions
+SPLEEF_GRID_WIDTH = 35           # Blocks wide
+SPLEEF_GRID_HEIGHT = 35          # Blocks tall (same as width for perfect square)
+SPLEEF_BLOCK_SIZE = 10           # Pixels per block (reduced by 50% from 20)
+SPLEEF_LAYER_COUNT = 10          # Number of floor layers (increased from 3 to 10)
+SPLEEF_LAYER_SPACING = 60        # Vertical spacing between layers (reduced from 125 for more layers)
+
+# Block degradation timing (total: 1.0 second from step to break)
+SPLEEF_CRACK_DURATION = 0.2      # Time in CRACKED state (seconds)
+SPLEEF_BREAK_DURATION = 0.3      # Time in BREAKING state (seconds)
+SPLEEF_FALL_DURATION = 0.5       # Time falling through broken block (seconds)
+
+# Physics
+SPLEEF_MOVE_SPEED = 100.0        # Player movement speed (reduced from 150)
+SPLEEF_GRAVITY = 140.0           # Gravity acceleration (adjusted for 1 second fall time with 70px effective distance: 60px spacing + 10px margin)
+SPLEEF_FALL_SPEED_MAX = 600.0    # Maximum falling speed (reduced from 800)
+
+# Rendering (isometric 2.5D view)
+SPLEEF_ISO_ANGLE = 20            # Isometric projection angle (degrees) - decreased for lower, more horizontal view
+SPLEEF_LAYER_VISUAL_OFFSET = 60  # Visual depth between layers (increased for better separation)
+
+# Layer colors (RGB) - distinct high-saturation hues for each platform
+SPLEEF_LAYER_COLORS = {
+    0: (100, 200, 255),  # Layer 0 - bright cyan/sky blue
+    1: (255, 150, 100),  # Layer 1 - vibrant orange
+    2: (200, 100, 255),  # Layer 2 - bright purple
+    3: (100, 255, 150),  # Layer 3 - bright mint green
+    4: (255, 100, 150),  # Layer 4 - hot pink
+    5: (255, 255, 100),  # Layer 5 - bright yellow
+    6: (100, 255, 255),  # Layer 6 - bright aqua
+    7: (255, 100, 255),  # Layer 7 - bright magenta
+    8: (150, 255, 100),  # Layer 8 - lime green
+    9: (255, 200, 100),  # Layer 9 - golden yellow
+}
+
+# Scoring
+SPLEEF_POINTS_PER_BLOCK_BROKEN = 5  # Bonus points for each block broken

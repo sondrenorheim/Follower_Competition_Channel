@@ -14,6 +14,7 @@ Usage:
 import argparse
 import os
 import time
+import random
 from pathlib import Path
 
 import config
@@ -71,9 +72,11 @@ def upload_instagram(cl: Client, video_path: Path, caption: str) -> bool:
         return True
     except Exception as e:
         print(f"⚠️ IG upload failed for {video_path.name}: {e}")
-        # One quick retry
+        # One retry after longer delay (avoid automation detection)
         try:
-            time.sleep(5)
+            retry_delay = random.randint(30, 60)  # 30-60 seconds
+            print(f"   Waiting {retry_delay}s before retry...")
+            time.sleep(retry_delay)
             media = cl.clip_upload(str(video_path), caption=caption)
             print(f"✅ IG uploaded on retry: {video_path.name} -> {media.pk}")
             return True
@@ -230,8 +233,8 @@ def parse_args():
     parser.add_argument(
         "--delay-seconds",
         type=int,
-        default=10800,
-        help="Delay between uploads in seconds (default 0). Use 10800 for 3 hours.",
+        default=14400,
+        help="Delay between uploads in seconds (default 14400 = 4 hours). Randomization of ±20%% will be applied.",
     )
     parser.add_argument(
         "--push-message",
@@ -243,11 +246,12 @@ def parse_args():
 
 def main():
     args = parse_args()
-    session_path = args.session_file or os.getenv("IG_SESSION_FILE")
-    if not session_path:
-        raise SystemExit("Missing session file. Provide --session-file or set IG_SESSION_FILE.")
-    session_path = Path(session_path)
-    tiktok_session_path = args.tiktok_session_file or os.getenv("TIKTOK_SESSION_FILE")
+    # Session files not needed when video upload is disabled
+    # session_path = args.session_file or os.getenv("IG_SESSION_FILE")
+    # if not session_path:
+    #     raise SystemExit("Missing session file. Provide --session-file or set IG_SESSION_FILE.")
+    # session_path = Path(session_path)
+    # tiktok_session_path = args.tiktok_session_file or os.getenv("TIKTOK_SESSION_FILE")
 
     # Build expected videos from ALL_GAME_MODES
     game_modes = getattr(config, "ALL_GAME_MODES", [])
@@ -256,6 +260,9 @@ def main():
     print("📦 Pushing stats/history to GitHub...")
     push_stats(args.push_message)
 
+    # VIDEO UPLOAD DISABLED - Only pushing stats to GitHub
+    # Uncomment the section below to re-enable video uploads
+    """
     print("📤 Uploading videos as Reels/TikTok...")
     client = load_client(session_path)
     tiktok_session_id = None
@@ -282,11 +289,16 @@ def main():
             upload_tiktok(tiktok_session_id, video_path, caption)
 
         # Delay before next upload (except after last one)
+        # Add randomization to avoid automation detection
         if args.delay_seconds > 0 and idx < len(video_paths) - 1:
-            print(f"⏳ Waiting {args.delay_seconds/3600:.2f} hours before next upload...")
-            time.sleep(args.delay_seconds)
+            # Add ±20% randomization to delay (e.g., 3 hours ± 36 minutes)
+            variation = args.delay_seconds * 0.2
+            randomized_delay = args.delay_seconds + random.uniform(-variation, variation)
+            print(f"⏳ Waiting {randomized_delay/3600:.2f} hours before next upload...")
+            time.sleep(randomized_delay)
+    """
 
-    print("✅ Done.")
+    print("✅ Done (stats pushed only - video upload disabled).")
 
 
 if __name__ == "__main__":

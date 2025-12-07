@@ -205,9 +205,9 @@ class TeamBattleRenderer:
             rect = display_surface.get_rect(center=(int(pos[0]), int(pos[1])))
             self.screen.blit(display_surface, rect)
 
-            # Draw HP bar
-            if fighter.alive or fighter.is_fading():
-                self._draw_hp_bar(fighter)
+            # Draw HP bar - DISABLED
+            # if fighter.alive or fighter.is_fading():
+            #     self._draw_hp_bar(fighter)
 
     def _get_fighter_surface(self, fighter: TeamFighter) -> pygame.Surface:
         """Get or create cached surface with team-colored ring"""
@@ -243,7 +243,16 @@ class TeamBattleRenderer:
         # Draw avatar or colored circle (inner)
         if fighter.avatar_image:
             avatar_surface = self._pil_to_pygame(fighter.avatar_image, int(inner_radius * 2))
-            self._draw_circular_image(surface, avatar_surface, inner_radius, render_radius)
+            if avatar_surface:
+                self._draw_circular_image(surface, avatar_surface, inner_radius, render_radius)
+            else:
+                # Avatar had invalid dimensions, use colored circle fallback
+                pygame.draw.circle(
+                    surface,
+                    fighter.team_color,
+                    (render_radius, render_radius),
+                    inner_radius
+                )
         else:
             # Always use team_color for inner circle to ensure consistent team appearance
             pygame.draw.circle(
@@ -828,11 +837,23 @@ class TeamBattleRenderer:
 
     def _pil_to_pygame(self, pil_image: Image.Image, size: int) -> pygame.Surface:
         """Convert PIL image to pygame surface"""
-        pil_image = pil_image.resize((size, size), Image.Resampling.LANCZOS)
-        mode = pil_image.mode
-        data = pil_image.tobytes()
-        surface = pygame.image.fromstring(data, pil_image.size, mode)
-        return surface.convert_alpha()
+        try:
+            # Validate image exists and has valid dimensions
+            if pil_image is None:
+                return None
+            if not hasattr(pil_image, 'width') or not hasattr(pil_image, 'height'):
+                return None
+            if pil_image.width == 0 or pil_image.height == 0:
+                return None
+
+            pil_image = pil_image.resize((size, size), Image.Resampling.LANCZOS)
+            mode = pil_image.mode
+            data = pil_image.tobytes()
+            surface = pygame.image.fromstring(data, pil_image.size, mode)
+            return surface.convert_alpha()
+        except Exception as e:
+            # Any error during conversion, return None to use fallback
+            return None
 
     def reset(self):
         """Reset renderer state"""

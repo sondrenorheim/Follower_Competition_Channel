@@ -37,6 +37,23 @@ def push_stats_to_github(
             "game_history.json"
         ]
 
+        # Conditionally add video files based on config
+        if getattr(config, 'AUTO_PUSH_INCLUDE_VIDEOS', False):
+            import glob
+            day_number = getattr(config, 'DAY_NUMBER', 0)
+            game_mode = getattr(config, 'GAME_MODE', 'unknown')
+
+            # Add video files matching common patterns
+            video_patterns = [
+                f"*_day_{day_number}.mp4",  # Root directory videos
+                f"Videos/Day_{day_number}/*.mp4",  # Videos in day folder
+                f"Uploaded videos/*_day_{day_number}.mp4",  # Uploaded videos folder
+            ]
+
+            for pattern in video_patterns:
+                matching_files = glob.glob(pattern)
+                files.extend(matching_files)
+
     # Default commit message
     if commit_message is None:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

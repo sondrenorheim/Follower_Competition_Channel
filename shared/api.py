@@ -17,6 +17,7 @@ import os
 import json
 import csv
 import time
+import glob
 from typing import List, Dict, Optional, Any
 import config
 
@@ -58,6 +59,24 @@ def _get_prefetched_followers(count: Optional[int]) -> Optional[List[Dict[str, A
     return [dict(f) for f in _PREFETCHED_FOLLOWERS[:slice_count]]
 
 
+def _find_newest_safe_follower_file() -> Optional[str]:
+    """
+    Find the newest followers_safe_*.json file in the current directory
+
+    Returns:
+        Path to newest file, or None if no files found
+    """
+    pattern = "followers_safe_*.json"
+    files = glob.glob(pattern)
+
+    if not files:
+        return None
+
+    # Sort by modification time (newest first)
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files[0]
+
+
 class InstagramAPI:
     """
     Handles Instagram data fetching via multiple methods:
@@ -81,7 +100,23 @@ class InstagramAPI:
         self.scraper_mode = getattr(config, 'USE_INSTALOADER_SCRAPER', False)
         self.insta_username = getattr(config, 'INSTAGRAM_USERNAME', '')
         self.insta_password = getattr(config, 'INSTAGRAM_PASSWORD', '')
-        self.import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
+
+        # Auto-detect newest safe follower file if configured file matches the safe pattern
+        import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
+        if import_file and 'followers_safe_' in import_file:
+            # Config file references a followers_safe_*.json file
+            # Always auto-detect the newest one to use latest data
+            newest_file = _find_newest_safe_follower_file()
+            if newest_file:
+                if newest_file != import_file:
+                    print(f"   Auto-detected newer follower file: {newest_file} (was: {import_file})")
+                self.import_file = newest_file
+            else:
+                # No safe files found, use configured file
+                self.import_file = import_file
+        else:
+            self.import_file = import_file
+
         self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
 
     def fetch_followers(self, count: Optional[int] = None) -> List[Dict[str, Any]]:

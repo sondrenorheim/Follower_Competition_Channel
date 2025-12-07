@@ -338,6 +338,10 @@ class EntityTemplate:
         if self.avatar_image:
             # Use profile picture
             try:
+                # Validate image dimensions before resizing
+                if self.avatar_image.width == 0 or self.avatar_image.height == 0:
+                    raise ValueError("Avatar image has invalid dimensions")
+
                 pil_resized = self.avatar_image.resize((size, size))
                 mode = pil_resized.mode
                 data = pil_resized.tobytes()

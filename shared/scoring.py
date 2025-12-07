@@ -68,6 +68,43 @@ class ScoringSystem:
         }
 
     @staticmethod
+    def calculate_scores(results: List[Dict], game_mode: str = "spleef") -> List[Dict]:
+        """
+        Calculate scores for all participants based on placement.
+
+        Args:
+            results: List of result dictionaries with 'username', 'display_name', 'placement', 'score'
+            game_mode: Game mode name (for compatibility)
+
+        Returns:
+            List of result dictionaries with calculated points added
+        """
+        if not results:
+            return []
+
+        total_participants = len(results)
+
+        # Calculate points for each participant
+        scored_results = []
+        for result in results:
+            placement = result['placement']
+            points = ScoringSystem.calculate_placement_points(placement, total_participants)
+
+            scored_results.append({
+                'username': result['username'],
+                'display_name': result['display_name'],
+                'placement': placement,
+                'score': result.get('score', 0),  # Keep original score if exists
+                'points': round(points, 2),
+                'total_points': round(points, 2)
+            })
+
+        # Sort by placement
+        scored_results.sort(key=lambda x: x['placement'])
+
+        return scored_results
+
+    @staticmethod
     def format_leaderboard(
         participants: List[Tuple[str, float]],
         top_n: int = 10,

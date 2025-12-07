@@ -626,6 +626,10 @@ def _create_game_instance(game_mode: str):
         from platformer_race import PlatformerRaceGame
         print("Starting Platformer Race mode...")
         return PlatformerRaceGame()
+    elif game_mode == "spleef":
+        from spleef import SpleefGame
+        print("Starting Spleef mode...")
+        return SpleefGame()
 
     print("Starting Battle Royale mode...")
     return FollowerBattleRoyale()
