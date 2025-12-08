@@ -228,8 +228,8 @@ class ObstacleCourseGame:
         # Small horizontal offset to ensure all racers start behind the starting line
         start_offset = config.FOLLOWER_RADIUS * 2  # Push back from start line
 
-        # Use the same layout as intro animation - 30 players per vertical line
-        max_racers_per_vertical_line = 30
+        # Use the same layout as intro animation - 60 players per vertical line (doubled)
+        max_racers_per_vertical_line = 120
 
         for i, data in enumerate(follower_data):
             # Determine position in spread-out layout (same as intro)

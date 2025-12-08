@@ -70,7 +70,7 @@ class Racer(Follower):
         Get target movement speed (pixels per frame)
         Based on speed stat and dynamic multiplier (no zone effects)
         """
-        base_speed = self.speed_stat / 2.14  # Reduced by 30% (was 1.5)
+        base_speed = self.speed_stat / 4.28  # Reduced to half speed (was 2.14)
 
         # Apply dynamic speed multiplier (varies throughout race)
         return base_speed * self.speed_multiplier

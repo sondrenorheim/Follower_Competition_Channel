@@ -18,6 +18,7 @@ import json
 import csv
 import time
 import glob
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 import config
 
@@ -118,6 +119,10 @@ class InstagramAPI:
             self.import_file = import_file
 
         self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
+
+        # Avatar cache directory (persistent across runs)
+        self.avatar_cache_dir = Path("avatar_cache")
+        self.avatar_cache_dir.mkdir(exist_ok=True)
 
     def fetch_followers(self, count: Optional[int] = None) -> List[Dict[str, Any]]:
         """
@@ -253,16 +258,28 @@ class InstagramAPI:
 
         return followers if followers else None
 
-    def _download_avatar(self, url: Optional[str]) -> Optional[Image.Image]:
+    def _download_avatar(self, url: Optional[str], username: Optional[str] = None) -> Optional[Image.Image]:
         """
         Download avatar image from URL with retry logic and caching.
+        Checks disk cache first if username is provided.
         """
         if not url:
             return None
 
-        # Return cached if already fetched this run
+        # Return cached if already fetched this run (in-memory cache)
         if url in _AVATAR_CACHE:
             return _AVATAR_CACHE[url]
+
+        # Check disk cache if username provided
+        if username:
+            cache_file = self.avatar_cache_dir / f"{username}.jpg"
+            if cache_file.exists():
+                try:
+                    img = Image.open(cache_file).convert('RGBA')
+                    _AVATAR_CACHE[url] = img  # Store in memory for this run
+                    return img
+                except Exception as e:
+                    print(f"      Failed to load cached avatar for {username}: {e}")
 
         # Throttle requests to reduce 429s
         global _LAST_AVATAR_FETCH_TS
@@ -291,6 +308,16 @@ class InstagramAPI:
                 response.raise_for_status()
                 img = Image.open(io.BytesIO(response.content)).convert("RGBA")
                 _AVATAR_CACHE[url] = img
+
+                # Save to disk cache if username provided
+                if username:
+                    cache_file = self.avatar_cache_dir / f"{username}.jpg"
+                    try:
+                        rgb_img = img.convert('RGB')
+                        rgb_img.save(cache_file, 'JPEG', quality=85, optimize=True)
+                    except Exception as e:
+                        print(f"      Failed to cache avatar for {username}: {e}")
+
                 return img
             except requests.exceptions.Timeout:
                 if attempt >= max_retries - 1:
@@ -523,7 +550,7 @@ class InstagramAPI:
                             avatar_img = None
                             download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
                             if profile_pic_url and download_pics:
-                                avatar_img = self._download_avatar(profile_pic_url)
+                                avatar_img = self._download_avatar(profile_pic_url, username=username)
                                 # Show progress every 10 downloads
                                 if (i + 1) % 10 == 0:
                                     print(f"   📥 Downloaded {i + 1} profile pictures...")
@@ -580,7 +607,7 @@ class InstagramAPI:
                             # Optionally download profile picture if URL provided and enabled
                             avatar_img = None
                             if profile_pic_url and download_pics:
-                                avatar_img = self._download_avatar(profile_pic_url)
+                                avatar_img = self._download_avatar(profile_pic_url, username=username)
 
                                 # Show progress every 10 downloads
                                 if (i + 1) % 10 == 0:

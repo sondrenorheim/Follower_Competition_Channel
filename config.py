@@ -8,8 +8,9 @@ from pathlib import Path
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
 #          "snake_escape", "team_battle", "platformer_race", "spleef", "ALL"
 # When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
-# ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
-ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
+ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
+# ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
+# ALL_GAME_MODES = ["battle_royale", "fighter_arena", "snake_escape"]
 
 # ===== GAME SETTINGS =====
 SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
@@ -32,6 +33,11 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
 TEST_MODE = False
+EXPORT_VIDEO = True
+DAY_NUMBER = 18 
+DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
+
+
 # Minimal test players - when True, use generated test users instead of real followers
 TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
 TEST_MINIMAL_PLAYER_COUNT = 400  # Number of test users to generate
@@ -40,9 +46,7 @@ AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
 AUTO_PUSH_INCLUDE_VIDEOS = False
 TEST_MODE_SPEED_MULTIPLIER = 1  # Speed multiplier when TEST_MODE is True (0.5 = half speed, 1.0 = normal)
-EXPORT_VIDEO = True
-DAY_NUMBER = 17  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
+ # Increment this each time you record a new video
 UPSCALE_VIDEO = True  # Enable upscaling for higher quality video output
 UPSCALE_FACTOR = 2.0 
 EXPORT_TIME_SCALE = 1  # Run simulation at half speed during export for smoother results
