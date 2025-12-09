@@ -5,6 +5,7 @@ Main game orchestrator for Spleef mode
 
 import pygame
 import time
+import math
 from typing import List
 from PIL import Image
 import numpy as np
@@ -100,6 +101,23 @@ class SpleefGame:
         print(f"AI system: {self.ai}")
         print(f"Renderer: {self.renderer}")
 
+    def calculate_hits_per_block(self, player_count: int) -> int:
+        """
+        Scale hits-per-block with player count (baseline: 4 hits at 400 players).
+
+        For every +100 players above 400, require +1 hit (e.g., 800 players -> 8 hits).
+        """
+        base_hits = getattr(config, 'SPLEEF_BASE_HITS_PER_BLOCK', 4)
+        base_players = getattr(config, 'SPLEEF_HITS_SCALE_BASE_PLAYERS', 400)
+        hits_per_100 = getattr(config, 'SPLEEF_HITS_PER_100_PLAYERS', 1)
+
+        if player_count <= base_players:
+            return base_hits
+
+        extra_players = max(0, player_count - base_players)
+        extra_hits = math.ceil(extra_players / 100) * hits_per_100
+        return base_hits + extra_hits
+
     def load_players_from_instagram(self):
         """Load players from Instagram followers or generate test players"""
 
@@ -135,7 +153,12 @@ class SpleefGame:
                 self.players.append(player)
 
         # Spawn players on top layer
-        spawn_positions = self.arena.get_spawn_positions(len(self.players))
+        total_players = len(self.players)
+        hits_per_block = self.calculate_hits_per_block(total_players)
+        self.arena.update_block_durability(hits_per_block)
+        print(f"   Block durability set to {hits_per_block} hits (players: {total_players})")
+
+        spawn_positions = self.arena.get_spawn_positions(total_players)
 
         for player, (spawn_x, spawn_y, layer) in zip(self.players, spawn_positions):
             player.set_spawn_position(spawn_x, spawn_y, layer)

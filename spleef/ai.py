@@ -20,7 +20,7 @@ class SpleefAI:
     - 20% chance for random movement, 80% prefer safe (solid) blocks
     - Actively tries to damage nearby blocks (within 1 block radius)
     - Can deal 1 damage per second to blocks
-    - Blocks require 3 hits to break: INTACT → CRACKED → BREAKING → BROKEN
+    - Block durability scales with player count (hits-to-break set in SpleefGame)
     """
 
     def __init__(self):

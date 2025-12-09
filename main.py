@@ -630,6 +630,10 @@ def _create_game_instance(game_mode: str):
         from spleef import SpleefGame
         print("Starting Spleef mode...")
         return SpleefGame()
+    elif game_mode == "meteor_mayhem":
+        from meteor_mayhem import MeteorMayhemGame
+        print("Starting Meteor Mayhem mode...")
+        return MeteorMayhemGame()
 
     print("Starting Battle Royale mode...")
     return FollowerBattleRoyale()

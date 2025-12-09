@@ -20,41 +20,42 @@ class Block:
     Represents a single floor block that can degrade over time
 
     State Machine (damage-based, not time-based):
-    INTACT (0) → CRACKED (1) → BREAKING (2) → BROKEN (3)
-      1 damage     2 damages     3 damages
-
-    Players can deal 1 damage per second by stepping on block
+    INTACT (0) -> CRACKED (1) -> BREAKING (2) -> BROKEN (3)
+    Players deal 1 damage per step; total hits required to break is configurable.
     """
 
-    def __init__(self, grid_x: int, grid_y: int):
+    def __init__(self, grid_x: int, grid_y: int, hits_to_break: int = 4):
         """
         Initialize a block
 
         Args:
             grid_x: Grid X coordinate
             grid_y: Grid Y coordinate
+            hits_to_break: Total hits required to reach BROKEN
         """
         self.grid_x = grid_x
         self.grid_y = grid_y
         self.state = BlockState.INTACT
         self.last_stepped_time = 0.0
+        self.hits_to_break = max(1, hits_to_break)
+        self.damage_taken = 0
 
     def step_on(self):
         """
         Deal 1 damage to this block
-        Each call advances the block to the next damage state
-
-        INTACT → CRACKED → BREAKING → BROKEN
+        Each call advances the block based on configured durability
         """
-        if self.state == BlockState.INTACT:
-            self.state = BlockState.CRACKED
-            self.last_stepped_time = time.time()
-        elif self.state == BlockState.CRACKED:
-            self.state = BlockState.BREAKING
-            self.last_stepped_time = time.time()
-        elif self.state == BlockState.BREAKING:
-            self.state = BlockState.BROKEN
-            self.last_stepped_time = time.time()
+        if self.state == BlockState.BROKEN:
+            return
+
+        self.damage_taken += 1
+        self.last_stepped_time = time.time()
+
+        # Spread the three visible states evenly across the required hit count
+        # progress_stage: 0=intact, 1=cracked, 2=breaking, 3=broken
+        progress_stage = int((self.damage_taken * 3) // self.hits_to_break)
+        progress_stage = min(progress_stage, BlockState.BROKEN)
+        self.state = BlockState(progress_stage)
 
     def update(self, dt: float):
         """

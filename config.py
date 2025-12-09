@@ -8,7 +8,7 @@ from pathlib import Path
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
 #          "snake_escape", "team_battle", "platformer_race", "spleef", "ALL"
 # When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
-ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race"]
+ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "spleef", "meteor_mayhem"]
 # ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
 # ALL_GAME_MODES = ["battle_royale", "fighter_arena", "snake_escape"]
 
@@ -31,16 +31,16 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = False
+GAME_MODE = "meteor_mayhem" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
+TEST_MODE = True
 EXPORT_VIDEO = True
-DAY_NUMBER = 18 
-DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
+DAY_NUMBER = 19 
+DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
 
 
 # Minimal test players - when True, use generated test users instead of real followers
 TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 400  # Number of test users to generate
+TEST_MINIMAL_PLAYER_COUNT = 30000  # Number of test users to generate
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
@@ -348,6 +348,31 @@ SNAKE_ESCAPE_DEFAULT_STATS = {
     "movement_randomness": 0.1   # Movement direction randomness (0-1)
 }
 
+# ===== METEOR MAYHEM SETTINGS =====
+METEOR_ZONE_INITIAL_RADIUS = 240     # Safe zone radius at start
+METEOR_ZONE_MIN_RADIUS = 90          # Minimum radius after shrinking
+METEOR_ZONE_SHRINK_RATE = 4.0        # Pixels per second shrink
+METEOR_SPAWN_INTERVAL = (1.4, 2.4)   # Seconds between meteor spawns (min, max)
+METEOR_FALL_SPEED = (380.0, 520.0)   # Speed range for meteors (pixels/sec)
+METEOR_RADIUS = (10, 16)             # Visual radius range
+METEOR_IMPACT_RADIUS = (60, 90)      # Damage radius range (larger for stronger visuals)
+METEOR_PLAYER_SPEED = 110.0          # Player move speed (pixels/sec)
+METEOR_PLAYER_JITTER = 0.35          # Randomness factor to movement
+METEOR_PUSH_FORCE = 8.0              # Bump strength between players
+METEOR_MAX_PLAY_AREA = 500           # Play area diameter (for clamping)
+METEOR_BG_COLOR = (18, 20, 34)       # Dark background
+METEOR_ZONE_COLOR = (70, 80, 140)    # Safe zone outline
+METEOR_COLOR = (255, 120, 70)        # Meteor color
+METEOR_IMPACT_COLOR = (255, 200, 120) # Impact ring color
+METEOR_PLAYER_COLORS = [
+    (90, 200, 255),
+    (255, 140, 200),
+    (140, 255, 160),
+    (255, 220, 100),
+    (200, 150, 255),
+    (255, 170, 120),
+]
+
 # ===== TEAM BATTLE SETTINGS =====
 # Team colors (RGB) - used for team rings around fighters
 TEAM_BATTLE_COLORS = {
@@ -380,6 +405,10 @@ SPLEEF_LAYER_SPACING = 60        # Vertical spacing between layers (reduced from
 SPLEEF_CRACK_DURATION = 0.2      # Time in CRACKED state (seconds)
 SPLEEF_BREAK_DURATION = 0.3      # Time in BREAKING state (seconds)
 SPLEEF_FALL_DURATION = 0.5       # Time falling through broken block (seconds)
+# Hits-to-break scaling (baseline 4 hits at 400 players; +1 hit per 100 players above 400)
+SPLEEF_BASE_HITS_PER_BLOCK = 4
+SPLEEF_HITS_SCALE_BASE_PLAYERS = 400
+SPLEEF_HITS_PER_100_PLAYERS = 1  # Keep at 1 to match “+1 hit per +100 players”
 
 # Physics
 SPLEEF_MOVE_SPEED = 100.0        # Player movement speed (reduced from 150)
@@ -388,7 +417,7 @@ SPLEEF_FALL_SPEED_MAX = 600.0    # Maximum falling speed (reduced from 800)
 
 # Rendering (isometric 2.5D view)
 SPLEEF_ISO_ANGLE = 20            # Isometric projection angle (degrees) - decreased for lower, more horizontal view
-SPLEEF_LAYER_VISUAL_OFFSET = 60  # Visual depth between layers (increased for better separation)
+SPLEEF_LAYER_VISUAL_OFFSET = 85  # Visual depth between layers (spread out to fill screen)
 
 # Layer colors (RGB) - distinct high-saturation hues for each platform
 SPLEEF_LAYER_COLORS = {
@@ -406,3 +435,16 @@ SPLEEF_LAYER_COLORS = {
 
 # Scoring
 SPLEEF_POINTS_PER_BLOCK_BROKEN = 5  # Bonus points for each block broken
+
+# Layer visibility settings
+SPLEEF_USE_LAYER_TRANSPARENCY = True   # Enable progressive layer transparency
+SPLEEF_LAYER_MIN_OPACITY = 80          # Min alpha for sparse upper layers (0-255)
+SPLEEF_LAYER_MAX_OPACITY = 255         # Max alpha (fully opaque)
+
+# Layer indicator panel (side panel showing player distribution)
+SPLEEF_SHOW_LAYER_PANEL = True         # Enable layer indicator panel
+SPLEEF_LAYER_PANEL_X = 420             # X position (move left to avoid overlap)
+SPLEEF_LAYER_PANEL_Y = 50              # Y position (higher on screen)
+SPLEEF_LAYER_PANEL_WIDTH = 70          # Panel width
+SPLEEF_LAYER_PANEL_BAR_HEIGHT = 8      # Height of each layer bar
+SPLEEF_LAYER_PANEL_SPACING = 3         # Spacing between bars

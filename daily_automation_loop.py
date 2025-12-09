@@ -70,8 +70,27 @@ class DailyAutomationLoop:
                 'last_upload_date': None,
                 'last_game_run_date': None,
                 'current_day': config.DAY_NUMBER,
-                'videos_uploaded_today': []
+                # Legacy key kept for backward compatibility
+                'videos_uploaded_today': [],
+                'videos_uploaded_instagram': [],
+                'videos_uploaded_tiktok': []
             }
+
+        # Migrate legacy state to per-platform tracking so we can retry failed platforms
+        if 'videos_uploaded_instagram' not in self.state or 'videos_uploaded_tiktok' not in self.state:
+            legacy = self.state.get('videos_uploaded_today', [])
+            self.state.setdefault('videos_uploaded_instagram', list(legacy))
+            self.state.setdefault('videos_uploaded_tiktok', list(legacy))
+
+        # If config.py has been bumped (e.g., you generated newer-day videos manually),
+        # keep the automation state in sync so uploads target the latest day.
+        config_day = getattr(config, 'DAY_NUMBER', None)
+        if config_day and self.state.get('current_day', 0) < config_day:
+            self.state['current_day'] = config_day
+            self.state['videos_uploaded_today'] = []
+            self.state['videos_uploaded_instagram'] = []
+            self.state['videos_uploaded_tiktok'] = []
+            self.save_state()
 
     def save_state(self):
         """Save automation state to file"""
@@ -179,22 +198,20 @@ class DailyAutomationLoop:
                 "--headless"  # Run in background
             ]
 
+            # Don't capture output - let it stream in real-time so we see detailed logging
             result = subprocess.run(
                 cmd,
-                capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='replace',  # Replace encoding errors instead of crashing
-                timeout=600  # 10 minute timeout
+                timeout=300  # 5 minute timeout (reduced from 10)
             )
 
             if result.returncode == 0:
                 self.log("   SUCCESS: Instagram upload successful")
                 return True
             else:
-                # Get error from stderr or stdout
-                error_msg = result.stderr[:500] if result.stderr else result.stdout[:500] if result.stdout else "Unknown error - no output"
-                self.log(f"   ERROR: Instagram upload failed (exit code {result.returncode}): {error_msg}")
+                self.log(f"   ERROR: Instagram upload failed (exit code {result.returncode})")
                 return False
 
         except subprocess.TimeoutExpired:
@@ -292,9 +309,11 @@ class DailyAutomationLoop:
         self.log(f"Found {len(videos)} videos to upload")
 
         for idx, (video_path, game_mode) in enumerate(videos):
-            # Skip if already uploaded today
-            if video_path in self.state.get('videos_uploaded_today', []):
-                self.log(f"SKIP: {Path(video_path).name} (already uploaded)")
+            ig_done = video_path in self.state.get('videos_uploaded_instagram', [])
+            tt_done = video_path in self.state.get('videos_uploaded_tiktok', [])
+
+            if ig_done and tt_done:
+                self.log(f"SKIP: {Path(video_path).name} (already uploaded to Instagram and TikTok)")
                 continue
 
             self.log(f"\nUploading video {idx + 1}/{len(videos)}: {game_mode}")
@@ -303,14 +322,28 @@ class DailyAutomationLoop:
             caption = self.build_caption(game_mode, self.state['current_day'])
 
             # Upload to Instagram
-            ig_success = self.upload_video_instagram(video_path, caption)
+            ig_success = False
+            if ig_done:
+                self.log(f"   SKIP Instagram: {Path(video_path).name} (already uploaded)")
+            else:
+                ig_success = self.upload_video_instagram(video_path, caption)
 
             # Upload to TikTok
-            tt_success = self.upload_video_tiktok(video_path, caption)
+            tt_success = False
+            if tt_done:
+                self.log(f"   SKIP TikTok: {Path(video_path).name} (already uploaded)")
+            else:
+                tt_success = self.upload_video_tiktok(video_path, caption)
 
-            # Mark as uploaded if either succeeded
+            # Mark per-platform successes
+            if ig_success:
+                if video_path not in self.state['videos_uploaded_instagram']:
+                    self.state['videos_uploaded_instagram'].append(video_path)
+            if tt_success:
+                if video_path not in self.state['videos_uploaded_tiktok']:
+                    self.state['videos_uploaded_tiktok'].append(video_path)
+
             if ig_success or tt_success:
-                self.state['videos_uploaded_today'].append(video_path)
                 self.save_state()
 
             # Log upload results
@@ -325,8 +358,8 @@ class DailyAutomationLoop:
 
             # Delay before next upload (except for last one)
             if idx < len(videos) - 1:
-                # Random delay between 3-4 hours
-                delay_hours = random.uniform(3.0, 4.0)
+                # Random delay between 2-3 hours
+                delay_hours = random.uniform(2.0, 3.0)
                 delay_seconds = delay_hours * 3600
 
                 self.log(f"\nWaiting {delay_hours:.2f} hours before next upload...")
@@ -452,6 +485,8 @@ class DailyAutomationLoop:
                 self.log("SUCCESS: Games completed successfully")
                 # Reset uploaded videos list for new day
                 self.state['videos_uploaded_today'] = []
+                self.state['videos_uploaded_instagram'] = []
+                self.state['videos_uploaded_tiktok'] = []
                 self.state['last_game_run_date'] = datetime.now().isoformat()
                 self.save_state()
                 return True

@@ -14,7 +14,7 @@ class FloorGrid:
     Only stores existing blocks; broken blocks are removed from the dictionary
     """
 
-    def __init__(self, layer_index: int, world_x: float, world_y: float):
+    def __init__(self, layer_index: int, world_x: float, world_y: float, hits_to_break: int = None):
         """
         Initialize floor grid
 
@@ -22,6 +22,7 @@ class FloorGrid:
             layer_index: Index of this layer (0=top, 1=middle, 2=bottom)
             world_x: Top-left world X coordinate
             world_y: Top-left world Y coordinate
+            hits_to_break: Total hits required to break a block (defaults to config)
         """
         self.layer_index = layer_index
         self.world_x = world_x
@@ -31,6 +32,7 @@ class FloorGrid:
         self.grid_width = getattr(config, 'SPLEEF_GRID_WIDTH', 20)
         self.grid_height = getattr(config, 'SPLEEF_GRID_HEIGHT', 15)
         self.block_size = getattr(config, 'SPLEEF_BLOCK_SIZE', 32)
+        self.hits_to_break = max(1, hits_to_break or getattr(config, 'SPLEEF_BASE_HITS_PER_BLOCK', 4))
 
         # Sparse grid storage: only store existing blocks
         self.blocks: Dict[Tuple[int, int], Block] = {}
@@ -45,8 +47,19 @@ class FloorGrid:
         """Create all blocks in intact state"""
         for grid_y in range(self.grid_height):
             for grid_x in range(self.grid_width):
-                block = Block(grid_x, grid_y)
+                block = Block(grid_x, grid_y, hits_to_break=self.hits_to_break)
                 self.blocks[(grid_x, grid_y)] = block
+
+    def set_hits_to_break(self, hits_to_break: int):
+        """
+        Update durability for all existing blocks
+
+        Args:
+            hits_to_break: New hit count required to break a block
+        """
+        self.hits_to_break = max(1, hits_to_break)
+        for block in self.blocks.values():
+            block.hits_to_break = self.hits_to_break
 
     def get_block(self, grid_x: int, grid_y: int) -> Optional[Block]:
         """

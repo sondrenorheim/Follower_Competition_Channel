@@ -63,6 +63,11 @@ class SpleefPlayer:
         # Falling state (for smooth layer transitions)
         self.is_falling = False
 
+        # Store grid position when falling starts (for proper layer transition)
+        # This preserves the player's X/Y platform position when they drop to a lower layer
+        self.fall_start_grid_x: int = 0
+        self.fall_start_grid_y: int = 0
+
         # Random break speed modifier (±0.1 seconds variation)
         import random
         self.break_speed_modifier = random.uniform(-0.1, 0.1)

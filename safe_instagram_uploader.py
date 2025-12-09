@@ -49,6 +49,17 @@ class SafeInstagramUploader:
         self.cookies_file = cookies_file
         self.headless = headless
         self.driver = None
+        self.start_time = None
+
+    def _log(self, message: str, level: str = "INFO"):
+        """Log message with timestamp and elapsed time"""
+        import datetime
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        elapsed = ""
+        if self.start_time:
+            elapsed_sec = (time.time() - self.start_time)
+            elapsed = f" [{elapsed_sec:.1f}s]"
+        print(f"[{now}]{elapsed} [{level}] {message}", flush=True)
 
     def _setup_driver(self):
         """Setup Chrome driver with options"""
@@ -135,8 +146,8 @@ class SafeInstagramUploader:
             True if cookies loaded successfully
         """
         if not Path(self.cookies_file).exists():
-            print(f"ERROR: Cookie file not found: {self.cookies_file}")
-            print("Run with --save-cookies first to log in and save your session.")
+            self._log(f"Cookie file not found: {self.cookies_file}", "ERROR")
+            self._log("Run with --save-cookies first to log in and save your session.", "ERROR")
             return False
 
         try:
@@ -155,7 +166,7 @@ class SafeInstagramUploader:
                 try:
                     self.driver.add_cookie(cookie)
                 except Exception as e:
-                    print(f"Warning: Could not add cookie {cookie.get('name')}: {e}")
+                    self._log(f"Could not add cookie {cookie.get('name')}: {e}", "WARN")
 
             # Refresh to apply cookies
             self.driver.refresh()
@@ -165,15 +176,15 @@ class SafeInstagramUploader:
             try:
                 # If we see login button, cookies didn't work
                 self.driver.find_element(By.XPATH, "//button[contains(text(), 'Log in')]")
-                print("WARNING: Cookies expired or invalid. Please run --save-cookies again.")
+                self._log("Cookies expired or invalid. Please run --save-cookies again.", "ERROR")
                 return False
             except NoSuchElementException:
                 # Good! No login button means we're logged in
-                print("SUCCESS: Logged in successfully using saved cookies")
+                self._log("Logged in successfully using saved cookies", "SUCCESS")
                 return True
 
         except Exception as e:
-            print(f"ERROR: Error loading cookies: {e}")
+            self._log(f"Error loading cookies: {e}", "ERROR")
             return False
 
     def upload_reel(self, video_path: str, caption: str = "") -> bool:
@@ -187,38 +198,52 @@ class SafeInstagramUploader:
         Returns:
             True if upload successful
         """
+        self.start_time = time.time()
         video_path = Path(video_path).resolve()
 
+        self._log("=" * 50)
+        self._log("INSTAGRAM REEL UPLOAD STARTED")
+        self._log("=" * 50)
+
         if not video_path.exists():
-            print(f"ERROR: Video not found: {video_path}")
+            self._log(f"Video not found: {video_path}", "ERROR")
             return False
 
-        print(f"Uploading: {video_path.name}")
-        print(f"Caption: {caption[:50]}..." if len(caption) > 50 else f"Caption: {caption}")
+        self._log(f"Video file: {video_path.name}")
+        self._log(f"Video size: {video_path.stat().st_size / 1024 / 1024:.1f} MB")
+        self._log(f"Caption: {caption[:50]}..." if len(caption) > 50 else f"Caption: {caption}")
 
         try:
+            self._log("STEP 1: Setting up Chrome browser...")
             self._setup_driver()
+            self._log("Browser started successfully")
 
+            self._log("STEP 2: Loading saved cookies...")
             if not self._load_cookies():
+                self._log("Failed to load cookies", "ERROR")
                 return False
 
             # Navigate to create page
-            print("Opening create page...")
+            self._log("STEP 3: Navigating to Instagram home...")
             self.driver.get("https://www.instagram.com/")
+            self._log("Waiting for page to load...")
             self._human_delay(3, 5)
+            self._log("Page loaded")
 
             # Handle "Turn on Notifications" popup if it appears
+            self._log("Checking for notification popup...")
             try:
                 not_now = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
                 )
+                self._log("Found notification popup, dismissing...")
                 not_now.click()
                 self._human_delay(1, 2)
             except TimeoutException:
-                pass  # No popup, continue
+                self._log("No notification popup found (OK)")
 
             # Click the Create/New Post button
-            print("Looking for Create button...")
+            self._log("STEP 4: Looking for Create button...")
             try:
                 # Try multiple selectors for the create button
                 create_selectors = [
@@ -232,24 +257,27 @@ class SafeInstagramUploader:
 
                 create_button = None
                 for selector in create_selectors:
+                    self._log(f"  Trying selector: {selector[:40]}...")
                     try:
                         create_button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
-                        print(f"Found create button with selector: {selector}")
+                        self._log(f"  SUCCESS: Found Create button!")
                         break
                     except TimeoutException:
+                        self._log(f"  Not found with this selector")
                         continue
 
                 if not create_button:
-                    print("ERROR: Could not find Create button")
+                    self._log("Could not find Create button after trying all selectors", "ERROR")
                     return False
 
+                self._log("Clicking Create button...")
                 create_button.click()
                 self._human_delay(2, 4)
 
                 # After clicking Create, there might be a menu. Look for "Post" or "Reel" option
-                print("Checking for Post/Reel menu...")
+                self._log("Checking for Post/Reel menu...")
                 try:
                     post_selectors = [
                         "//span[text()='Post']",
@@ -263,35 +291,37 @@ class SafeInstagramUploader:
                             post_option = WebDriverWait(self.driver, 3).until(
                                 EC.element_to_be_clickable((By.XPATH, selector))
                             )
-                            print(f"Found Post option, clicking...")
+                            self._log("Found Post option, clicking...")
                             post_option.click()
                             self._human_delay(1, 2)
                             break
                         except TimeoutException:
                             continue
                 except Exception as e:
-                    print(f"No Post menu found (this is okay): {e}")
+                    self._log(f"No Post menu found (this is okay)")
 
             except Exception as e:
-                print(f"ERROR: Failed to click Create button: {e}")
+                self._log(f"Failed to click Create button: {e}", "ERROR")
                 return False
 
             # Find file input and upload video
-            print("Selecting video file...")
+            self._log("STEP 5: Looking for file upload input...")
 
             # Try multiple approaches to find the file input
             file_input = None
 
             # Approach 1: Direct file input
+            self._log("  Approach 1: Looking for direct file input...")
             try:
                 file_input = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]'))
                 )
-                print("Found file input directly")
+                self._log("  SUCCESS: Found file input directly")
             except TimeoutException:
-                print("File input not immediately visible, looking for 'Select from computer' button...")
+                self._log("  File input not visible, trying approach 2...")
 
                 # Approach 2: Click "Select from computer" button first
+                self._log("  Approach 2: Looking for 'Select from computer' button...")
                 try:
                     select_buttons = [
                         "//button[contains(text(), 'Select from computer')]",
@@ -305,7 +335,7 @@ class SafeInstagramUploader:
                             select_btn = WebDriverWait(self.driver, 3).until(
                                 EC.element_to_be_clickable((By.XPATH, selector))
                             )
-                            print(f"Found select button, clicking...")
+                            self._log("  Found 'Select from computer' button, clicking...")
                             select_btn.click()
                             self._human_delay(1, 2)
                             break
@@ -316,25 +346,27 @@ class SafeInstagramUploader:
                     file_input = WebDriverWait(self.driver, 5).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]'))
                     )
-                    print("Found file input after clicking select button")
+                    self._log("  SUCCESS: Found file input after clicking select button")
                 except TimeoutException:
                     pass
 
             if not file_input:
-                print("ERROR: Could not find file upload input after all attempts")
+                self._log("Could not find file upload input after all attempts", "ERROR")
                 return False
 
             # Upload the file
-            print(f"Uploading file: {video_path.name}")
+            self._log(f"STEP 6: Uploading video file: {video_path.name}")
             file_input.send_keys(str(video_path))
+            self._log("File path sent to input, waiting for upload...")
             self._human_delay(3, 5)
 
             # Wait for video to load
-            print("Waiting for video to load...")
+            self._log("Waiting for video to process (5 seconds)...")
             time.sleep(5)
+            self._log("Video processing wait complete")
 
             # Handle "Video posts are now shared as reels" popup
-            print("Checking for Reels info popup...")
+            self._log("Checking for Reels info popup...")
             try:
                 ok_button_selectors = [
                     "//button[text()='OK']",
@@ -347,17 +379,17 @@ class SafeInstagramUploader:
                         ok_button = WebDriverWait(self.driver, 3).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
-                        print("Found OK button on Reels popup, clicking...")
+                        self._log("Found OK button on Reels popup, clicking...")
                         ok_button.click()
                         self._human_delay(1, 2)
                         break
                     except TimeoutException:
                         continue
             except Exception as e:
-                print(f"No Reels popup found (this is okay): {e}")
+                self._log("No Reels popup found (OK)")
 
             # Check for crop/aspect ratio options and select 9:16 (vertical)
-            print("Looking for aspect ratio options...")
+            self._log("Checking for aspect ratio options...")
             try:
                 # Look for aspect ratio button or crop button
                 aspect_selectors = [
@@ -373,7 +405,7 @@ class SafeInstagramUploader:
                         aspect_button = WebDriverWait(self.driver, 3).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
-                        print(f"Found aspect ratio button, clicking...")
+                        self._log("Found aspect ratio button, clicking...")
                         aspect_button.click()
                         self._human_delay(1, 2)
                         break
@@ -394,7 +426,7 @@ class SafeInstagramUploader:
                             vertical_option = WebDriverWait(self.driver, 2).until(
                                 EC.element_to_be_clickable((By.XPATH, selector))
                             )
-                            print(f"Found vertical/9:16 option, clicking...")
+                            self._log("Found vertical/9:16 option, clicking...")
                             vertical_option.click()
                             self._human_delay(1, 2)
                             break
@@ -402,11 +434,10 @@ class SafeInstagramUploader:
                             continue
 
             except Exception as e:
-                print(f"Aspect ratio selection: {e}")
-                print("Note: Video may use default aspect ratio. Ensure your videos are already 9:16 format.")
+                self._log("Aspect ratio selection skipped (using default)")
 
             # Click "Next" button to proceed (there might be multiple Next buttons)
-            print("Clicking Next...")
+            self._log("STEP 7: Clicking Next button...")
             next_selectors = [
                 "//button[contains(text(), 'Next')]",
                 "//button[text()='Next']",
@@ -427,14 +458,16 @@ class SafeInstagramUploader:
                         continue
 
                 if next_button:
+                    self._log("Found first Next button, clicking...")
                     next_button.click()
                     self._human_delay(2, 3)
                 else:
-                    print("WARNING: First Next button not found, trying to continue...")
+                    self._log("First Next button not found, trying to continue...", "WARN")
             except Exception as e:
-                print(f"WARNING: Error clicking first Next: {e}")
+                self._log(f"Error clicking first Next: {e}", "WARN")
 
             # Click Next again if there's a second step
+            self._log("Checking for second Next button...")
             try:
                 next_button = None
                 for selector in next_selectors:
@@ -447,13 +480,16 @@ class SafeInstagramUploader:
                         continue
 
                 if next_button:
+                    self._log("Found second Next button, clicking...")
                     next_button.click()
                     self._human_delay(2, 3)
+                else:
+                    self._log("No second Next button (OK)")
             except Exception:
-                pass  # No second Next button
+                self._log("No second Next button (OK)")
 
             # Try to select a better cover/thumbnail from middle of video
-            print("Looking for cover/thumbnail options...")
+            self._log("Checking for cover/thumbnail options...")
             try:
                 # Look for "Add cover" or "Edit cover" button
                 cover_selectors = [
@@ -470,12 +506,12 @@ class SafeInstagramUploader:
                         cover_button = WebDriverWait(self.driver, 3).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
-                        print(f"Found cover button, clicking...")
+                        self._log("Found cover button, clicking...")
                         cover_button.click()
                         self._human_delay(2, 3)
 
                         # Try to find and drag the thumbnail slider to the middle
-                        print("Looking for thumbnail slider...")
+                        self._log("Looking for thumbnail slider...")
                         try:
                             from selenium.webdriver.common.action_chains import ActionChains
 
@@ -493,7 +529,7 @@ class SafeInstagramUploader:
                                         slider = self.driver.find_element(By.XPATH, slider_sel)
                                     else:
                                         slider = self.driver.find_element(By.CSS_SELECTOR, slider_sel)
-                                    print(f"Found slider!")
+                                    self._log("Found slider!")
                                     break
                                 except NoSuchElementException:
                                     continue
@@ -510,13 +546,13 @@ class SafeInstagramUploader:
 
                                 # Click at the center of the slider
                                 actions.click().perform()
-                                print("Selected middle frame of video for thumbnail")
+                                self._log("Selected middle frame of video for thumbnail")
                                 self._human_delay(1, 2)
                             else:
-                                print("No slider found, using default frame")
+                                self._log("No slider found, using default frame")
 
                         except Exception as slider_error:
-                            print(f"Could not adjust slider: {slider_error}")
+                            self._log(f"Could not adjust slider: {slider_error}")
 
                         # Close cover selector if there's a done/save button
                         try:
@@ -532,27 +568,27 @@ class SafeInstagramUploader:
                                         EC.element_to_be_clickable((By.XPATH, done_sel))
                                     )
                                     done_button.click()
-                                    print("Closed cover selector")
+                                    self._log("Closed cover selector")
                                     self._human_delay(1, 2)
                                     break
                                 except TimeoutException:
                                     continue
                         except Exception:
-                            print("Cover selector closed automatically")
+                            self._log("Cover selector closed automatically")
 
                         break
                     except TimeoutException:
                         continue
 
                 if not cover_button:
-                    print("No cover selection option found - using Instagram's default thumbnail")
+                    self._log("No cover selection option - using default thumbnail")
 
             except Exception as e:
-                print(f"Cover selection: Using default thumbnail - {e}")
+                self._log("Cover selection skipped - using default thumbnail")
 
             # Add caption
             if caption:
-                print("Adding caption...")
+                self._log("STEP 8: Adding caption to reel")
                 caption_selectors = [
                     'textarea[aria-label*="caption"]',
                     'textarea[aria-label*="Caption"]',
@@ -568,7 +604,7 @@ class SafeInstagramUploader:
                             caption_field = WebDriverWait(self.driver, 5).until(
                                 EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                             )
-                            print(f"Found caption field with selector: {selector}")
+                            self._log(f"Found caption field with selector: {selector}")
                             break
                         except TimeoutException:
                             continue
@@ -579,12 +615,12 @@ class SafeInstagramUploader:
                         self._human_type(caption_field, caption)
                         self._human_delay(1, 2)
                     else:
-                        print("WARNING: Could not find caption field")
+                        self._log("Could not find caption field - proceeding without caption", "WARN")
                 except Exception as e:
-                    print(f"WARNING: Error adding caption: {e}")
+                    self._log(f"Error adding caption: {e}", "WARN")
 
             # Click "Share" button
-            print("Sharing reel...")
+            self._log("STEP 9: Looking for Share button")
             share_selectors = [
                 "//button[contains(text(), 'Share')]",
                 "//button[text()='Share']",
@@ -599,80 +635,103 @@ class SafeInstagramUploader:
                         share_button = WebDriverWait(self.driver, 10).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
-                        print(f"Found Share button with selector: {selector}")
+                        self._log(f"Found Share button with selector: {selector}")
                         break
                     except TimeoutException:
                         continue
 
                 if not share_button:
-                    print("ERROR: Could not find Share button")
+                    self._log("Could not find Share button - upload failed", "ERROR")
                     return False
 
                 share_button.click()
+                self._log("Share button clicked - upload initiated")
 
                 # Wait for upload to complete
-                print("Uploading... (this may take a while)")
-                print("Instagram is processing your video. Waiting 3+ minutes to ensure completion...")
+                self._log("STEP 10: Waiting for Instagram to process video (up to 120 seconds)")
 
-                # Wait a solid 3 minutes for Instagram to process and upload
-                # Instagram can be slow, especially with video processing
-                print("Initial wait: 180 seconds (3 minutes) for Instagram to process...")
-                for i in range(18):  # 18 x 10 seconds = 180 seconds
+                # Reduced wait - check frequently for completion
+                self._log("Processing: checking every 10 seconds for completion...")
+                for i in range(12):  # 12 x 10 seconds = 120 seconds max
                     time.sleep(10)
                     elapsed = (i + 1) * 10
-                    remaining = 180 - elapsed
-                    if remaining > 0:
-                        print(f"  Waiting... {elapsed}s elapsed, {remaining}s remaining")
-                    else:
-                        print(f"  Waited {elapsed}s total")
+                    self._log(f"Progress check {i+1}/12 ({elapsed}s elapsed)")
 
                 # Check if we see "Post shared" or "Reel shared" message
-                print("Checking for confirmation message...")
+                self._log("STEP 11: Checking for confirmation message")
                 success_selectors = [
-                    "//*[contains(text(), 'shared') or contains(text(), 'Shared')]",
-                    "//*[contains(text(), 'Your reel has been shared')]",
+                    # Exact matches first (most reliable)
+                    "//*[text()='Your post was shared.']",
+                    "//*[text()='Your reel has been shared.']",
+                    "//*[text()='Post shared']",
+                    "//*[text()='Reel shared']",
+                    # Partial matches (more flexible but still specific)
+                    "//*[contains(text(), 'post was shared')]",
+                    "//*[contains(text(), 'reel has been shared')]",
                     "//*[contains(text(), 'Post shared')]",
                     "//*[contains(text(), 'Reel shared')]"
                 ]
 
                 shared_found = False
+                matched_selector = None
                 for selector in success_selectors:
                     try:
                         # Short wait since we already waited 3 minutes
-                        WebDriverWait(self.driver, 10).until(
+                        element = WebDriverWait(self.driver, 10).until(
                             EC.presence_of_element_located((By.XPATH, selector))
                         )
-                        print("SUCCESS: Found confirmation message!")
+                        matched_text = element.text if element else "N/A"
+                        self._log(f"Found element matching selector: {selector}", "SUCCESS")
+                        self._log(f"Element text: '{matched_text}'", "INFO")
                         shared_found = True
+                        matched_selector = selector
                         break
                     except TimeoutException:
                         continue
 
                 if shared_found:
-                    print("Waiting additional 30 seconds to ensure upload is fully finalized...")
-                    time.sleep(30)
-                    print("Upload complete! Video should now be visible on your profile.")
-                    return True
-                else:
-                    # Check for error messages
-                    print("WARNING: Didn't see confirmation message")
-                    print("Checking for errors...")
+                    # Take screenshot for verification
+                    screenshot_path = Path("instagram_upload_screenshot.png")
                     try:
-                        error_msg = self.driver.find_element(By.XPATH, "//*[contains(text(), 'error') or contains(text(), 'Error') or contains(text(), 'failed')]")
-                        print(f"ERROR: Found error message: {error_msg.text}")
-                        return False
-                    except NoSuchElementException:
-                        print("No error found. Waiting extra 60 seconds then assuming success...")
-                        time.sleep(60)
-                        print("Upload likely succeeded (no errors detected after 4 minutes total)")
+                        self.driver.save_screenshot(str(screenshot_path))
+                        self._log(f"Screenshot saved to: {screenshot_path}", "INFO")
+                    except Exception as e:
+                        self._log(f"Could not save screenshot: {e}", "WARN")
+
+                    self._log("Waiting 10 seconds to ensure upload is finalized...")
+                    time.sleep(10)
+                    self._log("COMPLETE: Upload successful! Video should now be visible on profile.", "SUCCESS")
+                    return True
+
+                # No confirmation yet - check for obvious errors
+                self._log("No explicit confirmation message found", "WARN")
+                self._log("Checking page for error messages...")
+                try:
+                    error_msg = self.driver.find_element(By.XPATH, "//*[contains(text(), 'error') or contains(text(), 'Error') or contains(text(), 'failed')]")
+                    self._log(f"Found error message on page: {error_msg.text}", "ERROR")
+                    return False
+                except NoSuchElementException:
+                    # Brief grace period
+                    self._log("No error messages found. Waiting 20 more seconds for late confirmation...")
+                    time.sleep(20)
+                    try:
+                        WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'shared') or contains(text(), 'Shared')]"))
+                        )
+                        self._log("Late confirmation detected - upload complete!", "SUCCESS")
                         return True
+                    except TimeoutException:
+                        # Don't assume success - we need explicit confirmation
+                        self._log("No confirmation message found after extended wait - upload likely failed", "ERROR")
+                        self._log("Upload timed out without confirmation", "ERROR")
+                        return False
 
             except TimeoutException:
-                print("ERROR: Could not find Share button")
+                self._log("Share button timeout - could not initiate upload", "ERROR")
                 return False
 
         except Exception as e:
-            print(f"ERROR: Upload failed: {e}")
+            self._log(f"Upload failed with exception: {e}", "ERROR")
             import traceback
             traceback.print_exc()
             return False

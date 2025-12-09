@@ -15,13 +15,14 @@ class SpleefArena:
     Players fall through layers when blocks break beneath them
     """
 
-    def __init__(self, center_x: float = 270, top_y: float = 200):
+    def __init__(self, center_x: float = 270, top_y: float = 200, hits_to_break: int = None):
         """
         Initialize arena with stacked floor layers
 
         Args:
             center_x: Horizontal center of arena (default 270 for 540px screen)
             top_y: Y position of top layer (default 200)
+            hits_to_break: Total hits required to break a block (defaults to config)
         """
         self.center_x = center_x
         self.top_y = top_y
@@ -32,6 +33,7 @@ class SpleefArena:
         self.grid_width = getattr(config, 'SPLEEF_GRID_WIDTH', 20)
         self.grid_height = getattr(config, 'SPLEEF_GRID_HEIGHT', 15)
         self.block_size = getattr(config, 'SPLEEF_BLOCK_SIZE', 32)
+        self.hits_to_break = hits_to_break or getattr(config, 'SPLEEF_BASE_HITS_PER_BLOCK', 4)
 
         # Calculate arena dimensions
         arena_pixel_width = self.grid_width * self.block_size
@@ -51,7 +53,8 @@ class SpleefArena:
             layer = FloorGrid(
                 layer_index=i,
                 world_x=self.world_x,
-                world_y=layer_y  # Each layer at different Y
+                world_y=layer_y,  # Each layer at different Y
+                hits_to_break=self.hits_to_break
             )
             self.layers.append(layer)
             print(f"  Layer {i}: {len(layer.blocks)} blocks created at world_y={layer_y}")
@@ -69,6 +72,17 @@ class SpleefArena:
         if 0 <= layer_index < len(self.layers):
             return self.layers[layer_index]
         return None
+
+    def update_block_durability(self, hits_to_break: int):
+        """
+        Update hits-to-break for all layers
+
+        Args:
+            hits_to_break: New durability value to apply
+        """
+        self.hits_to_break = max(1, hits_to_break)
+        for layer in self.layers:
+            layer.set_hits_to_break(self.hits_to_break)
 
     def get_layer_y_position(self, layer_index: int) -> float:
         """
@@ -173,8 +187,9 @@ class SpleefArena:
         """
         Update all floor layers and handle layer collapse
 
-        If a layer has less than 5% of alive players, random blocks start disappearing
-        to force remaining players down to lower layers.
+        If a layer has less than 20% of alive players, random blocks start disappearing
+        to force remaining players down to lower layers. Speed increases as fewer
+        players remain on the layer.
 
         Args:
             players: List of SpleefPlayer instances
@@ -184,7 +199,7 @@ class SpleefArena:
         for layer in self.layers:
             layer.update(players, dt)
 
-        # Check for layer collapse (< 5% of players on a layer that still has players)
+        # Check for layer collapse (< 20% of players on a layer that still has players)
         alive_players = [p for p in players if p.alive]
         total_alive = len(alive_players)
 
@@ -203,12 +218,12 @@ class SpleefArena:
                 highest_occupied_layer = layer_index
                 break
 
-        # If highest occupied layer has < 5% of alive players, start collapsing it
+        # If highest occupied layer has < 20% of alive players, start collapsing it
         if highest_occupied_layer is not None:
             players_on_top = players_per_layer[highest_occupied_layer]
             percentage = (players_on_top / total_alive) * 100
 
-            if percentage < 5.0 and percentage > 0:  # Less than 5% but not empty
+            if percentage < 20.0 and percentage > 0:  # Less than 20% but not empty
                 # Start removing random blocks from this layer
                 self._collapse_layer(highest_occupied_layer, dt, percentage)
 
@@ -216,9 +231,11 @@ class SpleefArena:
         """
         Remove random blocks from a layer to force players down
 
-        Speed varies based on player percentage:
-        - < 1%: Very rapid (0.05 seconds between blocks)
-        - 1-5%: Normal speed (0.5 seconds between blocks)
+        Speed varies based on player percentage (much more aggressive):
+        - < 2%: Extreme (0.01s, break 5 blocks at once)
+        - 2-5%: Very rapid (0.02s, break 3 blocks at once)
+        - 5-10%: Rapid (0.05s, break 2 blocks at once)
+        - 10-20%: Moderate (0.1s, break 1 block)
 
         Args:
             layer_index: Layer to collapse
@@ -239,22 +256,35 @@ class SpleefArena:
         current_time = time.time()
         last_collapse = self._last_collapse_time.get(layer_index, 0)
 
-        # Adjust collapse speed based on player percentage
-        if percentage < 1.0:
-            # Very rapid collapse when < 1% of players remain
-            collapse_interval = 0.05  # 20 blocks per second (very very rapid)
+        # Adjust collapse speed and blocks per tick based on player percentage
+        if percentage < 2.0:
+            # Extreme collapse - clear the layer fast
+            collapse_interval = 0.01  # 100 ticks per second
+            blocks_to_break = 5
+        elif percentage < 5.0:
+            # Very rapid collapse
+            collapse_interval = 0.02  # 50 ticks per second
+            blocks_to_break = 3
+        elif percentage < 10.0:
+            # Rapid collapse
+            collapse_interval = 0.05  # 20 ticks per second
+            blocks_to_break = 2
         else:
-            # Normal collapse speed for 1-5% range
-            collapse_interval = 0.5  # 2 blocks per second
+            # Moderate collapse for 10-20% range
+            collapse_interval = 0.1  # 10 ticks per second
+            blocks_to_break = 1
 
         if current_time - last_collapse >= collapse_interval:
             # Get all solid blocks
             solid_blocks = [block for block in layer.blocks.values() if block.is_solid()]
 
             if solid_blocks:
-                # Pick random block and instantly break it
-                random_block = random.choice(solid_blocks)
-                random_block.state = 3  # BlockState.BROKEN
+                # Break multiple blocks at once based on urgency
+                for _ in range(min(blocks_to_break, len(solid_blocks))):
+                    if solid_blocks:
+                        random_block = random.choice(solid_blocks)
+                        random_block.state = 3  # BlockState.BROKEN
+                        solid_blocks.remove(random_block)
                 self._last_collapse_time[layer_index] = current_time
 
     def get_total_solid_blocks(self) -> int:

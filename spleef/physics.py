@@ -72,7 +72,16 @@ class SpleefPhysics:
             player.is_falling = False
             return True
         else:
-            # No solid block beneath - player is falling
+            # No solid block beneath - player is starting to fall
+            # Store their current grid position before they start falling
+            # This will be used to place them at the same X/Y on the next layer
+            if not player.is_falling:
+                # Just started falling - capture grid position
+                layer = arena.get_layer(player.current_layer)
+                if layer:
+                    grid_x, grid_y = layer.world_to_grid(player.x, player.y)
+                    player.fall_start_grid_x = grid_x
+                    player.fall_start_grid_y = grid_y
             player.is_falling = True
             return False
 
@@ -151,6 +160,10 @@ class SpleefPhysics:
         Players fall naturally with gravity, and when they reach the next layer's
         Y coordinate, we update their current_layer assignment.
 
+        IMPORTANT: When transitioning, we preserve the player's grid X/Y position
+        (their position on the platform) and only change their layer (Z axis).
+        The player's world_y is translated to the equivalent position on the new layer.
+
         Args:
             player: SpleefPlayer instance
             arena: SpleefArena instance
@@ -167,7 +180,28 @@ class SpleefPhysics:
 
             # If player has fallen past the next layer's Y position, transition them
             if player.y >= next_layer_y:
-                # Update layer assignment (player continues falling naturally)
+                new_layer = arena.get_layer(next_layer)
+
+                if new_layer:
+                    # Use the stored grid position from when the player started falling
+                    # This preserves their X/Y platform position when dropping to lower layer
+                    grid_x = player.fall_start_grid_x
+                    grid_y = player.fall_start_grid_y
+
+                    # Clamp grid position to valid range for the new layer
+                    grid_x = max(0, min(grid_x, new_layer.grid_width - 1))
+                    grid_y = max(0, min(grid_y, new_layer.grid_height - 1))
+
+                    # Translate player position to the same grid position on the new layer
+                    # This preserves their X/Y platform position, only changing Z (layer)
+                    new_world_x, new_world_y = new_layer.grid_to_world(grid_x, grid_y)
+
+                    # Update both X and Y to the new layer's coordinate system
+                    # X should be the same (all layers have same world_x), but update for consistency
+                    player.x = new_world_x
+                    player.y = new_world_y
+
+                # Update layer assignment
                 player.current_layer = next_layer
                 # Ensure player stays in falling state during transition
                 player.is_falling = True
