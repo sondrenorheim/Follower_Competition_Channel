@@ -198,6 +198,23 @@ class FloorGrid:
 
         return (left, top, right, bottom)
 
+    def get_playable_bounds(self, buffer: float = 0.0) -> Tuple[float, float, float, float]:
+        """
+        Get bounds for player centers, with an optional inward buffer.
+        Using a buffer keeps avatars from visually hanging off the outer edge.
+        """
+        left, top, right, bottom = self.get_bounds()
+        buffer = max(0.0, buffer)
+        # Ensure we don't invert the bounds; clamp buffer to half-block minus a small epsilon
+        max_buffer = (self.block_size / 2) - 0.1
+        buffer = min(buffer, max_buffer)
+        return (
+            left + buffer,
+            top + buffer,
+            right - buffer,
+            bottom - buffer
+        )
+
     def is_within_bounds(self, world_x: float, world_y: float) -> bool:
         """
         Check if world position is within grid bounds

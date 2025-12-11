@@ -29,7 +29,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
 
 
 class SafeInstagramUploader:
@@ -66,19 +66,27 @@ class SafeInstagramUploader:
         chrome_options = Options()
 
         if self.headless:
-            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless=new")
+
+        # Mobile emulation to ensure Instagram shows the mobile UI (Story upload available)
+        # Use explicit metrics to avoid device-name lookup failures.
+        mobile_emulation = {
+            "deviceMetrics": {"width": 412, "height": 915, "pixelRatio": 2.75},  # Pixel 5 metrics
+            "userAgent": (
+                "Mozilla/5.0 (Linux; Android 12; Pixel 5) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Mobile Safari/537.36"
+            ),
+        }
+        chrome_options.add_experimental_option("mobileEmulation", mobile_emulation)
 
         # Anti-detection settings
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
 
-        # Randomize user agent slightly
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+        # User agent aligned with mobile emulation
+        # UA already set in mobileEmulation; no extra override needed.
 
         self.driver = webdriver.Chrome(options=chrome_options)
 
@@ -97,6 +105,124 @@ class SafeInstagramUploader:
         for char in text:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))  # 50-150ms between keystrokes
+
+    def _dismiss_save_login_popup(self):
+        """Dismiss 'Save your login info?' modal if it appears."""
+        try:
+            # Common buttons on the modal
+            selectors = [
+                "//button[contains(translate(., 'NOW', 'now'), 'not now')]",
+                "//div[contains(translate(., 'NOW', 'now'), 'not now')]//ancestor::button[1]",
+                "//button[contains(translate(@aria-label, 'close', 'CLOSE'), 'close')]",
+                "//*[@aria-label='Close']",
+            ]
+            for selector in selectors:
+                try:
+                    btn = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    btn.click()
+                    self._human_delay(0.5, 1.0)
+                    return True
+                except TimeoutException:
+                    continue
+        except Exception:
+            pass
+        return False
+
+    def _open_story_creator_mobile(self) -> bool:
+        """
+        In mobile UI, tap the plus button then pick Story from the menu.
+        Returns True if we navigated to the story creator.
+        """
+        plus_selectors = [
+            "//*[name()='svg' and @aria-label='New post']/ancestor::*[@role='button' or @role='link'][1]",
+            "//*[@aria-label='New post']",
+            "//*[@aria-label='Create']",
+            "//*[@aria-label='Create new post']",
+            "//*[contains(@aria-label, 'Create') and contains(@aria-label, 'post')]",
+        ]
+
+        plus_btn = None
+        for selector in plus_selectors:
+            try:
+                plus_btn = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                break
+            except TimeoutException:
+                continue
+
+        if not plus_btn:
+            return False
+
+        try:
+            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", plus_btn)
+        except Exception:
+            pass
+        self._human_delay(0.5, 1.0)
+        try:
+            plus_btn.click()
+        except Exception:
+            try:
+                self.driver.execute_script("arguments[0].click();", plus_btn)
+            except Exception:
+                return False
+
+        self._human_delay(1.0, 2.0)
+
+        story_selectors = [
+            "//*[name()='svg' and @aria-label='Story']/ancestor::*[@role='button'][1]",
+            "//div[@role='button']//span[normalize-space()='Story']",
+            "//button[.//span[normalize-space()='Story']]",
+            "//*[@role='button' and (contains(., 'Story') or contains(@aria-label, 'Story'))]",
+            "//div[contains(@class,'x10l6tqk') or contains(@class,'x1lliihq')]//span[normalize-space()='Story']/ancestor::*[@role='button'][1]",
+            "//span[normalize-space()='Story']/ancestor::*[@role='button' or self::button or self::div][1]",
+        ]
+
+        story_btn = None
+        for selector in story_selectors:
+            try:
+                story_btn = WebDriverWait(self.driver, 12).until(
+                    EC.presence_of_element_located((By.XPATH, selector))
+                )
+                break
+            except TimeoutException:
+                continue
+
+        # Fallback: find the span and click it directly or its parent
+        if not story_btn:
+            try:
+                spans = self.driver.find_elements(By.XPATH, "//span[normalize-space()='Story']")
+                if spans:
+                    target = spans[0]
+                    # Try nearest clickable ancestor
+                    try:
+                        ancestor = target.find_element(By.XPATH, "ancestor::*[@role='button' or self::button or self::div][1]")
+                        story_btn = ancestor
+                    except Exception:
+                        story_btn = target
+            except Exception:
+                pass
+
+        if not story_btn:
+            return False
+
+        try:
+            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", story_btn)
+        except Exception:
+            pass
+        self._human_delay(0.5, 1.0)
+        try:
+            story_btn.click()
+        except Exception:
+            try:
+                self.driver.execute_script("arguments[0].click();", story_btn)
+            except Exception:
+                return False
+
+        self._human_delay(1.0, 2.0)
+        return True
 
     def save_cookies(self):
         """
@@ -535,19 +661,44 @@ class SafeInstagramUploader:
                                     continue
 
                             if slider:
-                                # Get slider dimensions
-                                slider_width = slider.size['width']
+                                # Try to set slider to middle position (50%)
+                                try:
+                                    # Method 1: Set value directly with JavaScript (most reliable)
+                                    self._log("Setting slider to 50% position...")
+                                    self.driver.execute_script("""
+                                        var slider = arguments[0];
+                                        var min = parseFloat(slider.min) || 0;
+                                        var max = parseFloat(slider.max) || 100;
+                                        var mid = (min + max) / 2;
+                                        slider.value = mid;
+                                        slider.dispatchEvent(new Event('input', { bubbles: true }));
+                                        slider.dispatchEvent(new Event('change', { bubbles: true }));
+                                    """, slider)
+                                    self._log("Slider set to middle position via JavaScript")
+                                    self._human_delay(1, 2)
+                                except Exception as js_error:
+                                    self._log(f"JavaScript method failed: {js_error}")
 
-                                # Click/drag to middle of slider (50% position)
-                                # Move to center of slider element
-                                actions = ActionChains(self.driver)
-                                actions.move_to_element(slider).perform()
-                                self._human_delay(0.5, 1)
+                                    # Method 2: Drag slider to middle (fallback)
+                                    try:
+                                        self._log("Trying drag method...")
+                                        slider_width = slider.size['width']
 
-                                # Click at the center of the slider
-                                actions.click().perform()
+                                        # Move to left edge of slider, then drag to middle
+                                        actions = ActionChains(self.driver)
+                                        actions.move_to_element_with_offset(slider, -slider_width // 2, 0).perform()
+                                        self._human_delay(0.3, 0.5)
+                                        actions.click_and_hold().perform()
+                                        self._human_delay(0.2, 0.4)
+                                        actions.move_by_offset(slider_width // 2, 0).perform()
+                                        self._human_delay(0.2, 0.4)
+                                        actions.release().perform()
+                                        self._log("Dragged slider to middle position")
+                                        self._human_delay(1, 2)
+                                    except Exception as drag_error:
+                                        self._log(f"Drag method also failed: {drag_error}")
+
                                 self._log("Selected middle frame of video for thumbnail")
-                                self._human_delay(1, 2)
                             else:
                                 self._log("No slider found, using default frame")
 
@@ -732,6 +883,485 @@ class SafeInstagramUploader:
 
         except Exception as e:
             self._log(f"Upload failed with exception: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        finally:
+            if self.driver:
+                self._human_delay(2, 3)
+                self.driver.quit()
+
+    def upload_story(self, image_path: str, usernames_to_tag: List[str] = None) -> bool:
+        """
+        Upload an image as an Instagram Story
+
+        Args:
+            image_path: Path to image file (PNG/JPG)
+            usernames_to_tag: Optional list of usernames to tag with mention stickers
+
+        Returns:
+            True if upload successful
+        """
+        self.start_time = time.time()
+        image_path = Path(image_path).resolve()
+
+        self._log("=" * 50)
+        self._log("INSTAGRAM STORY UPLOAD STARTED")
+        self._log("=" * 50)
+
+        if not image_path.exists():
+            self._log(f"Image not found: {image_path}", "ERROR")
+            return False
+
+        self._log(f"Image file: {image_path.name}")
+        self._log(f"Image size: {image_path.stat().st_size / 1024:.1f} KB")
+
+        try:
+            self._log("STEP 1: Setting up Chrome browser...")
+            self._setup_driver()
+            self._log("Browser started successfully")
+
+            self._log("STEP 2: Loading saved cookies...")
+            if not self._load_cookies():
+                self._log("Failed to load cookies", "ERROR")
+                return False
+
+            # Navigate to Instagram home
+            self._log("STEP 3: Navigating to Instagram home...")
+            self.driver.get("https://www.instagram.com/")
+            self._log("Waiting for page to load...")
+            self._human_delay(3, 5)
+            # Force a refresh after mobile emulation to ensure the mobile UI loads
+            self.driver.refresh()
+            self._human_delay(2, 3)
+            # Dismiss "Save your login info?" modal if it appears
+            for _ in range(3):
+                if self._dismiss_save_login_popup():
+                    self._log("Dismissed save-login popup")
+                else:
+                    break
+            # Tap Home to ensure we are in the main feed (mobile UI)
+            try:
+                home_btn = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, "//*[@aria-label='Home' or @role='img' and @aria-label='Home']"))
+                )
+                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", home_btn)
+                self._human_delay(0.5, 1.0)
+                home_btn.click()
+                self._human_delay(1.0, 2.0)
+                self._log("Tapped Home in mobile UI")
+            except Exception:
+                self._log("Home button not found; continuing", "WARN")
+
+            # Try mobile "+" then "Story" option before fallback
+            try:
+                if self._open_story_creator_mobile():
+                    self._log("Opened story creator via mobile '+' menu")
+                else:
+                    self._log("Mobile '+' story open failed; will try generic selectors", "WARN")
+            except Exception:
+                self._log("Mobile '+' story open threw; will try generic selectors", "WARN")
+
+            # Click create button (+ icon)
+            self._log("STEP 4: Looking for Create/Story button...")
+
+            # Try multiple selectors for the create button
+            create_selectors = [
+                "//a[contains(@href, '/create/story')]",
+                "//button[@aria-label='New story']",
+                "//*[contains(@aria-label, 'story') and contains(@aria-label, 'new')]//ancestor::*[@role='link' or @role='button'][1]",
+                "//a[@href='#' and contains(@aria-label, 'Create')]",
+                "//*[contains(@aria-label, 'Create')]",
+                "//*[local-name()='svg' and contains(@aria-label, 'New')]//ancestor::a[1]",
+            ]
+
+            create_button = None
+            for selector in create_selectors:
+                try:
+                    create_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log(f"Found create button using selector: {selector[:50]}...")
+                    break
+                except TimeoutException:
+                    continue
+
+            if not create_button:
+                self._log("Could not find Create button - trying direct story URL", "WARN")
+                self.driver.get("https://www.instagram.com/create/story/")
+                self._human_delay(2, 3)
+            else:
+                self._log("Clicking Create button...")
+                try:
+                    # Try to bring into view and click
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", create_button)
+                    self._human_delay(0.5, 1.0)
+                    create_button.click()
+                    self._human_delay(2, 3)
+                except ElementClickInterceptedException as e:
+                    self._log(f"Create click intercepted, retrying with JS click: {e}", "WARN")
+                    try:
+                        self._human_delay(0.5, 1.0)
+                        self.driver.execute_script("arguments[0].click();", create_button)
+                        self._human_delay(2, 3)
+                    except Exception:
+                        self._log("JS click failed; navigating directly to story URL", "WARN")
+                        self.driver.get("https://www.instagram.com/create/story/")
+                        self._human_delay(2, 3)
+                except Exception as e:
+                    self._log(f"Create click failed, navigating directly to story URL: {e}", "WARN")
+                    self.driver.get("https://www.instagram.com/create/story/")
+                    self._human_delay(2, 3)
+
+            # Ensure we are on the story creator page even if the UI changed
+            if "create/story" not in self.driver.current_url:
+                self._log("Not on story creator after click; navigating directly...", "WARN")
+                self.driver.get("https://www.instagram.com/create/story/")
+                self._human_delay(2, 3)
+
+            # Upload file
+            self._log("STEP 5: Uploading image file...")
+
+            # Find file input and send file path (with fallbacks)
+            file_input = None
+            file_input_selectors = [
+                (By.CSS_SELECTOR, 'input[type="file"]'),
+                (By.XPATH, "//input[@type='file']"),
+                (By.XPATH, "//input[contains(@accept, 'image') or contains(@accept, 'video')]"),
+            ]
+
+            def locate_file_input(timeout: int = 12):
+                for by, selector in file_input_selectors:
+                    try:
+                        return WebDriverWait(self.driver, timeout).until(
+                            EC.presence_of_element_located((by, selector))
+                        )
+                    except TimeoutException:
+                        continue
+                return None
+
+            file_input = locate_file_input()
+
+            if not file_input:
+                # Try navigating directly again, then retry with a longer wait
+                self._log("File input not found; retrying on direct story URL...", "WARN")
+                self.driver.get("https://www.instagram.com/create/story/")
+                self._human_delay(2, 3)
+                file_input = locate_file_input(timeout=15)
+
+            if not file_input:
+                self._log("File input not found after retries - upload failed", "ERROR")
+                return False
+
+            self._log("Found file input, sending image path...")
+            file_input.send_keys(str(image_path))
+            self._human_delay(3, 5)
+            self._log("File uploaded to browser")
+
+            # Wait for image processing
+            self._log("STEP 6: Waiting for image to process...")
+            self._human_delay(3, 4)
+
+            # Add mention stickers if usernames provided
+            if usernames_to_tag:
+                self._log(f"STEP 6.5: Adding mention stickers for {len(usernames_to_tag)} users...")
+                try:
+                    for username in usernames_to_tag:
+                        self._log(f"  Tagging @{username}...")
+
+                        # Look for sticker/mention button (usually @ icon or sticker icon)
+                        sticker_selectors = [
+                            "//button[@aria-label='Add mention']",
+                            "//*[contains(@aria-label, 'mention')]",
+                            "//*[contains(@aria-label, 'Mention')]",
+                            "//button[contains(@aria-label, 'sticker')]",
+                            "//*[name()='svg' and contains(@aria-label, 'Sticker')]//ancestor::button[1]",
+                            "//button[@aria-label='Add sticker']",
+                        ]
+
+                        sticker_button = None
+                        for selector in sticker_selectors:
+                            try:
+                                sticker_button = WebDriverWait(self.driver, 3).until(
+                                    EC.element_to_be_clickable((By.XPATH, selector))
+                                )
+                                self._log(f"    Found sticker button")
+                                sticker_button.click()
+                                self._human_delay(1, 2)
+                                break
+                            except TimeoutException:
+                                continue
+
+                        if not sticker_button:
+                            # Try clicking the @ button directly
+                            try:
+                                at_button = self.driver.find_element(By.XPATH, "//button[contains(text(), '@')]")
+                                at_button.click()
+                                self._human_delay(1, 2)
+                            except NoSuchElementException:
+                                self._log(f"    Could not find mention button, skipping tags", "WARN")
+                                break
+
+                        # Look for mention input or search field
+                        try:
+                            mention_input = WebDriverWait(self.driver, 3).until(
+                                EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Username']"))
+                            )
+                        except TimeoutException:
+                            try:
+                                mention_input = WebDriverWait(self.driver, 2).until(
+                                    EC.presence_of_element_located((By.XPATH, "//input[@type='text']"))
+                                )
+                            except TimeoutException:
+                                self._log(f"    Mention input not found, skipping", "WARN")
+                                continue
+
+                        # Type username (without @)
+                        username_clean = username.lstrip('@')
+                        self._human_type(mention_input, username_clean)
+                        self._human_delay(1, 2)
+
+                        # Click on the first result/suggestion
+                        try:
+                            first_result = WebDriverWait(self.driver, 3).until(
+                                EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(), '{username_clean}')]"))
+                            )
+                            first_result.click()
+                            self._log(f"    Tagged @{username_clean} successfully")
+                            self._human_delay(1, 2)
+                        except TimeoutException:
+                            self._log(f"    Could not find user {username_clean} in results", "WARN")
+                            # Close the mention dialog
+                            try:
+                                self.driver.find_element(By.XPATH, "//button[@aria-label='Close']").click()
+                            except:
+                                pass
+
+                        self._human_delay(1, 2)
+
+                    self._log(f"Mention stickers added successfully")
+                except Exception as e:
+                    self._log(f"Error adding mentions (continuing anyway): {e}", "WARN")
+
+            # Add link sticker if configured
+            try:
+                import config
+                website_url = getattr(config, 'STORY_WEBSITE_URL', None)
+                link_text = getattr(config, 'STORY_LINK_TEXT', 'View Website')
+
+                if website_url:
+                    self._log(f"STEP 6.6: Adding link sticker ({website_url})...")
+
+                    # Look for link/sticker button
+                    link_button_selectors = [
+                        "//button[@aria-label='Add link']",
+                        "//*[contains(@aria-label, 'link')]",
+                        "//*[contains(@aria-label, 'Link')]",
+                        "//button[contains(@aria-label, 'sticker')]",
+                        "//*[@aria-label='Sticker']",
+                    ]
+
+                    link_button_found = False
+                    for selector in link_button_selectors:
+                        try:
+                            link_button = WebDriverWait(self.driver, 3).until(
+                                EC.element_to_be_clickable((By.XPATH, selector))
+                            )
+                            self._log(f"  Found link button")
+                            link_button.click()
+                            self._human_delay(1, 2)
+                            link_button_found = True
+                            break
+                        except TimeoutException:
+                            continue
+
+                    if not link_button_found:
+                        # Try finding sticker menu and then link option
+                        try:
+                            sticker_menu = self.driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Sticker')]")
+                            sticker_menu.click()
+                            self._human_delay(1, 2)
+                        except NoSuchElementException:
+                            self._log(f"  Could not find link/sticker button, skipping link", "WARN")
+
+                    # Look for link option in sticker menu
+                    try:
+                        link_option = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link') or contains(text(), 'link')]"))
+                        )
+                        link_option.click()
+                        self._human_delay(1, 2)
+                    except TimeoutException:
+                        self._log(f"  Link option not found in menu", "WARN")
+
+                    # Enter URL
+                    try:
+                        url_input = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.XPATH, "//input[@placeholder='URL']"))
+                        )
+                        url_input.clear()
+                        self._human_type(url_input, website_url)
+                        self._human_delay(1, 2)
+                        self._log(f"  Entered URL: {website_url}")
+                    except TimeoutException:
+                        try:
+                            url_input = WebDriverWait(self.driver, 2).until(
+                                EC.presence_of_element_located((By.XPATH, "//input[@type='url']"))
+                            )
+                            url_input.clear()
+                            self._human_type(url_input, website_url)
+                            self._human_delay(1, 2)
+                            self._log(f"  Entered URL: {website_url}")
+                        except TimeoutException:
+                            self._log(f"  URL input not found", "WARN")
+
+                    # Customize sticker text (optional)
+                    try:
+                        text_input = self.driver.find_element(By.XPATH, "//input[@placeholder='Add text']")
+                        text_input.clear()
+                        self._human_type(text_input, link_text)
+                        self._human_delay(1, 2)
+                        self._log(f"  Set link text: {link_text}")
+                    except NoSuchElementException:
+                        self._log(f"  Link text customization not available (using default)")
+
+                    # Click Done/Add button
+                    try:
+                        done_button = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Done') or contains(text(), 'Add')]"))
+                        )
+                        done_button.click()
+                        self._human_delay(1, 2)
+                        self._log(f"  Link sticker added successfully")
+                    except TimeoutException:
+                        # Try pressing Enter instead
+                        try:
+                            from selenium.webdriver.common.keys import Keys
+                            url_input.send_keys(Keys.RETURN)
+                            self._human_delay(1, 2)
+                            self._log(f"  Link sticker added (via Enter)")
+                        except:
+                            self._log(f"  Could not confirm link sticker", "WARN")
+
+            except Exception as e:
+                self._log(f"Error adding link sticker (continuing anyway): {e}", "WARN")
+
+            # Look for "Add to story" or "Share" button
+            self._log("STEP 7: Looking for Share/Add to story button...")
+            self._human_delay(1, 2)
+
+            share_selectors = [
+                "//button[contains(text(), 'Add to story')]",
+                "//button[contains(text(), 'Share to story')]",
+                "//button[contains(text(), 'Share')]",
+                "//*[contains(text(), 'Add to story')]//ancestor::button[1]",
+                "//*[@role='button' and contains(text(), 'Share')]",
+                "//div[contains(text(), 'Share')]",
+                "//*[contains(@aria-label, 'Your story')]",
+                "//*[contains(text(), 'Your story')]//ancestor::button[1]",
+                "//button[@type='submit' and contains(., 'Share')]",
+            ]
+
+            share_button = None
+            for selector in share_selectors:
+                try:
+                    share_button = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log(f"Found share button using: {selector[:50]}...")
+                    break
+                except TimeoutException:
+                    continue
+
+            # Fallback: pick the first visible primary-looking button near bottom
+            if not share_button:
+                try:
+                    candidates = self.driver.find_elements(By.XPATH, "//button")
+                    if candidates:
+                        share_button = candidates[-1]  # often the bottom action
+                        self._log("Using fallback bottom button for share", "WARN")
+                except Exception:
+                    pass
+
+            if not share_button:
+                self._log("Could not find Share button", "ERROR")
+                return False
+
+            self._log("Clicking Share button...")
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", share_button)
+                self._human_delay(0.5, 1.0)
+                share_button.click()
+            except Exception:
+                self._log("Direct click failed, trying JS click on share", "WARN")
+                try:
+                    self.driver.execute_script("arguments[0].click();", share_button)
+                except Exception as e:
+                    self._log(f"Share click failed: {e}", "ERROR")
+                    return False
+            self._log("Upload initiated, waiting for confirmation...")
+            self._human_delay(2, 3)
+
+            # Wait for confirmation
+            self._log("STEP 8: Checking for upload confirmation...")
+
+            confirmation_selectors = [
+                "//*[contains(text(), 'Your story was shared')]",
+                "//*[contains(text(), 'Story shared')]",
+                "//*[contains(text(), 'shared')]",
+                "//*[contains(text(), 'Shared')]",
+            ]
+
+            try:
+                for selector in confirmation_selectors:
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, selector))
+                        )
+                        self._log("Upload confirmation found!", "SUCCESS")
+
+                        # Save screenshot
+                        try:
+                            screenshot_path = Path("instagram_story_screenshot.png")
+                            self.driver.save_screenshot(str(screenshot_path))
+                            self._log(f"Screenshot saved to: {screenshot_path}", "INFO")
+                        except Exception as e:
+                            self._log(f"Could not save screenshot: {e}", "WARN")
+
+                        self._log("COMPLETE: Story upload successful!", "SUCCESS")
+                        return True
+                    except TimeoutException:
+                        continue
+
+                # No confirmation found
+                self._log("No confirmation message found", "WARN")
+                self._log("Waiting 10 more seconds for late confirmation...")
+                time.sleep(10)
+
+                # Check once more
+                try:
+                    for selector in confirmation_selectors:
+                        try:
+                            self.driver.find_element(By.XPATH, selector)
+                            self._log("Late confirmation detected - upload complete!", "SUCCESS")
+                            return True
+                        except NoSuchElementException:
+                            continue
+
+                    # Still no confirmation - likely failed
+                    self._log("No confirmation after extended wait - upload may have failed", "ERROR")
+                    return False
+                except Exception as e:
+                    self._log(f"Error checking for confirmation: {e}", "ERROR")
+                    return False
+
+            except Exception as e:
+                self._log(f"Error waiting for confirmation: {e}", "ERROR")
+                return False
+
+        except Exception as e:
+            self._log(f"Story upload failed with exception: {e}", "ERROR")
             import traceback
             traceback.print_exc()
             return False

@@ -36,6 +36,9 @@ ENV/
 # Instaloader session files (IMPORTANT - contains login credentials!)
 .instaloader_session_*
 
+# Instagram session cookies (IMPORTANT - contains login session!)
+instagram_session_cookies.pkl
+
 # Temporary avatar files
 .temp_avatar_*/
 
@@ -43,7 +46,8 @@ ENV/
 *.mp4
 *.avi
 *.mov
-
+*.png
+*.jpg
 # Config with real credentials (optional - uncomment if you want to prevent committing credentials)
 # config.py
 

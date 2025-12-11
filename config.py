@@ -8,14 +8,14 @@ from pathlib import Path
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
 #          "snake_escape", "team_battle", "platformer_race", "spleef", "ALL"
 # When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
-ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "spleef", "meteor_mayhem"]
 # ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
-# ALL_GAME_MODES = ["battle_royale", "fighter_arena", "snake_escape"]
+# ALL_GAME_MODES = [ "snake_escape", "team_battle", "platformer_race"]
 
 # ===== GAME SETTINGS =====
 SCREEN_WIDTH = 540   # Scaled down for better visibility on monitors
 SCREEN_HEIGHT = 960  # 9:16 aspect ratio for Instagram Reels / TikTok
 FPS = 60
+# Set to True to run without display window (faster processing, videos still export)
 
 # Performance optimization: Lower FPS during video export for better performance
 # Since video is only 30 FPS, running simulation at 60 FPS wastes CPU
@@ -29,14 +29,15 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 
+ALL_GAME_MODES = ["team_battle", "platformer_race"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "meteor_mayhem" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = True
+GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
+TEST_MODE = False
 EXPORT_VIDEO = True
-DAY_NUMBER = 19 
-DOWNLOAD_PROFILE_PICTURES = False # Set to True to download real profile pictures (if URLs available)
-
+DAY_NUMBER = 21  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
+HEADLESS_MODE = True  
 
 # Minimal test players - when True, use generated test users instead of real followers
 TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
@@ -55,13 +56,10 @@ EXPORT_TIME_SCALE = 1  # Run simulation at half speed during export for smoother
 ARENA_CENTER = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
 ARENA_INITIAL_RADIUS = 250  # Starting safe zone radius (scaled to match screen size)
 ARENA_MIN_RADIUS = 50       # Minimum safe zone radius before game ends
-
-# Continuous shrinking settings
 SHRINK_RATE = 0.10          # Pixels per second the zone shrinks (smooth continuous shrinking)
                             # Lower = slower shrink, Higher = faster shrink
                             # Recommended: 0.15-0.3 for slower games, 0.5-1.0 for fast-paced
 
-# Arena shape - Options: "circle", "square", "hexagon", "octagon"
 ARENA_SHAPE = "circle"
 
 # ===== FOLLOWER SETTINGS =====
@@ -104,10 +102,9 @@ COLOR_ARENA = (201, 198, 201)          # Same as background
 COLOR_SAFE_ZONE = (201, 198, 201)      # Same as background (no border)
 COLOR_DANGER_ZONE = (255, 20, 20)      # Sharp red
 COLOR_TEXT = (0, 0, 0)                 # Black text
-COLOR_BORDER = (255, 255, 255)
+COLOR_BORDER = (0, 0, 0)  # Black outline for fighters
 
-# ===== VIDEO EXPORT SETTINGS =====
-# Base directory to store exported videos (will create day subfolders under this)
+
 VIDEO_OUTPUT_BASE = Path("Videos")
 
 def get_output_video_path(game_mode: str = None, day_number: int = None, test_mode: bool = None) -> str:
@@ -125,50 +122,29 @@ def get_output_video_path(game_mode: str = None, day_number: int = None, test_mo
         return str(day_folder / f"{gm}_test_video.mp4")
     return str(day_folder / f"{gm}_day_{day}.mp4")
 
-# Default output path (can be overridden per game run)
 OUTPUT_VIDEO_PATH = get_output_video_path()
 
 VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
-# Video upscaling settings
-# Game renders at SCREEN_WIDTH x SCREEN_HEIGHT, but exports at higher resolution
- # Multiplier for output resolution (2.0 = 1080x1920 from 540x960)
-# With UPSCALE_FACTOR = 2.0: 540x960 -> 1080x1920 (1080p vertical HD)
-# With UPSCALE_FACTOR = 3.0: 540x960 -> 1620x2880 (1620p vertical)
 
-# ===== INSTAGRAM DATA SETTINGS =====
-
-# Option 1: Import from File (✅ BEST - Safe, Legal, Recommended!)
-# Use Instagram's "Download Your Data" feature to get followers.json
-# Or use a Chrome extension like "IG Exporter & Scraper" for instant export
-# Or use fetch_followers_v2.py to fetch followers using instagrapi
-# Or create your own CSV/JSON/TXT file with usernames
 FOLLOWER_IMPORT_FILE = "followers_safe_20251204.json"
 
 # TikTok followers import file (optional - will be combined with Instagram followers)
 TIKTOK_IMPORT_FILE = ""  # Disabled - only using Instagram followers
 
-# Download real profile pictures from CSV (if profile_pic_url column exists)
-# Set to True to download real Instagram profile pictures (takes longer, uses bandwidth)
-# Set to False to use colored circle avatars (faster, recommended)
-# Option 2: Official Instagram Graph API (Safe, requires business account)
-# Requires: Instagram Business account + Facebook Developer account
+
 INSTAGRAM_ACCESS_TOKEN = ""  # Your Instagram Graph API access token
 INSTAGRAM_USER_ID = ""       # Your Instagram user ID
 
-# Option 3: Web Scraping with Instaloader (⚠️ VIOLATES INSTAGRAM ToS!)
-# WARNING: This can get your account banned! Use a burner account if possible.
-# Requires: Regular Instagram account credentials
+
 USE_INSTALOADER_SCRAPER = False  # Set to True to enable web scraping
 INSTAGRAM_USERNAME = ""          # Your Instagram username (for scraping)
 INSTAGRAM_PASSWORD = ""          # Your Instagram password (for scraping)
 INSTAGRAM_TARGET_USERNAME = ""   # Target account to scrape followers from (leave empty to use your own)
 
-# Option 4: Offline Mode (Safe, generates random followers)
 USE_OFFLINE_MODE = False      # Set to False to attempt API/scraper fetching (or use import file)
 
-# ===== RANDOM AVATAR COLORS (for offline mode) =====
 RANDOM_COLORS = [
     (255, 100, 100), (100, 255, 100), (100, 100, 255),
     (255, 255, 100), (255, 100, 255), (100, 255, 255),
@@ -177,7 +153,6 @@ RANDOM_COLORS = [
 ]
 
 
-# ===== DYNAMIC RADIUS CALCULATION =====
 def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radius, initial_zone_radius):
     """
     Calculate dynamic follower radius based on player count and game progression
@@ -395,11 +370,11 @@ TEAM_BATTLE_KILL_BONUS = 1  # Points per kill
 
 # ===== SPLEEF SETTINGS =====
 # Arena dimensions
-SPLEEF_GRID_WIDTH = 35           # Blocks wide
-SPLEEF_GRID_HEIGHT = 35          # Blocks tall (same as width for perfect square)
-SPLEEF_BLOCK_SIZE = 10           # Pixels per block (reduced by 50% from 20)
-SPLEEF_LAYER_COUNT = 10          # Number of floor layers (increased from 3 to 10)
-SPLEEF_LAYER_SPACING = 60        # Vertical spacing between layers (reduced from 125 for more layers)
+SPLEEF_GRID_WIDTH = 23           # Blocks wide (adjusted for 15px blocks: 23×15=345px, close to original 350px)
+SPLEEF_GRID_HEIGHT = 23          # Blocks tall (same as width for perfect square)
+SPLEEF_BLOCK_SIZE = 15           # Pixels per block (increased from 10 for better visibility)
+SPLEEF_LAYER_COUNT = 8           # Number of floor layers
+SPLEEF_LAYER_SPACING = 150        # Vertical spacing between layers (increased to make bottom layer reach screen bottom)
 
 # Block degradation timing (total: 1.0 second from step to break)
 SPLEEF_CRACK_DURATION = 0.2      # Time in CRACKED state (seconds)
@@ -416,8 +391,8 @@ SPLEEF_GRAVITY = 140.0           # Gravity acceleration (adjusted for 1 second f
 SPLEEF_FALL_SPEED_MAX = 600.0    # Maximum falling speed (reduced from 800)
 
 # Rendering (isometric 2.5D view)
-SPLEEF_ISO_ANGLE = 20            # Isometric projection angle (degrees) - decreased for lower, more horizontal view
-SPLEEF_LAYER_VISUAL_OFFSET = 85  # Visual depth between layers (spread out to fill screen)
+SPLEEF_ISO_ANGLE = 15            # Isometric projection angle (degrees) - decreased for lower, more horizontal view
+SPLEEF_LAYER_VISUAL_OFFSET = 100  # Visual depth between layers (balanced to fill screen without cutting off bottom)
 
 # Layer colors (RGB) - distinct high-saturation hues for each platform
 SPLEEF_LAYER_COLORS = {
@@ -448,3 +423,28 @@ SPLEEF_LAYER_PANEL_Y = 50              # Y position (higher on screen)
 SPLEEF_LAYER_PANEL_WIDTH = 70          # Panel width
 SPLEEF_LAYER_PANEL_BAR_HEIGHT = 8      # Height of each layer bar
 SPLEEF_LAYER_PANEL_SPACING = 3         # Spacing between bars
+SPLEEF_OUTER_WALL_BUFFER = 4.0         # Inward buffer (pixels) for invisible wall on outer ring to keep avatars off the edge
+
+# ===== INSTAGRAM STORY SETTINGS =====
+ENABLE_STORY_POSTING = True              # Master toggle for story posting
+STORY_DELAY_HOURS = 2                    # Hours to wait after uploads complete
+STORY_OUTPUT_DIR = Path("stories")       # Story images directory
+STORY_IMAGE_SIZE = (1080, 1920)          # 9:16 aspect ratio (width, height)
+
+# Link sticker settings
+STORY_WEBSITE_URL = "https://www.followerbattlegrounds.com/"  # Website link for story
+STORY_LINK_TEXT = "Check Out Your Results"                     # Text displayed on link sticker
+
+# Story template colors
+STORY_BG_COLOR_TOP = (26, 26, 46)        # Dark blue (#1a1a2e) - top of gradient
+STORY_BG_COLOR_BOTTOM = (22, 33, 62)     # Purple (#16213e) - bottom of gradient
+STORY_TEXT_COLOR = (255, 255, 255)       # White text
+STORY_ACCENT_COLOR = (255, 215, 0)       # Gold for points/1st place (#FFD700)
+STORY_SILVER_COLOR = (192, 192, 192)     # Silver for 2nd place
+STORY_BRONZE_COLOR = (205, 127, 50)      # Bronze for 3rd place (#CD7F32)
+
+# Avatar styling
+STORY_AVATAR_SIZE_1ST = 200              # 1st place avatar diameter (pixels)
+STORY_AVATAR_SIZE_2_3 = 140              # 2nd/3rd place avatar diameter (pixels)
+STORY_AVATAR_BORDER = 6                  # Border width (pixels)
+AVATAR_CACHE_DIR = Path("avatar_cache")  # Avatar cache directory location

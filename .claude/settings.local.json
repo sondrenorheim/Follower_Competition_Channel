@@ -29,7 +29,8 @@
       "Bash(echo:*)",
       "Bash(if exist node_modules.vite rmdir /s /q node_modules.vite)",
       "mcp__ide__getDiagnostics",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

@@ -38,6 +38,9 @@ class SpleefRenderer:
         self.iso_scale = 0.8  # Scale factor (increased from 0.6 to make blocks more visible)
         self.layer_visual_offset = getattr(config, 'SPLEEF_LAYER_VISUAL_OFFSET', 150)
 
+        # Layer panel animation
+        self.current_panel_y = 600  # Start in lower position
+
         # Screen center for projection
         # Position to center platforms on screen vertically and horizontally
         self.screen_center_x = width // 2 + 70  # Shifted right by 70 pixels to center better
@@ -51,12 +54,46 @@ class SpleefRenderer:
         })
 
         # Font for text rendering
+        self.font = ImageFont.load_default()
+        self.font_small = ImageFont.load_default()
+        self.font_title = self.font
+        self.font_value = self.font
+        self.font_label = self.font_small
+
         try:
             self.font = ImageFont.truetype("arial.ttf", 16)
+        except Exception:
+            pass
+
+        try:
             self.font_small = ImageFont.truetype("arial.ttf", 12)
-        except:
-            self.font = ImageFont.load_default()
-            self.font_small = ImageFont.load_default()
+        except Exception:
+            pass
+
+        try:
+            self.font_title = ImageFont.truetype("arialbd.ttf", 26)
+        except Exception:
+            self.font_title = self.font
+
+        try:
+            self.font_value = ImageFont.truetype("arialbd.ttf", 18)
+        except Exception:
+            self.font_value = self.font
+
+        try:
+            self.font_label = ImageFont.truetype("arial.ttf", 13)
+        except Exception:
+            self.font_label = self.font_small
+
+    def _measure_text(self, draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple:
+        """
+        Measure text size with a safe fallback for older Pillow versions.
+        """
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            return draw.textsize(text, font=font)
 
     def world_to_isometric(self, world_x: float, world_y: float, layer_index: int,
                           layer_base_y: float = None, arena = None) -> Tuple[float, float]:
@@ -416,7 +453,7 @@ class SpleefRenderer:
         return layer_img
 
     def render_frame(self, arena: SpleefArena, players: List[SpleefPlayer],
-                    game_time: float, phase: str) -> Image.Image:
+                    game_time: float, phase: str, leaderboard: List[dict] = None) -> Image.Image:
         """
         Render a complete game frame with progressive layer transparency.
 
@@ -428,6 +465,7 @@ class SpleefRenderer:
             players: List of all players
             game_time: Current game time
             phase: Game phase ("intro", "countdown", "playing", "finished")
+            leaderboard: Optional leaderboard data for finished phase
 
         Returns:
             PIL Image of rendered frame
@@ -497,20 +535,154 @@ class SpleefRenderer:
         draw = ImageDraw.Draw(img_rgb)
 
         # Draw UI overlay
-        self.draw_ui(draw, players, game_time, phase, arena)
+        self.draw_ui(draw, players, game_time, phase, arena, leaderboard)
 
         return img_rgb
 
+    def draw_header(self, draw: ImageDraw.ImageDraw, alive_count: int, total_players: int,
+                    solid_blocks: int, total_blocks: int, block_percentage: float,
+                    phase: str) -> int:
+        """
+        Draw a styled header with title and key live stats.
+
+        Returns:
+            int: Bottom y-position of the header for layout spacing.
+        """
+        padding = 14
+        header_height = 118
+        bottom = self.height - padding
+        top = bottom - header_height
+        left = padding
+        right = self.width - padding
+        card_height = 48
+        card_spacing = 12
+
+        bg_color = (18, 22, 40)
+        outline_color = (70, 80, 110)
+        accent = (255, 210, 90)
+        accent_alt = (90, 200, 255)
+        stat_bg = (28, 32, 56)
+        stat_outline = (55, 64, 92)
+
+        # Card backdrop
+        if hasattr(draw, "rounded_rectangle"):
+            draw.rounded_rectangle([left, top, right, bottom], radius=14,
+                                   fill=bg_color, outline=outline_color, width=2)
+        else:
+            draw.rectangle([left, top, right, bottom], fill=bg_color, outline=outline_color)
+
+        # Accent strip
+        draw.rectangle([left, top, right, top + 6], fill=accent)
+
+        # Phase badge
+        badge_text = (phase or "ready").upper()
+        badge_w, badge_h = self._measure_text(draw, badge_text, self.font_small)
+        badge_pad_x = 10
+        badge_pad_y = 4
+        badge_rect = [
+            right - badge_w - (badge_pad_x * 2) - 6,
+            top + 14,
+            right - 6,
+            top + 14 + badge_h + (badge_pad_y * 2)
+        ]
+        if hasattr(draw, "rounded_rectangle"):
+            draw.rounded_rectangle(badge_rect, radius=8, fill=(32, 38, 70),
+                                   outline=accent_alt, width=1)
+        else:
+            draw.rectangle(badge_rect, fill=(32, 38, 70), outline=accent_alt, width=1)
+        draw.text(
+            (badge_rect[0] + badge_pad_x, badge_rect[1] + badge_pad_y),
+            badge_text,
+            fill=accent_alt,
+            font=self.font_small
+        )
+
+        # Title and subtitle
+        title = "SPLEEF"
+        title_w, title_h = self._measure_text(draw, title, self.font_title)
+        draw.text(
+            (self.width // 2 - title_w // 2, top + 16),
+            title,
+            fill=accent,
+            font=self.font_title
+        )
+
+        subtitle = "Layered elimination tower"
+        subtitle_w, subtitle_h = self._measure_text(draw, subtitle, self.font_small)
+        draw.text(
+            (self.width // 2 - subtitle_w // 2, top + 16 + title_h + 4),
+            subtitle,
+            fill=(170, 190, 230),
+            font=self.font_small
+        )
+
+        # Stat cards
+        cards_y = bottom - card_height - 12
+        card_width = (self.width - (padding * 2) - card_spacing) // 2
+        cards = [
+            {
+                "label": "Players",
+                "value": f"{alive_count}/{total_players}",
+                "color": (90, 210, 255)
+            },
+            {
+                "label": "Blocks",
+                "value": f"{solid_blocks}/{total_blocks} ({block_percentage:.1f}%)",
+                "color": (255, 170, 120)
+            }
+        ]
+
+        for idx, card in enumerate(cards):
+            x = left + idx * (card_width + card_spacing)
+            y = cards_y
+            if hasattr(draw, "rounded_rectangle"):
+                draw.rounded_rectangle(
+                    [x, y, x + card_width, y + card_height],
+                    radius=10,
+                    fill=stat_bg,
+                    outline=stat_outline,
+                    width=1
+                )
+            else:
+                draw.rectangle(
+                    [x, y, x + card_width, y + card_height],
+                    fill=stat_bg,
+                    outline=stat_outline,
+                    width=1
+                )
+
+            # Accent stripe
+            draw.rectangle([x, y, x + 8, y + card_height], fill=card["color"])
+
+            # Labels and values
+            draw.text(
+                (x + 14, y + 6),
+                card["label"],
+                fill=card["color"],
+                font=self.font_label
+            )
+            draw.text(
+                (x + 14, y + 22),
+                card["value"],
+                fill=(235, 235, 245),
+                font=self.font_value
+            )
+
+        return bottom
+
     def draw_layer_indicator_panel(self, draw: ImageDraw.ImageDraw,
                                     arena: SpleefArena,
-                                    players: List[SpleefPlayer]):
+                                    players: List[SpleefPlayer],
+                                    reserved_top: int = 0):
         """
         Draw side panel showing player distribution across layers.
+        Panel position dynamically adjusts based on player progression.
 
         Args:
             draw: PIL ImageDraw instance
             arena: Arena instance
             players: List of all players
+            reserved_top: Minimum y-coordinate to avoid overlapping header content
         """
         # Check if panel is enabled
         if not getattr(config, 'SPLEEF_SHOW_LAYER_PANEL', True):
@@ -518,14 +690,41 @@ class SpleefRenderer:
 
         # Get config values
         panel_x = getattr(config, 'SPLEEF_LAYER_PANEL_X', 480)
-        panel_y = getattr(config, 'SPLEEF_LAYER_PANEL_Y', 120)
         panel_width = getattr(config, 'SPLEEF_LAYER_PANEL_WIDTH', 55)
         bar_height = getattr(config, 'SPLEEF_LAYER_PANEL_BAR_HEIGHT', 8)
         spacing = getattr(config, 'SPLEEF_LAYER_PANEL_SPACING', 3)
 
-        # Count players per layer
+        # Count players per layer and find deepest layer reached
         alive_players = [p for p in players if p.alive]
         total_alive = len(alive_players)
+
+        deepest_layer = 0
+        for player in alive_players:
+            if player.current_layer > deepest_layer:
+                deepest_layer = player.current_layer
+
+        # Dynamic panel positioning based on player progression
+        # Start in lower half, move up when players reach layer 5 (index 4)
+        panel_y_upper = getattr(config, 'SPLEEF_LAYER_PANEL_Y', 120)  # Upper position
+        panel_y_upper = max(panel_y_upper, reserved_top + 8)
+        panel_y_lower = 600  # Lower position (bottom half of screen)
+
+        # Determine target position
+        target_y = panel_y_upper if deepest_layer >= 4 else panel_y_lower
+
+        # Smooth transition animation
+        transition_speed = 15  # Pixels per frame
+        if abs(self.current_panel_y - target_y) > transition_speed:
+            # Gradually move towards target
+            if self.current_panel_y < target_y:
+                self.current_panel_y += transition_speed
+            else:
+                self.current_panel_y -= transition_speed
+        else:
+            # Snap to target when close enough
+            self.current_panel_y = target_y
+
+        panel_y = int(self.current_panel_y)
 
         players_per_layer = {}
         max_players_on_layer = 0
@@ -586,7 +785,7 @@ class SpleefRenderer:
             draw.text((count_x, y - 1), str(count), fill=count_color, font=self.font_small)
 
     def draw_ui(self, draw: ImageDraw.ImageDraw, players: List[SpleefPlayer],
-               game_time: float, phase: str, arena: SpleefArena):
+               game_time: float, phase: str, arena: SpleefArena, leaderboard: List[dict] = None):
         """
         Draw UI elements (timer, player count, etc.)
 
@@ -596,31 +795,24 @@ class SpleefRenderer:
             game_time: Current game time
             phase: Game phase
             arena: Arena instance
+            leaderboard: Optional leaderboard data for finished phase
         """
-        # Draw layer indicator panel
-        self.draw_layer_indicator_panel(draw, arena, players)
-
-        # Draw title at top
-        title = "SPLEEF"
-        title_width = len(title) * 20
-        draw.text(
-            (self.width // 2 - title_width // 2, 20),
-            title,
-            fill=(255, 255, 100),
-            font=self.font
-        )
-
-        # Draw player count
         alive_count = sum(1 for p in players if p.alive)
-        player_text = f"Players: {alive_count}/{len(players)}"
-        draw.text((20, 60), player_text, fill=(255, 255, 255), font=self.font)
-
-        # Draw block count
         solid_blocks = arena.get_total_solid_blocks()
         total_blocks = arena.get_total_blocks()
         block_percentage = (solid_blocks / total_blocks * 100) if total_blocks > 0 else 0
-        block_text = f"Blocks: {solid_blocks}/{total_blocks} ({block_percentage:.1f}%)"
-        draw.text((20, 90), block_text, fill=(255, 255, 255), font=self.font)
+        header_bottom = self.draw_header(
+            draw=draw,
+            alive_count=alive_count,
+            total_players=len(players),
+            solid_blocks=solid_blocks,
+            total_blocks=total_blocks,
+            block_percentage=block_percentage,
+            phase=phase
+        )
+
+        # Draw layer indicator panel
+        self.draw_layer_indicator_panel(draw, arena, players, reserved_top=0)
 
         # Draw phase-specific UI
         if phase == "countdown":
@@ -633,22 +825,153 @@ class SpleefRenderer:
                 font=self.font
             )
         elif phase == "finished":
-            # Find winner
-            winner = None
-            for p in players:
-                if p.placement == 1:
-                    winner = p
-                    break
+            # Draw leaderboard if available
+            if leaderboard and len(leaderboard) > 0:
+                self.draw_leaderboard(draw, leaderboard, players)
+            else:
+                # Fallback: show winner if no leaderboard
+                winner = None
+                for p in players:
+                    if p.placement == 1:
+                        winner = p
+                        break
 
-            if winner:
-                winner_text = f"Winner: {winner.display_name}!"
-                text_width = len(winner_text) * 12
-                draw.text(
-                    (self.width // 2 - text_width // 2, self.height // 2),
-                    winner_text,
-                    fill=(255, 215, 0),
-                    font=self.font
-                )
+                if winner:
+                    winner_text = f"Winner: {winner.display_name}!"
+                    text_width = len(winner_text) * 12
+                    draw.text(
+                        (self.width // 2 - text_width // 2, self.height // 2),
+                        winner_text,
+                        fill=(255, 215, 0),
+                        font=self.font
+                    )
+
+    def draw_leaderboard(self, draw: ImageDraw.ImageDraw, leaderboard: List[dict],
+                         players: List[SpleefPlayer]):
+        """
+        Draw the end-game leaderboard showing top 10 finishers
+
+        Args:
+            draw: PIL ImageDraw instance
+            leaderboard: List of result dictionaries with 'username', 'display_name', 'placement', 'points'
+            players: List of all SpleefPlayer instances (for avatar lookup)
+        """
+        if not leaderboard:
+            return
+
+        # Create player mapping for avatar lookup
+        player_map = {p.username: p for p in players}
+
+        # Position centered on screen
+        panel_width = int(self.width * 0.7)  # 70% of screen width
+        panel_x = (self.width - panel_width) // 2
+        panel_y = int(self.height * 0.3)  # Start 30% down the screen
+
+        self._draw_leaderboard_panel(
+            title_line1="FINAL",
+            title_line2="TOP 10",
+            leaderboard=leaderboard[:10],
+            x=panel_x,
+            y=panel_y,
+            width=panel_width,
+            color=(255, 215, 0),  # Gold
+            player_map=player_map,
+            draw=draw
+        )
+
+    def _draw_leaderboard_panel(self, title_line1: str, title_line2: str,
+                                leaderboard: List[dict], x: int, y: int,
+                                width: int, color: Tuple[int, int, int],
+                                player_map: dict, draw: ImageDraw.ImageDraw):
+        """
+        Draw a single leaderboard panel
+
+        Args:
+            title_line1: First line of title
+            title_line2: Second line of title
+            leaderboard: List of result dictionaries
+            x: X position
+            y: Y position
+            width: Panel width
+            color: Title color
+            player_map: Dictionary mapping usernames to SpleefPlayer objects
+            draw: PIL ImageDraw instance
+        """
+        if not leaderboard:
+            return
+
+        # Calculate panel dimensions
+        entry_height = 35
+        header_height = 50
+        panel_height = header_height + len(leaderboard) * entry_height + 20
+
+        # Draw semi-transparent background
+        draw.rectangle(
+            [x, y, x + width, y + panel_height],
+            fill=(20, 20, 30, 230)
+        )
+
+        # Draw two-line title
+        title1_width = len(title_line1) * 12
+        draw.text(
+            (x + width // 2 - title1_width // 2, y + 10),
+            title_line1,
+            fill=color,
+            font=self.font
+        )
+
+        title2_width = len(title_line2) * 12
+        draw.text(
+            (x + width // 2 - title2_width // 2, y + 28),
+            title_line2,
+            fill=color,
+            font=self.font
+        )
+
+        # Draw entries
+        medals = ["🥇", "🥈", "🥉"]
+        entry_y = y + header_height
+
+        for i, result in enumerate(leaderboard):
+            rank = i + 1
+            username = result.get('username', 'Unknown')
+            points = result.get('points', 0)
+
+            # Medal or number
+            if i < 3:
+                rank_text = medals[i]
+            else:
+                rank_text = f"{rank}."
+
+            # Draw rank
+            draw.text(
+                (x + 15, entry_y + 10),
+                rank_text,
+                fill=(255, 255, 255),
+                font=self.font_small
+            )
+
+            # Draw username
+            max_username_length = 22
+            display_name = username if len(username) <= max_username_length else username[:max_username_length-2] + ".."
+            draw.text(
+                (x + 60, entry_y + 10),
+                display_name,
+                fill=(255, 255, 255),
+                font=self.font_small
+            )
+
+            # Draw points
+            points_text = f"{points:.0f}"
+            points_width = len(points_text) * 8
+            draw.text(
+                (x + width - points_width - 20, entry_y + 10),
+                points_text,
+                fill=(0, 255, 150),
+                font=self.font_small
+            )
+
+            entry_y += entry_height
 
     def __repr__(self):
         return f"SpleefRenderer({self.width}x{self.height}, iso_angle={math.degrees(self.iso_angle)}°)"

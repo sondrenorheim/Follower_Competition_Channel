@@ -42,8 +42,14 @@ class SpleefGame:
 
         # Initialize Pygame
         pygame.init()
-        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
-        pygame.display.set_caption("Spleef - Falling Floor Battle")
+
+        # Use HIDDEN flag if headless mode is enabled (no window, faster processing)
+        display_flags = pygame.HIDDEN if config.HEADLESS_MODE else 0
+        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
+
+        if not config.HEADLESS_MODE:
+            pygame.display.set_caption("Spleef - Falling Floor Battle")
+
         self.clock = pygame.time.Clock()
 
         # Initialize shared systems
@@ -84,6 +90,10 @@ class SpleefGame:
         self.game_time = 0.0
         self.last_update_time = time.time()
         self.recording_start_time = None
+
+        # Fixed timestep for video export (prevents speedup issues)
+        self.use_fixed_timestep = config.EXPORT_VIDEO  # Enable during export
+        self.fixed_dt = 1.0 / config.VIDEO_FPS  # 0.0333s for 30 FPS
 
         # Phase durations
         self.intro_duration = 3.0
@@ -196,6 +206,9 @@ class SpleefGame:
                     print(f"👑 Winner: {winner.display_name}")
                     self.sound.play_winner_celebration()
 
+                # Calculate and store leaderboard for display
+                self._calculate_leaderboard_for_display()
+
         elif self.phase == "finished":
             if self.game_time >= self.winner_display_duration:
                 self.game_over = True
@@ -233,7 +246,7 @@ class SpleefGame:
     def update_arena(self, dt: float):
         """Update arena blocks"""
         if self.phase == "playing":
-            self.arena.update(self.players, dt)
+            self.arena.update(self.players, dt, self.game_time)
 
     def update(self, dt: float):
         """
@@ -245,15 +258,36 @@ class SpleefGame:
         # Cap delta time to prevent huge jumps
         dt = min(dt, config.MAX_DELTA_TIME)
 
-        # Calculate game time
-        self.game_time = time.time() - self.game_start_time
+        # Note: game_time is now tracked in main loop (not calculated here)
 
         # Update phase transitions
         self.update_phase()
 
         # Update game logic
-        self.update_players(dt)
+        # IMPORTANT: Update arena before players so physics sees current block states
+        # This prevents the 1-frame delay where blocks disappear but players don't fall yet
         self.update_arena(dt)
+        self.update_players(dt)
+
+    def _calculate_leaderboard_for_display(self):
+        """Calculate leaderboard for display during finished phase"""
+        results = self.get_results()
+
+        # Convert to scoring format
+        scored_results = []
+        for result in results:
+            scored_results.append({
+                'username': result['username'],
+                'display_name': result['display_name'],
+                'placement': result['placement'],
+                'score': result['score']
+            })
+
+        # Calculate scores using scoring system
+        self.current_game_leaderboard = self.scoring.calculate_scores(
+            results=scored_results,
+            game_mode="spleef"
+        )
 
     def render_to_pil(self) -> Image.Image:
         """
@@ -266,7 +300,8 @@ class SpleefGame:
             arena=self.arena,
             players=self.players,
             game_time=self.game_time,
-            phase=self.phase
+            phase=self.phase,
+            leaderboard=self.current_game_leaderboard if self.phase == "finished" else None
         )
 
     def render(self):
@@ -378,9 +413,17 @@ class SpleefGame:
                         self.running = False
 
             # Calculate delta time
-            current_time = time.time()
-            dt = current_time - self.last_update_time
+            current_time = time.time()  # Wall-clock time for FPS limiting
+            wall_dt = current_time - self.last_update_time
             self.last_update_time = current_time
+
+            # Use fixed timestep during export, variable during testing
+            if self.use_fixed_timestep:
+                dt = self.fixed_dt  # Fixed 1/30 second
+                self.game_time += dt  # Advance game time incrementally
+            else:
+                dt = wall_dt  # Use actual wall-clock delta
+                self.game_time = current_time - self.game_start_time
 
             # Update game state
             self.update(dt)
@@ -390,7 +433,7 @@ class SpleefGame:
 
             # Record frame if enabled
             if config.EXPORT_VIDEO:
-                self.recorder.capture_frame(self.screen, current_time)
+                self.recorder.capture_frame(self.screen, self.game_time)
 
             # Cap framerate
             target_fps = config.FPS

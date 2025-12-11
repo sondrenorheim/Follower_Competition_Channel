@@ -135,6 +135,10 @@ class FighterRenderer:
         Args:
             fighters: List of all fighters
         """
+        # Count alive fighters to determine if we should show HP bars
+        alive_count = sum(1 for f in fighters if f.alive)
+        show_hp_bars = alive_count <= 1000
+
         for fighter in fighters:
             # Skip if completely faded out
             if not fighter.alive and not fighter.is_fading():
@@ -161,8 +165,8 @@ class FighterRenderer:
             rect = display_surface.get_rect(center=(int(pos[0]), int(pos[1])))
             self.screen.blit(display_surface, rect)
 
-            # Draw HP bar above fighter (if alive or fading)
-            if fighter.alive or fighter.is_fading():
+            # Draw HP bar above fighter (only if <= 1000 fighters alive)
+            if show_hp_bars and (fighter.alive or fighter.is_fading()):
                 self._draw_hp_bar(fighter)
 
     def _get_fighter_surface(self, fighter: Fighter) -> pygame.Surface:

@@ -44,8 +44,14 @@ class FighterBattleArena:
 
         # Initialize Pygame
         pygame.init()
-        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
-        pygame.display.set_caption("Fighter Arena")
+
+        # Use HIDDEN flag if headless mode is enabled (no window, faster processing)
+        display_flags = pygame.HIDDEN if config.HEADLESS_MODE else 0
+        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
+
+        if not config.HEADLESS_MODE:
+            pygame.display.set_caption("Fighter Arena")
+
         self.clock = pygame.time.Clock()
 
         # Initialize game components

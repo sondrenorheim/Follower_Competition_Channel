@@ -128,27 +128,25 @@ class SpleefPhysics:
             new_x = player.x + player.vx * dt
             new_y = player.y + player.vy * dt
 
-        # Clamp position to arena bounds (prevent walking off platform)
-        # Only apply clamping when player is on solid ground, not when falling
         layer = arena.get_layer(player.current_layer)
-        if layer and is_supported:
-            left, top, right, bottom = layer.get_bounds()
+        if layer:
+            # Invisible wall along the centerline of the outermost cubes.
+            edge_buffer = max(
+                0.0,
+                getattr(config, 'SPLEEF_OUTER_WALL_BUFFER', layer.block_size * 0.25)
+            )
+            left, top, right, bottom = layer.get_playable_bounds(buffer=edge_buffer)
 
-            # Clamp X within bounds
-            if new_x < left:
-                new_x = left
-                player.vx = 0
-            elif new_x > right:
-                new_x = right
-                player.vx = 0
+            clamped_x = min(max(new_x, left), right)
+            clamped_y = min(max(new_y, top), bottom)
 
-            # Clamp Y within bounds
-            if new_y < top:
-                new_y = top
+            # Zero horizontal velocity if we hit the wall while supported
+            if is_supported and clamped_x != new_x:
+                player.vx = 0
+            if is_supported and clamped_y != new_y:
                 player.vy_move = 0
-            elif new_y > bottom:
-                new_y = bottom
-                player.vy_move = 0
+
+            new_x, new_y = clamped_x, clamped_y
 
         player.x = new_x
         player.y = new_y

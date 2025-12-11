@@ -92,7 +92,7 @@ class Fighter(Follower):
         cooldown = self.get_attack_cooldown()
         return current_time - self.last_attack_time >= cooldown
 
-    def attack(self, target: 'Fighter', current_time: float, combat_enabled: bool = True) -> bool:
+    def attack(self, target: 'Fighter', current_time: float, combat_enabled: bool = True, alive_count: int = 0) -> bool:
         """
         Attack another fighter
 
@@ -100,6 +100,7 @@ class Fighter(Follower):
             target: Fighter to attack
             current_time: Current game time
             combat_enabled: Whether combat is currently allowed
+            alive_count: Number of fighters currently alive (for damage scaling)
 
         Returns:
             True if attack landed
@@ -128,8 +129,12 @@ class Fighter(Follower):
         print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
         self.attack_animation_frames = 10  # Brief attack animation
 
-        # Deal damage
-        damage = self.attack_stat
+        # Deal damage - use 20 damage when more than 1000 fighters alive, otherwise use normal attack stat
+        if alive_count > 1000:
+            damage = 20
+        else:
+            damage = self.attack_stat
+
         killed = target.take_damage(damage, self)
         self.damage_dealt += damage
 
@@ -240,7 +245,9 @@ class Fighter(Follower):
 
             # Try to attack if in range (only if combat is enabled)
             if combat_enabled and isinstance(self.target_follower, Fighter):
-                self.attack(self.target_follower, current_time, combat_enabled)
+                # Count alive fighters for damage scaling
+                alive_count = sum(1 for f in all_fighters if f.alive)
+                self.attack(self.target_follower, current_time, combat_enabled, alive_count)
         else:
             self._random_movement_fighter(dt)
 

@@ -183,7 +183,7 @@ class SpleefArena:
 
         return spawn_positions
 
-    def update(self, players: List, dt: float):
+    def update(self, players: List, dt: float, game_time: float = None):
         """
         Update all floor layers and handle layer collapse
 
@@ -194,6 +194,7 @@ class SpleefArena:
         Args:
             players: List of SpleefPlayer instances
             dt: Delta time in seconds
+            game_time: Current game time (for layer collapse timing)
         """
         # Update all layers
         for layer in self.layers:
@@ -225,9 +226,9 @@ class SpleefArena:
 
             if percentage < 20.0 and percentage > 0:  # Less than 20% but not empty
                 # Start removing random blocks from this layer
-                self._collapse_layer(highest_occupied_layer, dt, percentage)
+                self._collapse_layer(highest_occupied_layer, dt, percentage, game_time)
 
-    def _collapse_layer(self, layer_index: int, dt: float, percentage: float):
+    def _collapse_layer(self, layer_index: int, dt: float, percentage: float, game_time: float = None):
         """
         Remove random blocks from a layer to force players down
 
@@ -241,19 +242,23 @@ class SpleefArena:
             layer_index: Layer to collapse
             dt: Delta time
             percentage: Percentage of alive players on this layer
+            game_time: Current game time (for timing checks)
         """
         import random
-        import time
 
         layer = self.get_layer(layer_index)
         if not layer:
             return
 
+        # Use game_time if provided, fall back to wall-clock for backward compatibility
+        if game_time is None:
+            import time
+            game_time = time.time()
+
         # Track last collapse time per layer
         if not hasattr(self, '_last_collapse_time'):
             self._last_collapse_time = {}
 
-        current_time = time.time()
         last_collapse = self._last_collapse_time.get(layer_index, 0)
 
         # Adjust collapse speed and blocks per tick based on player percentage
@@ -274,7 +279,7 @@ class SpleefArena:
             collapse_interval = 0.1  # 10 ticks per second
             blocks_to_break = 1
 
-        if current_time - last_collapse >= collapse_interval:
+        if game_time - last_collapse >= collapse_interval:
             # Get all solid blocks
             solid_blocks = [block for block in layer.blocks.values() if block.is_solid()]
 
@@ -285,7 +290,7 @@ class SpleefArena:
                         random_block = random.choice(solid_blocks)
                         random_block.state = 3  # BlockState.BROKEN
                         solid_blocks.remove(random_block)
-                self._last_collapse_time[layer_index] = current_time
+                self._last_collapse_time[layer_index] = game_time
 
     def get_total_solid_blocks(self) -> int:
         """

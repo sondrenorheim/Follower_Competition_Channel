@@ -4,9 +4,9 @@ Daily Automation Loop for Follower Battle Grounds
 
 COMPLETE AUTOMATION CYCLE:
 1. Push stats to GitHub
-2. Upload videos to Instagram & TikTok (one at a time with 3-4 hour delays)
-3. Wait until next day
-4. Fetch fresh follower list
+2. Upload videos to Instagram & TikTok (one at a time with 2-3 hour delays)
+3. Wait until 6 AM next day
+4. Fetch fresh follower list at 6 AM
 5. Run all games to generate new videos
 6. Loop back to step 1
 
@@ -14,8 +14,9 @@ Usage:
     python daily_automation_loop.py
 
 Features:
-- Randomized delays (3-4 hours) between uploads for human-like behavior
+- Randomized delays (2-3 hours) between uploads for human-like behavior
 - Safe Selenium-based uploads (no API violations)
+- Scheduled 6 AM follower fetching for consistent daily updates
 - Automatic day number incrementing
 - Error handling and recovery
 - Logs all activities
@@ -32,6 +33,8 @@ import traceback
 
 import config
 from shared import auto_push
+from instagram_story_generator import generate_story_image
+from safe_instagram_uploader import SafeInstagramUploader
 
 
 class DailyAutomationLoop:
@@ -379,27 +382,104 @@ class DailyAutomationLoop:
 
         self.log("\nSUCCESS: All videos uploaded!")
 
-    def wait_until_next_day(self):
+    def post_story_after_videos(self):
         """
-        Wait until next day (midnight + random offset)
+        STEP 2.5: Post Instagram story 2 hours after video uploads
 
-        STEP 3: Wait until next day
+        Shows top 3 daily performers with branded template
         """
         self.log("=" * 60)
-        self.log("STEP 3: Waiting until next day")
+        self.log("STEP 2.5: Posting Instagram story")
+        self.log("=" * 60)
+
+        # Check if story already posted
+        if self.state.get('story_posted_today', False):
+            self.log("Story already posted today, skipping")
+            return
+
+        # Check if enabled in config
+        if not config.ENABLE_STORY_POSTING:
+            self.log("Story posting disabled in config, skipping")
+            return
+
+        try:
+            # Wait configured delay hours
+            self.log(f"Waiting {config.STORY_DELAY_HOURS} hours before posting story...")
+            delay_seconds = config.STORY_DELAY_HOURS * 3600
+            chunk_size = 60  # 1-minute chunks for interruptibility
+            chunks = int(delay_seconds / chunk_size)
+
+            for i in range(chunks):
+                time.sleep(chunk_size)
+                if (i + 1) % 20 == 0:  # Log every 20 minutes
+                    remaining = (chunks - i - 1) * chunk_size / 60
+                    self.log(f"   {remaining:.0f} minutes remaining...")
+
+            # Generate story image
+            self.log("Generating story image...")
+            story_path = f"story_day_{self.state['current_day']}.png"
+
+            if not generate_story_image(self.state['current_day'], story_path):
+                self.log("ERROR: Failed to generate story image")
+                return
+
+            self.log(f"Story image generated: {story_path}")
+
+            # Get top 3 usernames for tagging
+            from instagram_story_generator import get_top_3_daily_performers
+            top_3 = get_top_3_daily_performers(self.state['current_day'])
+            usernames_to_tag = [performer['username'] for performer in top_3] if top_3 else []
+
+            if usernames_to_tag:
+                self.log(f"Will tag {len(usernames_to_tag)} users: {', '.join(usernames_to_tag)}")
+
+            # Upload story
+            self.log("Uploading story to Instagram...")
+            uploader = SafeInstagramUploader(headless=True)
+
+            if not uploader.upload_story(story_path, usernames_to_tag=usernames_to_tag):
+                self.log("WARNING: Story upload failed")
+                return
+
+            # Mark success
+            self.state['story_posted_today'] = True
+            self.save_state()
+            self.log("SUCCESS: Story posted successfully!")
+
+        except Exception as e:
+            self.log(f"ERROR: Story posting failed: {e}")
+            traceback.print_exc()
+
+    def wait_until_next_day(self):
+        """
+        Wait until 6 AM next day to fetch fresh followers
+        If current time is between 6 AM and 11 AM, proceed immediately
+
+        STEP 3: Wait until next day (6 AM)
+        """
+        self.log("=" * 60)
+        self.log("STEP 3: Waiting until 6 AM to fetch new followers")
         self.log("=" * 60)
 
         now = datetime.now()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-        # Add random offset (1-3 hours after midnight)
-        offset_hours = random.uniform(1.0, 3.0)
-        target_time = tomorrow + timedelta(hours=offset_hours)
+        # Check if current time is between 6 AM and 11 AM
+        if 6 <= now.hour < 11:
+            self.log(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.log("Time is between 6 AM and 11 AM - proceeding immediately!")
+            return
+
+        # Calculate next 6 AM
+        target_time = now.replace(hour=6, minute=0, second=0, microsecond=0)
+
+        # If it's already past 6 AM today, target tomorrow's 6 AM
+        if now.hour >= 6:
+            target_time += timedelta(days=1)
 
         wait_seconds = (target_time - now).total_seconds()
 
         self.log(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        self.log(f"Target time: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.log(f"Target time: {target_time.strftime('%Y-%m-%d %H:%M:%S')} (6 AM)")
         self.log(f"Waiting {wait_seconds / 3600:.2f} hours...")
 
         # Sleep in chunks
@@ -409,12 +489,12 @@ class DailyAutomationLoop:
             time.sleep(chunk_size)
             if (i + 1) % 12 == 0:  # Log every hour
                 remaining_hours = (chunks - i - 1) * chunk_size / 3600
-                self.log(f"   {remaining_hours:.1f} hours until next day...")
+                self.log(f"   {remaining_hours:.1f} hours until 6 AM...")
 
         # Sleep remaining seconds
         time.sleep(wait_seconds % chunk_size)
 
-        self.log("SUCCESS: Next day reached!")
+        self.log("SUCCESS: 6 AM reached - ready to fetch fresh followers!")
 
     def fetch_fresh_followers(self):
         """
@@ -433,6 +513,8 @@ class DailyAutomationLoop:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',  # Replace problematic characters instead of crashing
                 timeout=3600  # 1 hour timeout
             )
 
@@ -478,6 +560,8 @@ class DailyAutomationLoop:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',  # Replace problematic characters instead of crashing
                 timeout=7200  # 2 hour timeout
             )
 
@@ -487,6 +571,7 @@ class DailyAutomationLoop:
                 self.state['videos_uploaded_today'] = []
                 self.state['videos_uploaded_instagram'] = []
                 self.state['videos_uploaded_tiktok'] = []
+                self.state['story_posted_today'] = False  # Reset story flag for new day
                 self.state['last_game_run_date'] = datetime.now().isoformat()
                 self.save_state()
                 return True
@@ -543,6 +628,9 @@ class DailyAutomationLoop:
 
             # Step 2: Upload videos with delays
             self.upload_videos_with_delays()
+
+            # Step 2.5: Post story after uploads
+            self.post_story_after_videos()
 
             # Step 3: Wait until next day
             self.wait_until_next_day()
@@ -606,9 +694,9 @@ def main():
     print()
     print("This will run the complete automation cycle:")
     print("1. Push stats to GitHub")
-    print("2. Upload videos (with 3-4 hour delays)")
-    print("3. Wait until next day")
-    print("4. Fetch fresh followers")
+    print("2. Upload videos (with 2-3 hour delays)")
+    print("3. Wait until 6 AM next day")
+    print("4. Fetch fresh followers at 6 AM")
     print("5. Run games to generate new videos")
     print("6. Loop back to step 1")
     print()

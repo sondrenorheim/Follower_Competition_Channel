@@ -1,21 +1,8 @@
 {
   "last_upload_date": null,
-  "last_game_run_date": null,
-  "current_day": 19,
-  "videos_uploaded_today": [
-    "Videos\\Day_19\\battle_royale_day_19.mp4"
-  ],
-  "videos_uploaded_instagram": [
-    "Videos\\Day_19\\battle_royale_day_19.mp4",
-    "Videos\\Day_19\\fighter_arena_day_19.mp4",
-    "Videos\\Day_19\\obstacle_course_day_19.mp4",
-    "Videos\\Day_19\\snake_escape_day_19.mp4"
-  ],
-  "videos_uploaded_tiktok": [
-    "Videos\\Day_19\\battle_royale_day_19.mp4",
-    "Videos\\Day_19\\fighter_arena_day_19.mp4",
-    "Videos\\Day_19\\obstacle_course_day_19.mp4",
-    "Videos\\Day_19\\snake_escape_day_19.mp4",
-    "Videos\\Day_19\\team_battle_day_19.mp4"
-  ]
+  "last_game_run_date": "2025-12-11T06:04:26.548799",
+  "current_day": 21,
+  "videos_uploaded_today": [],
+  "videos_uploaded_instagram": [],
+  "videos_uploaded_tiktok": []
 }
