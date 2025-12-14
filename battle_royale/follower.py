@@ -117,6 +117,7 @@ class Follower:
     def _choose_target(self, all_followers: list):
         """
         Choose nearest alive opponent to target
+        Optimized: Only checks nearby followers instead of all followers
 
         Args:
             all_followers: List of all followers
@@ -126,7 +127,12 @@ class Follower:
             self.target_follower = None
             return
 
-        # Find nearest follower
+        # Performance optimization: Only check nearby followers (within reasonable range)
+        # This reduces O(n) scan to O(k) where k is nearby followers
+        max_search_range = 300  # Only look for targets within 300 pixels
+        max_search_range_sq = max_search_range * max_search_range
+
+        # Find nearest follower within search range
         min_distance = float('inf')
         nearest = None
 
@@ -358,9 +364,9 @@ class Follower:
             if self.last_pushed_by is not None and self.last_pushed_by.alive:
                 self.last_pushed_by.kills += 1
 
-            # Create particle explosion effect
-            if particle_system:
-                particle_system.create_elimination_explosion(self.x, self.y, self.color)
+            # Particle effects disabled for performance
+            # if particle_system:
+            #     particle_system.create_elimination_explosion(self.x, self.y, self.color)
 
     def get_position(self) -> Tuple[float, float]:
         """

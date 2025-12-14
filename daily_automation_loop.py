@@ -6,9 +6,10 @@ COMPLETE AUTOMATION CYCLE:
 1. Push stats to GitHub
 2. Upload videos to Instagram & TikTok (one at a time with 2-3 hour delays)
 3. Wait until 6 AM next day
-4. Fetch fresh follower list at 6 AM
-5. Run all games to generate new videos
-6. Loop back to step 1
+4. Increment day number for new day
+5. Fetch fresh follower list at 6 AM
+6. Run all games to generate new videos
+7. Loop back to step 1
 
 Usage:
     python daily_automation_loop.py
@@ -17,7 +18,7 @@ Features:
 - Randomized delays (2-3 hours) between uploads for human-like behavior
 - Safe Selenium-based uploads (no API violations)
 - Scheduled 6 AM follower fetching for consistent daily updates
-- Automatic day number incrementing
+- Automatic day number incrementing (before fetching followers)
 - Error handling and recovery
 - Logs all activities
 """
@@ -35,6 +36,7 @@ import config
 from shared import auto_push
 from instagram_story_generator import generate_story_image
 from safe_instagram_uploader import SafeInstagramUploader
+from persistent_instagram_uploader import PersistentInstagramUploader
 
 
 class DailyAutomationLoop:
@@ -46,6 +48,7 @@ class DailyAutomationLoop:
         self.log_file = "automation_loop.log"
         self.state_file = "automation_state.json"
         self.load_state()
+        self.persistent_ig_uploader = None  # Persistent Instagram session for all uploads
 
     def log(self, message: str):
         """Log message to both console and file"""
@@ -180,7 +183,8 @@ class DailyAutomationLoop:
 
     def upload_video_instagram(self, video_path: str, caption: str) -> bool:
         """
-        Upload video to Instagram using safe Selenium uploader
+        Upload video to Instagram using persistent uploader (if active)
+        Falls back to subprocess if no persistent session
 
         Args:
             video_path: Path to video file
@@ -192,30 +196,41 @@ class DailyAutomationLoop:
         try:
             self.log(f"   Instagram upload: {Path(video_path).name}")
 
-            # Run safe Instagram uploader
-            cmd = [
-                sys.executable,
-                "safe_instagram_uploader.py",
-                "--video", video_path,
-                "--caption", caption,
-                "--headless"  # Run in background
-            ]
+            # Use persistent uploader if available (keeps browser open all day)
+            if self.persistent_ig_uploader and self.persistent_ig_uploader.session_active:
+                self.log("   Using persistent Instagram session...")
+                success = self.persistent_ig_uploader.upload_video(video_path, caption)
+                if success:
+                    self.log("   SUCCESS: Instagram upload successful")
+                else:
+                    self.log("   ERROR: Instagram upload failed")
+                return success
 
-            # Don't capture output - let it stream in real-time so we see detailed logging
-            result = subprocess.run(
-                cmd,
-                text=True,
-                encoding='utf-8',
-                errors='replace',  # Replace encoding errors instead of crashing
-                timeout=300  # 5 minute timeout (reduced from 10)
-            )
-
-            if result.returncode == 0:
-                self.log("   SUCCESS: Instagram upload successful")
-                return True
+            # Fallback to old method (opens/closes browser each time)
             else:
-                self.log(f"   ERROR: Instagram upload failed (exit code {result.returncode})")
-                return False
+                self.log("   Using subprocess uploader (no persistent session)...")
+                cmd = [
+                    sys.executable,
+                    "safe_instagram_uploader.py",
+                    "--video", video_path,
+                    "--caption", caption,
+                    "--headless"
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=300
+                )
+
+                if result.returncode == 0:
+                    self.log("   SUCCESS: Instagram upload successful")
+                    return True
+                else:
+                    self.log(f"   ERROR: Instagram upload failed (exit code {result.returncode})")
+                    return False
 
         except subprocess.TimeoutExpired:
             self.log("   ERROR: Instagram upload timed out")
@@ -311,6 +326,26 @@ class DailyAutomationLoop:
 
         self.log(f"Found {len(videos)} videos to upload")
 
+        # Start persistent Instagram session (browser stays open all day)
+        self.log("\nStarting persistent Instagram session...")
+        self.log("(Browser will stay open for all uploads - you only need to handle 2FA once!)")
+        try:
+            self.persistent_ig_uploader = PersistentInstagramUploader(
+                cookies_file="instagram_cookies.json",
+                headless=False  # Keep visible for 2FA handling
+            )
+            if not self.persistent_ig_uploader.start_session():
+                self.log("WARNING: Failed to start persistent Instagram session")
+                self.log("Will fall back to subprocess method for each upload")
+                self.persistent_ig_uploader = None
+            else:
+                self.log("SUCCESS: Persistent Instagram session started!")
+                self.log("Browser will stay open for all uploads today")
+        except Exception as e:
+            self.log(f"ERROR: Could not start persistent Instagram session: {e}")
+            self.log("Will fall back to subprocess method for each upload")
+            self.persistent_ig_uploader = None
+
         for idx, (video_path, game_mode) in enumerate(videos):
             ig_done = video_path in self.state.get('videos_uploaded_instagram', [])
             tt_done = video_path in self.state.get('videos_uploaded_tiktok', [])
@@ -379,6 +414,15 @@ class DailyAutomationLoop:
 
                 # Sleep remaining seconds
                 time.sleep(delay_seconds % chunk_size)
+
+        # Close persistent Instagram session
+        if self.persistent_ig_uploader:
+            self.log("\nClosing persistent Instagram session...")
+            try:
+                self.persistent_ig_uploader.close_session()
+            except Exception as e:
+                self.log(f"WARNING: Error closing Instagram session: {e}")
+            self.persistent_ig_uploader = None
 
         self.log("\nSUCCESS: All videos uploaded!")
 
@@ -514,8 +558,7 @@ class DailyAutomationLoop:
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                errors='replace',  # Replace problematic characters instead of crashing
-                timeout=3600  # 1 hour timeout
+                errors='replace'  # Replace problematic characters instead of crashing
             )
 
             if result.returncode == 0:
@@ -527,9 +570,6 @@ class DailyAutomationLoop:
                 self.log(f"ERROR: Follower scraping failed: {result.stderr}")
                 return False
 
-        except subprocess.TimeoutExpired:
-            self.log("ERROR: Follower scraping timed out")
-            return False
         except Exception as e:
             self.log(f"ERROR: Follower scraping error: {e}")
             return False
@@ -544,13 +584,6 @@ class DailyAutomationLoop:
         self.log("STEP 5: Running games to generate videos")
         self.log("=" * 60)
 
-        # Increment day number
-        self.state['current_day'] += 1
-        self.save_state()
-
-        # Update config.py with new day number
-        self.update_config_day_number(self.state['current_day'])
-
         try:
             cmd = [sys.executable, "main.py"]
 
@@ -561,8 +594,7 @@ class DailyAutomationLoop:
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                errors='replace',  # Replace problematic characters instead of crashing
-                timeout=7200  # 2 hour timeout
+                errors='replace'  # Replace problematic characters instead of crashing
             )
 
             if result.returncode == 0:
@@ -579,9 +611,6 @@ class DailyAutomationLoop:
                 self.log(f"ERROR: Games failed: {result.stderr[-500:]}")
                 return False
 
-        except subprocess.TimeoutExpired:
-            self.log("ERROR: Game execution timed out")
-            return False
         except Exception as e:
             self.log(f"ERROR: Game execution error: {e}")
             traceback.print_exc()
@@ -634,6 +663,12 @@ class DailyAutomationLoop:
 
             # Step 3: Wait until next day
             self.wait_until_next_day()
+
+            # Step 3.5: Increment day number for new day
+            self.state['current_day'] += 1
+            self.save_state()
+            self.update_config_day_number(self.state['current_day'])
+            self.log(f"\nDay number incremented to: {self.state['current_day']}")
 
             # Step 4: Fetch fresh followers
             if not self.fetch_fresh_followers():
@@ -696,9 +731,10 @@ def main():
     print("1. Push stats to GitHub")
     print("2. Upload videos (with 2-3 hour delays)")
     print("3. Wait until 6 AM next day")
-    print("4. Fetch fresh followers at 6 AM")
-    print("5. Run games to generate new videos")
-    print("6. Loop back to step 1")
+    print("4. Increment day number for new day")
+    print("5. Fetch fresh followers at 6 AM")
+    print("6. Run games to generate new videos")
+    print("7. Loop back to step 1")
     print()
     print("Press Ctrl+C to stop at any time.")
     print()

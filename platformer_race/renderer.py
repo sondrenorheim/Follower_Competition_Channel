@@ -982,6 +982,22 @@ class PlatformerRenderer:
                 surface_rect = surface.get_rect(center=(int(screen_pos[0]), int(screen_pos[1])))
                 self.screen.blit(surface, surface_rect)
 
+                # Draw username nametag (always visible for constant-size game)
+                if config.SHOW_NAMETAGS:
+                    username = racer.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+                    text_x = int(screen_pos[0])
+                    text_y = int(screen_pos[1] + racer.radius + config.NAMETAG_VERTICAL_OFFSET + 4)
+
+                    # Use existing helper method with config values
+                    self._draw_text_with_outline(
+                        username,
+                        self.font_small,
+                        config.NAMETAG_TEXT_COLOR,
+                        config.NAMETAG_OUTLINE_COLOR,
+                        (text_x, text_y),
+                        outline_width=config.NAMETAG_OUTLINE_WIDTH
+                    )
+
     def _create_racer_surface(self, racer):
         """
         Create circular surface for racer with profile picture

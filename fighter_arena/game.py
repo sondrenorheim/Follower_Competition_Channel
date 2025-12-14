@@ -116,10 +116,16 @@ class FighterBattleArena:
         """
         Fetch/generate followers and create fighters
         """
-        print(f"🥊 Setting up {config.FOLLOWER_COUNT} fighters...")
+        print(f"🥊 Setting up fighters...")
 
-        # Fetch followers from API or generate placeholders
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        # Fetch followers (support test mode)
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Using {config.TEST_MINIMAL_PLAYER_COUNT} test players")
+            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+
+        print(f"🥊 Setting up {len(follower_data)} fighters...")
 
         # Place fighters randomly in arena
         arena_rect = self.arena.get_rect()

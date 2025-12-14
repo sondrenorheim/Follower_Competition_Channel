@@ -76,12 +76,13 @@ class SnakeEscapeFollower:
 
     def update(self, dt: float, arena, snake, all_followers: list):
         """
-        Update follower state.
+        Update follower state - simplified to random movement.
+        Snake repulsion is handled externally via force field.
 
         Args:
             dt: Delta time in seconds
             arena: The game arena
-            snake: The snake entity
+            snake: Unused (kept for compatibility)
             all_followers: List of all followers
         """
         if not self.alive:
@@ -90,24 +91,12 @@ class SnakeEscapeFollower:
 
         current_time = time.time()
 
-        # Calculate distance to snake
-        snake_dx = snake.x - self.x
-        snake_dy = snake.y - self.y
-        snake_distance = math.sqrt(snake_dx * snake_dx + snake_dy * snake_dy)
-
-        # Determine behavior based on snake distance
-        if snake_distance < self.panic_distance:
-            # PANIC - run directly away from snake at max speed
-            self._flee_from_snake(snake, dt, panic=True)
-        elif snake_distance < self.flee_distance:
-            # Flee - move away from snake
-            self._flee_from_snake(snake, dt, panic=False)
-        else:
-            # Wander - random movement
-            if current_time - self.last_direction_change > self.direction_change_interval:
-                self._pick_new_target(arena)
-                self.last_direction_change = current_time
-            self._move_toward_target(dt)
+        # Simple random walk behavior (Brownian motion)
+        # No intelligent AI - just wander randomly!
+        # Snake repulsion will be applied externally
+        if current_time - self.last_direction_change > self.direction_change_interval:
+            self._pick_random_direction()
+            self.last_direction_change = current_time
 
         # Apply push velocity from collisions
         self.x += self.push_vx
@@ -169,8 +158,26 @@ class SnakeEscapeFollower:
         self.vx += (target_vx - self.vx) * smoothing
         self.vy += (target_vy - self.vy) * smoothing
 
+    def _pick_random_direction(self):
+        """
+        Pick a new random movement direction (Brownian motion).
+        Much simpler and faster than pathfinding!
+        """
+        # Random angle
+        angle = random.uniform(0, 2 * math.pi)
+
+        # Random speed variation
+        speed = self.stats['base_speed'] * random.uniform(0.5, 1.0)
+
+        # Set velocity in random direction
+        self.vx = math.cos(angle) * speed
+        self.vy = math.sin(angle) * speed
+
+        # Random time until next direction change
+        self.direction_change_interval = random.uniform(1.0, 3.0)
+
     def _pick_new_target(self, arena):
-        """Pick a new random target position."""
+        """Pick a new random target position (legacy method)."""
         # Random position within arena
         self.target_x, self.target_y = arena.get_random_position(self.radius + 20)
         self.direction_change_interval = random.uniform(1.0, 3.0)

@@ -21,6 +21,7 @@ from shared import (
     AudioLogger,
     VideoRecorder,
     ParticleSystem,
+    PhysicsEngine,
     auto_push
 )
 
@@ -82,6 +83,7 @@ class SnakeEscapeGame:
         self.game_history = GameHistory()
         self.scoring = ScoringSystem()
         self.particles = ParticleSystem()
+        self.physics = PhysicsEngine()  # Optimized collision detection with spatial grid + Numba
 
         # Preload audio
         self.sound.preload_audio()
@@ -115,14 +117,22 @@ class SnakeEscapeGame:
         self.total_eliminations = 0
         self.initial_follower_count = 0
 
+        # Performance optimization - update throttling for large player counts
+        self.update_frame_counter = 0
+        self.update_batches_per_frame = config.UPDATE_BATCHES_PER_FRAME
+
         print(f"{self.GAME_TITLE} initialized!\n")
 
     def setup_players(self):
         """Set up followers and spawn them in the arena."""
-        print(f"Setting up {config.FOLLOWER_COUNT} {self.PLAYER_LABEL}...")
+        print(f"Setting up {self.PLAYER_LABEL}...")
 
-        # Fetch followers
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        # Fetch followers (support test mode)
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Using {config.TEST_MINIMAL_PLAYER_COUNT} test players")
+            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
         random.shuffle(follower_data)
 
         # Store initial count for dynamic scaling
@@ -218,23 +228,44 @@ class SnakeEscapeGame:
                     self.sound.play_elimination()
                     print(f"Snake ate {follower.username}! {alive_count - 1} survivors remaining")
 
-        # Update followers - find nearest snake for flee behavior
-        for follower in self.followers:
-            if self.snakes:
-                # Find the nearest snake for this follower
-                nearest_snake = min(self.snakes, key=lambda s: follower.distance_to(s))
-                follower.update(dt, self.arena, nearest_snake, self.followers)
-            else:
-                # Before snakes spawn, just wander
-                follower.update(dt, self.arena, type('FakeSnake', (), {'x': -1000, 'y': -1000})(), self.followers)
+        # CRITICAL OPTIMIZATION: Only process ALIVE followers!
+        # Dead followers don't need updates, physics, or repulsion
+        alive_followers = [f for f in self.followers if f.alive]
+        total_alive = len(alive_followers)
 
-        # Check collisions between followers
-        for i, f1 in enumerate(self.followers):
-            for f2 in self.followers[i + 1:]:
-                if f1.alive and f2.alive:
-                    # Pass nearest snake for strategic pushing
-                    nearest_snake = min(self.snakes, key=lambda s: f1.distance_to(s)) if self.snakes else None
-                    f1.check_collision(f2, current_time, nearest_snake)
+        # Performance optimization: Update throttling for large player counts
+        if config.ENABLE_UPDATE_THROTTLING and total_alive > 5000:
+            # Increment frame counter
+            self.update_frame_counter += 1
+
+            # Calculate which batch to update this frame
+            batch_index = self.update_frame_counter % self.update_batches_per_frame
+            batch_size = (total_alive + self.update_batches_per_frame - 1) // self.update_batches_per_frame
+
+            # Calculate start and end indices for this batch
+            start_idx = batch_index * batch_size
+            end_idx = min(start_idx + batch_size, total_alive)
+
+            followers_to_update = alive_followers[start_idx:end_idx]
+        else:
+            # For smaller player counts or if throttling disabled, update all ALIVE followers every frame
+            followers_to_update = alive_followers
+
+        # Update followers with simple random movement
+        # No individual AI - they just wander!
+        fake_snake = type('FakeSnake', (), {'x': -1000, 'y': -1000})()
+        for follower in followers_to_update:
+            follower.update(dt, self.arena, fake_snake, alive_followers)
+
+        # Apply snake repulsion field (THIS IS THE MAGIC!)
+        # Only affects ALIVE players near the snake
+        if self.snakes and alive_followers:
+            self._apply_snake_repulsion_field(dt, alive_followers)
+
+        # Use PhysicsEngine for collision detection - ONLY for alive followers!
+        # This is the fix for the Numba allocation error with 30 players
+        if alive_followers:
+            self.physics.update(alive_followers, dt)
 
         # Update particles
         self.particles.update(dt)
@@ -351,17 +382,22 @@ class SnakeEscapeGame:
             for snake in self.snakes:
                 snake.update(dt, self.arena, self.followers)
 
-            # Update followers - flee from nearest snake even during countdown
-            for follower in self.followers:
-                if self.snakes:
-                    nearest_snake = min(self.snakes, key=lambda s: follower.distance_to(s))
-                    follower.update(dt, self.arena, nearest_snake, self.followers)
+            # OPTIMIZED: Only process alive followers during countdown too!
+            alive_followers = [f for f in self.followers if f.alive]
 
-            # Check collisions to prevent overlapping during countdown
-            for i, f1 in enumerate(self.followers):
-                for f2 in self.followers[i + 1:]:
-                    if f1.alive and f2.alive:
-                        f1.check_collision(f2, current_time, None)
+            # Update followers with simple random movement
+            # No individual AI - they just wander!
+            fake_snake = type('FakeSnake', (), {'x': -1000, 'y': -1000})()
+            for follower in alive_followers:
+                follower.update(dt, self.arena, fake_snake, alive_followers)
+
+            # Apply snake repulsion field (makes them appear to flee intelligently)
+            if self.snakes and alive_followers:
+                self._apply_snake_repulsion_field(dt, alive_followers)
+
+            # Use PhysicsEngine for collision detection - only alive followers!
+            if alive_followers:
+                self.physics.update(alive_followers, dt)
 
             self.render()
 
@@ -412,6 +448,74 @@ class SnakeEscapeGame:
                     self.running = False
 
         self.cleanup()
+
+    def _apply_snake_repulsion_field(self, dt: float, alive_followers: list):
+        """
+        Apply repulsion force from snakes to nearby followers.
+        Makes followers appear to intelligently flee without individual AI.
+
+        This is the MAGIC that makes random wandering look like intelligent behavior!
+        Instead of each follower computing paths and making decisions, we just
+        push them away from snakes with a simple force field.
+
+        Performance: O(k*m) where k=alive followers, m=snakes
+
+        Args:
+            dt: Delta time (unused but kept for consistency)
+            alive_followers: List of alive followers only (critical optimization!)
+        """
+        # Configuration
+        repulsion_radius = 200  # Distance at which repulsion starts
+        panic_radius = 80       # Inner radius with extra strong repulsion
+        base_force = 3.5        # Base repulsion strength
+
+        # For each snake, apply repulsion to nearby followers
+        for snake in self.snakes:
+            snake_x = snake.x
+            snake_y = snake.y
+            repulsion_radius_sq = repulsion_radius * repulsion_radius
+
+            # OPTIMIZED: Only loop through ALIVE followers (not all 1M!)
+            for follower in alive_followers:
+
+                # Calculate squared distance first (cheaper than sqrt)
+                dx = follower.x - snake_x
+                dy = follower.y - snake_y
+                dist_sq = dx * dx + dy * dy
+
+                # Quick reject: skip if too far
+                # For 500k players with 2 snakes, this rejects ~99.9% of followers!
+                if dist_sq > repulsion_radius_sq:
+                    continue
+
+                # Only ~100-500 followers reach this point per snake
+                # Calculate actual distance
+                dist = math.sqrt(dist_sq)
+
+                # Avoid division by zero
+                if dist < 1.0:
+                    # Directly on top of snake - push in random direction
+                    angle = random.uniform(0, 2 * math.pi)
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    dist = 1.0
+
+                # Calculate repulsion strength (inversely proportional to distance)
+                # Closer = stronger push
+                strength = (repulsion_radius - dist) / repulsion_radius
+
+                # Extra panic mode when very close to snake
+                if dist < panic_radius:
+                    strength *= 2.5  # Much stronger push in panic zone!
+
+                # Normalize direction (away from snake)
+                dx_norm = dx / dist
+                dy_norm = dy / dist
+
+                # Apply repulsion force to velocity
+                repulsion_force = strength * base_force
+                follower.vx += dx_norm * repulsion_force
+                follower.vy += dy_norm * repulsion_force
 
     def _handle_game_over(self, survivors: List[SnakeEscapeFollower]):
         """Handle game over."""

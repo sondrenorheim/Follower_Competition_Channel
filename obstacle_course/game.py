@@ -207,10 +207,16 @@ class ObstacleCourseGame:
 
     def setup_racers(self):
         """Fetch/generate followers and create racers"""
-        print(f"Setting up {config.FOLLOWER_COUNT} racers...")
+        print(f"Setting up racers...")
 
-        # Fetch followers
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        # Fetch followers (support test mode)
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Using {config.TEST_MINIMAL_PLAYER_COUNT} test players")
+            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+
+        print(f"Setting up {len(follower_data)} racers...")
 
         # Randomize order so followers aren't always in the same starting positions
         import random
@@ -234,8 +240,8 @@ class ObstacleCourseGame:
         # Small horizontal offset to ensure all racers start behind the starting line
         start_offset = config.FOLLOWER_RADIUS * 2  # Push back from start line
 
-        # Use the same layout as intro animation - 60 players per vertical line (doubled)
-        max_racers_per_vertical_line = 120
+        # Use the same layout as intro animation - 50 players per vertical line
+        max_racers_per_vertical_line = 50
 
         for i, data in enumerate(follower_data):
             # Determine position in spread-out layout (same as intro)
@@ -484,7 +490,6 @@ class ObstacleCourseGame:
 
         # INTRO PHASE - Racers slide in from left in vertical lines
         print("\nIntro animation: Racers entering...")
-        intro_duration = 8.0  # 8 seconds for intro animation (extended for more vertical lines)
         intro_start_time = time.time()
 
         # Get track boundaries to keep intro rows within finish line area
@@ -497,14 +502,21 @@ class ObstacleCourseGame:
         # Store original positions and arrange racers in vertical lines
         original_positions = []
 
-        # Max 30 players per vertical line
-        max_racers_per_vertical_line = 30
+        # Max 50 players per vertical line
+        max_racers_per_vertical_line = 50
 
         # Calculate how many vertical lines we need
         num_vertical_lines = (len(self.racers) + max_racers_per_vertical_line - 1) // max_racers_per_vertical_line
 
         # Horizontal spacing between vertical lines
-        horizontal_line_spacing = 30  # pixels between each vertical line
+        horizontal_line_spacing = 10  # pixels between each vertical line
+
+        # Calculate intro speed based on number of racers to ensure max 10 seconds
+        # Need to travel from -300 - (num_vertical_lines * spacing) to start line
+        max_intro_duration = 10.0
+        furthest_starting_x = -300 - ((num_vertical_lines - 1) * horizontal_line_spacing)
+        distance_to_travel = self.course.start_line[0] - config.FOLLOWER_RADIUS * 2 - furthest_starting_x
+        constant_speed = distance_to_travel / max_intro_duration  # pixels per second to complete in 10s
 
         for i, racer in enumerate(self.racers):
             original_positions.append((racer.x, racer.y))
@@ -542,16 +554,12 @@ class ObstacleCourseGame:
 
             dt = self.clock.tick(config.FPS) / 1000.0
 
-            # Calculate intro animation progress (0.0 to 1.0)
+            # Calculate elapsed time for animation
             elapsed = time.time() - intro_start_time
-            progress = min(1.0, elapsed / intro_duration)
-
-            # Use easing function for smooth animation (ease-out)
-            eased_progress = 1.0 - (1.0 - progress) ** 3  # Cubic ease-out
 
             # Animate each racer sliding in horizontally (NO vertical movement during intro)
             # All racers move at the SAME SPEED, so lines arrive sequentially
-            constant_speed = 150  # pixels per second (slower for better viewing)
+            # Speed is calculated above to ensure completion within max_intro_duration
             distance_traveled = constant_speed * elapsed  # All racers travel the same distance
 
             all_racers_in_position = True  # Track if all racers have arrived

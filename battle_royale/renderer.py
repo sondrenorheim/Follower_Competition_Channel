@@ -75,6 +75,9 @@ class Renderer:
             arena: Arena object
             game_state: Dictionary with game state info (includes game_phase, countdown_number, etc.)
             particle_system: Optional ParticleSystem for effects
+
+        Returns:
+            dict: Rendering statistics (rendered count, culled count)
         """
         # Clear screen
         self.screen.fill(config.COLOR_BACKGROUND)
@@ -82,8 +85,8 @@ class Renderer:
         # Draw arena
         self._draw_arena(arena)
 
-        # Draw followers
-        self._draw_followers(followers, arena)
+        # Draw followers and get rendering stats
+        render_stats = self._draw_followers(followers, arena)
 
         # Draw particles (over followers but under UI)
         if particle_system:
@@ -95,12 +98,12 @@ class Renderer:
         # Draw countdown overlay if in countdown phase
         if game_state.get("game_phase") == "countdown":
             self._draw_countdown(game_state.get("countdown_number", 3))
-            return  # Skip other UI during countdown
+            return render_stats  # Skip other UI during countdown
 
         # Draw intro overlay if in intro phase
         if game_state.get("game_phase") == "intro":
             self._draw_intro(game_state.get("day_number", 1))
-            return  # Skip other UI during intro
+            return render_stats  # Skip other UI during intro
 
         # Draw zone shrink warning (only during playing phase)
         if game_state.get("game_phase") == "playing" and arena.get_time_until_next_shrink() < 1.0:
@@ -126,6 +129,9 @@ class Renderer:
 
         if self.show_podium:
             self._draw_podium(self.winners, self.game_state)
+
+        # Return rendering statistics
+        return render_stats
 
     def _draw_arena(self, arena: Arena):
         """
@@ -228,15 +234,33 @@ class Renderer:
     def _draw_followers(self, followers: List[Follower], arena: Arena):
         """
         Draw all followers with their avatars and names
+        Uses view frustum culling for performance with large player counts
 
         Args:
             followers: List of all followers
             arena: Arena object
         """
+        # View frustum culling bounds (with margin for partially visible followers)
+        margin = config.FOLLOWER_RADIUS * 3
+        screen_rect = pygame.Rect(-margin, -margin,
+                                  config.SCREEN_WIDTH + margin * 2,
+                                  config.SCREEN_HEIGHT + margin * 2)
+
+        culled_count = 0
+        drawn_count = 0
+
         for follower in followers:
             # Skip if completely faded out
             if not follower.alive and not follower.is_fading():
                 continue
+
+            # View frustum culling - skip if off-screen
+            pos = follower.get_position()
+            if not screen_rect.collidepoint(int(pos[0]), int(pos[1])):
+                culled_count += 1
+                continue
+
+            drawn_count += 1
 
             # Get or create follower surface
             surface = self._get_follower_surface(follower)
@@ -247,13 +271,21 @@ class Renderer:
                 surface.set_alpha(follower.alpha)
 
             # Draw follower
-            pos = follower.get_position()
             rect = surface.get_rect(center=(int(pos[0]), int(pos[1])))
             self.screen.blit(surface, rect)
 
-            # Draw name below follower (if enabled and alive or fading)
-            if config.SHOW_FOLLOWER_NAMES and (follower.alive or follower.is_fading()):
-                self._draw_follower_name(follower)
+            # Draw name below follower (if enabled, alive or fading, and large enough)
+            if config.SHOW_NAMETAGS and (follower.alive or follower.is_fading()):
+                # Only show nametags when players are big enough to be visible
+                if config.FOLLOWER_RADIUS >= config.NAMETAG_MIN_RADIUS_BATTLE_ROYALE:
+                    self._draw_follower_name(follower)
+
+        # Debug: Print culling stats occasionally
+        # if drawn_count + culled_count > 0 and (drawn_count + culled_count) % 1000 == 0:
+        #     print(f"Render: Drew {drawn_count}, Culled {culled_count}")
+
+        # Return stats for performance monitoring
+        return {"rendered": drawn_count, "culled": culled_count}
 
     def _get_follower_surface(self, follower: Follower) -> pygame.Surface:
         """
@@ -338,16 +370,20 @@ class Renderer:
         """
         pos = follower.get_position()
 
-        # Render name text
-        text = self.font_small.render(follower.username, True, config.COLOR_TEXT)
-        text_rect = text.get_rect(center=(int(pos[0]),
-                                         int(pos[1] + config.FOLLOWER_RADIUS + 10)))
+        # Truncate username using config
+        username = follower.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
 
-        # Draw shadow for better visibility
-        shadow = self.font_small.render(follower.username, True, (0, 0, 0))
-        shadow_rect = shadow.get_rect(center=(text_rect.centerx + 1,
-                                              text_rect.centery + 1))
-        self.screen.blit(shadow, shadow_rect)
+        # Render name text using config colors
+        text = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
+        text_rect = text.get_rect(center=(int(pos[0]),
+                                         int(pos[1] + config.FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)))
+
+        # Draw outline for better visibility using config
+        outline = self.font_small.render(username, True, config.NAMETAG_OUTLINE_COLOR)
+        for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            outline_rect = outline.get_rect(center=(text_rect.centerx + dx, text_rect.centery + dy))
+            self.screen.blit(outline, outline_rect)
+
         self.screen.blit(text, text_rect)
 
     def _draw_scoreboard(self, followers: List[Follower], arena: Arena,

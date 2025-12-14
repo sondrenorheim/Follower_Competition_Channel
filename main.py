@@ -40,6 +40,7 @@ from shared import (
     PlayerStatistics,
     GameHistory,
     AudioLogger,
+    PerformanceMonitor,
     auto_push
 )
 
@@ -128,16 +129,31 @@ class FollowerBattleRoyale:
         self.current_game_leaderboard = []
         self.all_time_leaderboard = []
 
+        # Performance optimization - update throttling for large player counts
+        self.update_frame_counter = 0
+        self.update_batches_per_frame = config.UPDATE_BATCHES_PER_FRAME
+
+        # Performance monitoring - track FPS, timing, etc.
+        log_interval = getattr(config, 'PERFORMANCE_LOG_INTERVAL', 2.0)  # Log every 2 seconds
+        enable_detailed = getattr(config, 'PERFORMANCE_DETAILED_LOGGING', True)
+        self.perf_monitor = PerformanceMonitor(log_interval=log_interval, enable_detailed_logging=enable_detailed)
+
         print("✅ Game initialized successfully!\n")
 
     def setup_followers(self):
         """
         Fetch/generate followers and place them in the arena
         """
-        print(f"👥 Setting up {config.FOLLOWER_COUNT} followers...")
+        print(f"👥 Setting up followers...")
 
-        # Fetch followers from API or generate placeholders
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        # Fetch followers (support test mode)
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Using {config.TEST_MINIMAL_PLAYER_COUNT} test players")
+            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+
+        print(f"👥 Setting up {len(follower_data)} followers...")
 
         # Place followers randomly in arena
         for data in follower_data:
@@ -182,7 +198,13 @@ class FollowerBattleRoyale:
         Args:
             dt: Delta time in seconds
         """
+        # Start performance tracking for this frame
+        self.perf_monitor.start_frame()
+        self.perf_monitor.start_section("update")
+
         if self.game_over:
+            self.perf_monitor.end_section("update")
+            self.perf_monitor.end_frame()
             return
 
         # Handle countdown phase
@@ -203,8 +225,29 @@ class FollowerBattleRoyale:
                 self.countdown_number = max(0, 3 - int(elapsed))
 
         # Update followers during ALL phases (intro, countdown, playing)
-        # This makes them move around in the background
-        for follower in self.followers:
+        # Performance optimization: Use batched updates for large player counts
+        total_followers = len(self.followers)
+
+        # Use batched updates if enabled and player count exceeds threshold
+        if config.ENABLE_UPDATE_THROTTLING and total_followers > 5000:
+            # Increment frame counter
+            self.update_frame_counter += 1
+
+            # Calculate which batch to update this frame
+            batch_index = self.update_frame_counter % self.update_batches_per_frame
+            batch_size = (total_followers + self.update_batches_per_frame - 1) // self.update_batches_per_frame
+
+            # Calculate start and end indices for this batch
+            start_idx = batch_index * batch_size
+            end_idx = min(start_idx + batch_size, total_followers)
+
+            followers_to_update = self.followers[start_idx:end_idx]
+        else:
+            # For smaller player counts or if throttling disabled, update all followers every frame
+            followers_to_update = self.followers
+
+        # Update the selected batch of followers
+        for follower in followers_to_update:
             follower.update(dt, self.arena.center, self.arena.current_radius, self.followers)
 
             # Only check safe zone during PLAYING phase (not during intro/countdown)
@@ -217,14 +260,31 @@ class FollowerBattleRoyale:
                     self.renderer.add_elimination(follower.username)
                     self.sound.play_elimination()
 
+        # Record how many players were updated
+        self.perf_monitor.record_players_updated(len(followers_to_update))
+
+        # End update section, start physics section
+        self.perf_monitor.end_section("update")
+        self.perf_monitor.start_section("physics")
+
         # Update physics (collisions) - works in all phases
         self.physics.update(self.followers, dt)
 
-        # Resolve any overlaps immediately (prevents followers from overlapping)
-        self.physics.resolve_overlaps(self.followers)
+        # Skip expensive overlap resolution at high player counts (normal collision detection handles it)
+        total_followers = len(self.followers)
+        if total_followers < 10000:
+            # Overlap resolution disabled for performance - normal collision detection handles it
+            # self.physics.resolve_overlaps(self.followers)
 
-        # Apply very gentle separation force to prevent stacking without interfering with combat
-        self.physics.apply_separation_force(self.followers, strength=0.2)
+            # Apply very gentle separation force to prevent stacking without interfering with combat
+            self.physics.apply_separation_force(self.followers, strength=0.2)
+
+        # Record collision checks from physics
+        physics_stats = self.physics.get_stats()
+        self.perf_monitor.record_collision_checks(physics_stats.get("collision_checks", 0))
+
+        # End physics section
+        self.perf_monitor.end_section("physics")
 
         # Update particle system
         self.particles.update(dt)
@@ -294,6 +354,9 @@ class FollowerBattleRoyale:
         """
         Render current game state
         """
+        # Start render timing
+        self.perf_monitor.start_section("render")
+
         # Prepare game state dictionary for renderer
         game_state = {
             "game_over": self.game_over,
@@ -307,7 +370,14 @@ class FollowerBattleRoyale:
         }
 
         # Render frame with particle system
-        self.renderer.render_frame(self.followers, self.arena, game_state, self.particles)
+        render_stats = self.renderer.render_frame(self.followers, self.arena, game_state, self.particles)
+
+        # Record rendering stats if available
+        if render_stats:
+            self.perf_monitor.record_players_rendered(
+                render_stats.get("rendered", 0),
+                render_stats.get("culled", 0)
+            )
 
         # Record frame for video (only from countdown onwards, skip intro)
         if self.game_phase in ("countdown", "playing", "finished"):
@@ -316,6 +386,10 @@ class FollowerBattleRoyale:
 
         # Update display
         pygame.display.flip()
+
+        # End render timing and complete frame
+        self.perf_monitor.end_section("render")
+        self.perf_monitor.end_frame()
 
     def _handle_game_over(self, survivors: List[Follower]):
         """
@@ -512,8 +586,10 @@ class FollowerBattleRoyale:
 
             # Update physics (collisions) so followers interact naturally
             self.physics.update(self.followers, dt)
-            self.physics.resolve_overlaps(self.followers)
-            self.physics.apply_separation_force(self.followers, strength=0.2)
+            # Skip expensive overlap resolution at high player counts
+            if len(self.followers) < 10000:
+                # self.physics.resolve_overlaps(self.followers)
+                self.physics.apply_separation_force(self.followers, strength=0.2)
 
             # Update particle system
             self.particles.update(dt)
@@ -616,6 +692,10 @@ def _create_game_instance(game_mode: str):
         from fighter_arena import FighterBattleArena
         print("Starting Fighter Arena mode...")
         return FighterBattleArena()
+    elif game_mode == "gorillas_vs_followers":
+        from gorillas_vs_followers import GorillasVsFollowersGame
+        print("Starting Gorillas vs Followers mode...")
+        return GorillasVsFollowersGame()
     elif game_mode == "obstacle_course":
         from obstacle_course import ObstacleCourseGame
         print("Starting Obstacle Course mode...")
@@ -649,7 +729,12 @@ def _prefetch_followers_for_all() -> list:
     """Prefetch followers (including avatars) once so ALL mode can reuse them."""
     try:
         api_client = InstagramAPI()
-        followers = api_client.fetch_followers(config.FOLLOWER_COUNT)
+        # Support test mode
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Prefetching {config.TEST_MINIMAL_PLAYER_COUNT} test players for ALL mode")
+            followers = api_client.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            followers = api_client.fetch_followers(config.FOLLOWER_COUNT)
         shared_api.set_prefetched_followers(followers)
         return followers
     except Exception as e:

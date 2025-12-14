@@ -11,6 +11,7 @@ from .scoring import ScoringSystem
 from .statistics import PlayerStatistics
 from .game_history import GameHistory
 from .audio_logger import AudioLogger, AudioEvent
+from .performance_monitor import PerformanceMonitor
 from . import auto_push
 
 # Templates for creating new games
@@ -32,6 +33,7 @@ __all__ = [
     'GameHistory',
     'AudioLogger',
     'AudioEvent',
+    'PerformanceMonitor',
     'auto_push',
     # Templates for new games
     'GameTemplate',

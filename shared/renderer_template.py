@@ -329,8 +329,8 @@ class RendererTemplate:
             color = getattr(player, 'color', (100, 100, 255))
             pygame.draw.circle(surface, color, (size // 2, size // 2), size // 2)
 
-        # Add white border
-        pygame.draw.circle(surface, (255, 255, 255),
+        # Add black border
+        pygame.draw.circle(surface, (0, 0, 0),
                           (size // 2, size // 2), size // 2, config.FOLLOWER_BORDER_WIDTH)
 
         # Cache and return

@@ -128,6 +128,34 @@ class SnakeEscapeRenderer(RendererTemplate):
         rect = avatar_surface.get_rect(center=(int(follower.x), int(follower.y)))
         self.screen.blit(avatar_surface, rect)
 
+        # Draw nametag (only when player is large enough)
+        if follower.radius >= config.NAMETAG_MIN_RADIUS_SNAKE_ESCAPE:
+            self._draw_follower_name(follower)
+
+    def _draw_follower_name(self, follower):
+        """
+        Draw follower name below their avatar
+        Only shown when follower is large enough to be visible
+
+        Args:
+            follower: Follower to draw name for
+        """
+        # Truncate username using config
+        username = follower.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+        text_x = int(follower.x)
+        text_y = int(follower.y + follower.radius + config.NAMETAG_VERTICAL_OFFSET)
+
+        # Render text using config colors
+        text_surface = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
+        text_rect = text_surface.get_rect(center=(text_x, text_y))
+
+        # Draw outline using config
+        outline_surface = self.font_small.render(username, True, config.NAMETAG_OUTLINE_COLOR)
+        for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            self.screen.blit(outline_surface, text_rect.move(dx, dy))
+
+        self.screen.blit(text_surface, text_rect)
+
     def _draw_game_ui(self, players: List, game_state: dict):
         """Draw game-specific UI elements."""
         # Get snakes from game state

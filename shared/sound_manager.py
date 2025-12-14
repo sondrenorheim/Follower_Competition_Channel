@@ -32,15 +32,19 @@ class SoundManager:
         self.music_channel = pygame.mixer.Channel(1)
         self.announcer_channel = pygame.mixer.Channel(2)
 
-        # Volume settings
-        self.master_volume = 0.5
-        self.sfx_volume = 0.7
-        self.music_volume = 0.3
-        self.announcer_volume = 0.8
+        # Check if running in headless mode (mute playback but still log events)
+        import config
+        headless = getattr(config, 'HEADLESS_MODE', False)
+
+        # Volume settings (muted in headless mode, but audio logger still works)
+        self.master_volume = 0.0 if headless else 0.5
+        self.sfx_volume = 0.0 if headless else 0.7
+        self.music_volume = 0.0 if headless else 0.3
+        self.announcer_volume = 0.0 if headless else 0.8
 
         # Background music volume levels
-        self.music_volume_low = 0.15   # During announcer speaking
-        self.music_volume_high = 0.4   # During gameplay
+        self.music_volume_low = 0.0 if headless else 0.15   # During announcer speaking
+        self.music_volume_high = 0.0 if headless else 0.4   # During gameplay
         self.current_music_volume = self.music_volume_low
         self.target_music_volume = self.music_volume_low
 

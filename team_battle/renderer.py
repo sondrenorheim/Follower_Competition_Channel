@@ -181,9 +181,24 @@ class TeamBattleRenderer:
 
     def _draw_fighters(self, fighters: List[TeamFighter]):
         """Draw all fighters with team-colored rings"""
+        # VIEW FRUSTUM CULLING: Only draw fighters visible on screen
+        # MASSIVE performance boost for 10k+ fighters!
+        screen_width = config.SCREEN_WIDTH
+        screen_height = config.SCREEN_HEIGHT
+        margin = config.FOLLOWER_RADIUS * 2  # Small margin for fighters at edge
+
+        drawn_count = 0
         for fighter in fighters:
             if not fighter.alive and not fighter.is_fading():
                 continue
+
+            # Quick visibility check (view frustum culling)
+            pos = fighter.get_position()
+            if (pos[0] < -margin or pos[0] > screen_width + margin or
+                pos[1] < -margin or pos[1] > screen_height + margin):
+                continue  # Fighter off-screen, skip drawing
+
+            drawn_count += 1
 
             # Get or create fighter surface
             surface = self._get_fighter_surface(fighter)
@@ -194,7 +209,6 @@ class TeamBattleRenderer:
                 surface.set_alpha(fighter.alpha)
 
             # Draw fighter
-            pos = fighter.get_position()
             display_size = int(config.FOLLOWER_RADIUS * 2)
 
             if surface.get_width() != display_size:
@@ -208,6 +222,21 @@ class TeamBattleRenderer:
             # Draw HP bar - DISABLED
             # if fighter.alive or fighter.is_fading():
             #     self._draw_hp_bar(fighter)
+
+        # Draw nametags for all visible fighters (if alive count is low enough)
+        alive_count = sum(1 for f in fighters if f.alive)
+        if alive_count <= config.NAMETAG_MAX_ALIVE_TEAM_BATTLE:
+            for fighter in fighters:
+                if not (fighter.alive or fighter.is_fading()):
+                    continue
+
+                # Check if visible (same frustum culling as above)
+                pos = fighter.get_position()
+                if (pos[0] < -margin or pos[0] > screen_width + margin or
+                    pos[1] < -margin or pos[1] > screen_height + margin):
+                    continue
+
+                self._draw_fighter_name(fighter)
 
     def _get_fighter_surface(self, fighter: TeamFighter) -> pygame.Surface:
         """Get or create cached surface with team-colored ring"""
@@ -315,6 +344,35 @@ class TeamBattleRenderer:
         # Border
         pygame.draw.rect(self.screen, (0, 0, 0),
                         (bar_x, bar_y, bar_width, bar_height), 1)
+
+    def _draw_fighter_name(self, fighter: TeamFighter):
+        """
+        Draw fighter name below their avatar
+        Uses team color for outline to reinforce team identity
+
+        Args:
+            fighter: Fighter to draw name for
+        """
+        pos = fighter.get_position()
+
+        # Truncate username using config
+        username = fighter.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+        text_x = int(pos[0])
+        text_y = int(pos[1] + config.FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET + 2)
+
+        # Team Battle special: use team color for outline instead of black
+        text_color = config.NAMETAG_TEXT_COLOR  # White
+        outline_color = fighter.team_color if hasattr(fighter, 'team_color') else config.NAMETAG_OUTLINE_COLOR
+
+        text_surface = self.font_small.render(username, True, text_color)
+        text_rect = text_surface.get_rect(center=(text_x, text_y))
+
+        # Team-colored outline (8-way for better visibility)
+        outline_surface = self.font_small.render(username, True, outline_color)
+        for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)]:
+            self.screen.blit(outline_surface, text_rect.move(dx, dy))
+
+        self.screen.blit(text_surface, text_rect)
 
     def _draw_scoreboard(self, fighters: List[TeamFighter], game_state: dict):
         """Draw title and stats"""

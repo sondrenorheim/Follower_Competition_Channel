@@ -387,6 +387,22 @@ class ObstacleCourseRenderer:
                 rect = display_surface.get_rect(center=screen_pos)
                 self.screen.blit(display_surface, rect)
 
+                # Draw username nametag (always visible for constant-size game)
+                if config.SHOW_NAMETAGS:
+                    username = racer.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+                    text_x = int(screen_pos[0])
+                    text_y = int(screen_pos[1] + config.FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)
+
+                    text_surface = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
+                    text_rect = text_surface.get_rect(center=(text_x, text_y))
+
+                    # Outline using config
+                    outline_surface = self.font_small.render(username, True, config.NAMETAG_OUTLINE_COLOR)
+                    for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        self.screen.blit(outline_surface, text_rect.move(dx, dy))
+
+                    self.screen.blit(text_surface, text_rect)
+
     def _draw_title_and_day(self, total_racers: int):
         """
         Draw title above track and day counter below track

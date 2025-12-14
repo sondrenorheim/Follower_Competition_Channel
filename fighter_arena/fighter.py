@@ -125,13 +125,13 @@ class Fighter(Follower):
         self.is_attacking = True
 
         # Debug: Log attacks with timestamp
-        import time
-        print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
+        # import time
+        # print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
         self.attack_animation_frames = 10  # Brief attack animation
 
-        # Deal damage - use 20 damage when more than 1000 fighters alive, otherwise use normal attack stat
-        if alive_count > 1000:
-            damage = 20
+        # Deal damage - use 40 damage (one-shot) when more than 250 fighters, normal stats below that
+        if alive_count > 250:
+            damage = 40  # One-shot kills for fast early game
         else:
             damage = self.attack_stat
 
@@ -235,8 +235,9 @@ class Fighter(Follower):
         self.regenerate(dt)
 
         # Choose target if we don't have one or target is dead
-        # Also occasionally re-target (2% chance per frame) to break circular patterns
-        if self.target_follower is None or not self.target_follower.alive or random.random() < 0.02:
+        # Also occasionally re-target (0.2% chance per frame) to break circular patterns
+        # OPTIMIZED: Reduced from 2% to 0.2% for 10x less retargeting overhead
+        if self.target_follower is None or not self.target_follower.alive or random.random() < 0.002:
             self._choose_target_fighter(all_fighters)
 
         # Move toward target
@@ -283,30 +284,54 @@ class Fighter(Follower):
         """
         Choose a target with some randomness to prevent circular chasing
 
+        OPTIMIZED: Sample first, filter second for massive speedup.
+
         Args:
             all_fighters: List of all fighters
         """
-        alive_fighters = [f for f in all_fighters if f.alive and f != self]
+        # MEGA OPTIMIZATION: Sample BEFORE filtering (not after!)
+        MAX_SEARCH_DISTANCE = 500  # Don't chase enemies too far
+        SAMPLE_SIZE = 200  # Check at most 200 fighters
+
+        # Sample first (much faster than filtering all!)
+        if len(all_fighters) > SAMPLE_SIZE * 2:
+            sample_pool = random.sample(all_fighters, SAMPLE_SIZE)
+        else:
+            sample_pool = all_fighters
+
+        # Filter the sample (not the full list!)
+        alive_fighters = [f for f in sample_pool if f.alive and f != self]
         if not alive_fighters:
             self.target_follower = None
             return
 
+        search_pool = alive_fighters
+
         # 70% chance to pick nearest, 30% chance to pick random target
         if random.random() < 0.7:
-            # Find nearest fighter
-            min_distance = float('inf')
+            # Find nearest fighter using squared distance (avoid sqrt)
+            min_distance_sq = float('inf')
             nearest = None
+            max_distance_sq = MAX_SEARCH_DISTANCE * MAX_SEARCH_DISTANCE
 
-            for fighter in alive_fighters:
+            for fighter in search_pool:
                 dx = fighter.x - self.x
                 dy = fighter.y - self.y
-                distance = math.sqrt(dx * dx + dy * dy)
+                distance_sq = dx * dx + dy * dy
 
-                if distance < min_distance:
-                    min_distance = distance
+                # Early reject if too far
+                if distance_sq > max_distance_sq:
+                    continue
+
+                if distance_sq < min_distance_sq:
+                    min_distance_sq = distance_sq
                     nearest = fighter
 
-            self.target_follower = nearest
+            # If no nearby target found, pick random from full list
+            if nearest is None and alive_fighters:
+                self.target_follower = random.choice(alive_fighters)
+            else:
+                self.target_follower = nearest
         else:
             # Pick a random target
             self.target_follower = random.choice(alive_fighters)

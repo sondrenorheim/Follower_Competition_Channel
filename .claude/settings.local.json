@@ -30,7 +30,16 @@
       "Bash(if exist node_modules.vite rmdir /s /q node_modules.vite)",
       "mcp__ide__getDiagnostics",
       "Bash(findstr:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git checkout:*)",
+      "Bash(del \"C:\\Users\\SondreNorheim\\Documents\\Follower_Competition_Channel\\instagram_session_cookies.pkl\")",
+      "Bash(if exist \"instagram_session_cookies.pkl\" del \"instagram_session_cookies.pkl\")",
+      "Bash(timeout 20 python:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 25 python:*)",
+      "Bash(pip show:*)",
+      "Bash(timeout 30 python:*)",
+      "Bash(tasklist:*)"
     ],
     "deny": [],
     "ask": []

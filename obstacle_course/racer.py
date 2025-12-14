@@ -63,14 +63,14 @@ class Racer(Follower):
 
         # Acceleration system - varies per racer for natural variation
         self.current_velocity = 0.0  # Current speed (accelerates toward target)
-        self.acceleration_rate = random.uniform(0.04, 0.07)  # Varied acceleration per racer
+        self.acceleration_rate = random.uniform(0.015, 0.025)  # Slower acceleration for longer races
 
     def get_target_speed(self) -> float:
         """
         Get target movement speed (pixels per frame)
         Based on speed stat and dynamic multiplier (no zone effects)
         """
-        base_speed = self.speed_stat / 4.28  # Reduced to half speed (was 2.14)
+        base_speed = self.speed_stat / 12  # Reduced to 12 for slower, more watchable races
 
         # Apply dynamic speed multiplier (varies throughout race)
         return base_speed * self.speed_multiplier

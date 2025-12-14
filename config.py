@@ -29,19 +29,21 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 
-ALL_GAME_MODES = ["team_battle", "platformer_race"]
+ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "platformer_race","team_battle"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = False
+GAME_MODE = "fighter_arena" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
+TEST_MODE = True
 EXPORT_VIDEO = True
-DAY_NUMBER = 21  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = True # Set to True to download real profile pictures (if URLs available)
-HEADLESS_MODE = True  
+DAY_NUMBER = 23  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = False  # Set to True to download real profile pictures (if URLs available)
+LOAD_PROFILE_PICTURES = False  # Set to False to skip loading profile pictures entirely (faster testing)
+HEADLESS_MODE = False
+SHOW_NAMETAGS = True
 
 # Minimal test players - when True, use generated test users instead of real followers
-TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 30000  # Number of test users to generate
+TEST_MINIMAL_PLAYERS = True  # Set True to use test users, False to use real followers
+TEST_MINIMAL_PLAYER_COUNT = 1000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
@@ -67,20 +69,54 @@ ARENA_SHAPE = "circle"
 FOLLOWER_COUNT = None
 FOLLOWER_RADIUS = 14        # Radius of each follower circle (will be dynamically adjusted)
 FOLLOWER_BORDER_WIDTH = 2   # White border thickness
-FOLLOWER_NAME_FONT_SIZE = 16  # Increased from 12 for better readability
+FOLLOWER_NAME_FONT_SIZE = 12  # Nametag font size for follower usernames
 SHOW_FOLLOWER_NAMES = False  # Show usernames below profile pictures during battle
+
+# ===== NAMETAG DISPLAY SETTINGS =====
+# Master toggle for nametag display across all games
+
+# Username truncation (uniform across all games)
+NAMETAG_MAX_USERNAME_LENGTH = 12  # Characters to display before truncation
+
+# Scaling games - size-based thresholds (show nametags when players are large enough)
+NAMETAG_MIN_RADIUS_BATTLE_ROYALE = 8  # Pixels - show when follower radius >= this value
+NAMETAG_MIN_RADIUS_SNAKE_ESCAPE = 12   # Pixels - show when follower radius >= this value
+
+# Scaling games - count-based thresholds (show nametags when player count is low enough)
+NAMETAG_MAX_ALIVE_FIGHTER_ARENA = 250  # Show nametags when alive fighters <= this count
+NAMETAG_MAX_ALIVE_TEAM_BATTLE = 250     # Show nametags when alive fighters <= this count
+
+# Nametag styling
+NAMETAG_FONT_SIZE = 20                    # Font size for nametag text
+NAMETAG_TEXT_COLOR = (255, 255, 255)      # White text
+NAMETAG_OUTLINE_COLOR = (0, 0, 0)         # Black outline
+NAMETAG_OUTLINE_WIDTH = 1                 # Outline thickness in pixels
+NAMETAG_VERTICAL_OFFSET = 8               # Pixels below avatar center
 
 # ===== DYNAMIC SCALING SETTINGS =====
 USE_DYNAMIC_SCALING = True  # Enable dynamic follower size based on player count
 FOLLOWER_BASE_RADIUS = 12   # Base radius for ~100 final contestants (good size)
-FOLLOWER_MIN_RADIUS = 0     # No enforced minimum; allows very dense packing
+FOLLOWER_MIN_RADIUS = 1     # No enforced minimum; allows very dense packing
 FOLLOWER_MAX_RADIUS = 18    # Maximum radius when only a few players remain
 SCALING_GROWTH_RATE = 0.5   # How quickly players grow as others are eliminated (0.0-1.0)
 
+# ===== PERFORMANCE OPTIMIZATION SETTINGS =====
+# These settings help Battle Royale handle 100,000+ players
+USE_NUMBA_PHYSICS = True            # Use Numba JIT compilation for 10-50x faster physics (requires: pip install numba)
+ENABLE_VIEW_FRUSTUM_CULLING = True  # Only render on-screen players (huge performance gain)
+ENABLE_UPDATE_THROTTLING = True     # Stagger player updates across frames (for >5000 players)
+UPDATE_BATCHES_PER_FRAME = 4        # Divide players into N batches (higher = more batches = smoother but slower updates)
+SPATIAL_GRID_CELL_SIZE = None       # Auto-calculated based on FOLLOWER_RADIUS * 4 (None = auto)
+DISABLE_PARTICLES_THRESHOLD = 20000  # Disable particle effects when player count exceeds this (0 = never disable)
+
+# Performance monitoring/logging
+PERFORMANCE_LOG_INTERVAL = 2.0       # How often to print performance stats (in seconds)
+PERFORMANCE_DETAILED_LOGGING = True  # Show detailed metrics (collision checks, culling, etc.)
+
 # ===== PHYSICS SETTINGS =====
-BASE_SPEED = 2.0            # Base movement speed (pixels per frame) - reduced for slower pace
-FRICTION = 0.75             # Friction multiplier (lower = more friction)
-PUSH_FORCE = 8.0            # Force applied during collisions
+BASE_SPEED = 2.5            # Base movement speed (pixels per frame) - reduced for slower pace
+FRICTION = 0.85             # Friction multiplier (lower = more friction)
+PUSH_FORCE = 6.0            # Force applied during collisions
 BUMP_COOLDOWN = 0.5         # Cooldown between bumps (seconds) - reduced for more frequent collisions
 COLLISION_DISTANCE = FOLLOWER_RADIUS * 2  # Distance for collision detection
 MOVEMENT_RANDOMNESS = 0.1   # Randomness factor for natural movement (0-1)
@@ -204,7 +240,7 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
         current_radius = min(current_radius, max_safe_radius)
 
     # Step 4: Clamp to max bound only (allow very small radii when crowded)
-    current_radius = min(FOLLOWER_MAX_RADIUS, current_radius)
+    current_radius = max(FOLLOWER_MIN_RADIUS, min(FOLLOWER_MAX_RADIUS, current_radius))
 
     return current_radius
 
@@ -364,6 +400,55 @@ TEAM_PLACEMENT_SCORES = {
     2: 75,   # Lost finals (2nd place)
     1: 75,   # Won finals (1st place) - individual ranking adds 0-25 more
 }
+
+# ===== GORILLAS VS FOLLOWERS SETTINGS =====
+# Gorilla stats (boss enemy)
+GORILLA_STATS = {
+    "hp": 15000,
+    "speed": 1,
+    "attack": 30,
+    "attack_speed": 20,  # Attacks per second = value / 10 (2 attacks/sec)
+    "knockback_distance": 55,
+    "regeneration": 0  # No regeneration for gorillas
+}
+GORILLA_ATTACK_SPLASH_RADIUS = 21  # Full-damage radius around primary target (pixels)
+GORILLA_ATTACK_SPLASH_FALLOFF_RADIUS = 30  # Outer radius for half damage (pixels)
+GORILLA_ATTACK_KNOCKBACK = 60      # Knockback applied to players hit by gorilla attacks (pixels)
+GORILLA_GATE_OPEN_DURATION = 2.0   # Seconds for the mid-gate to fully open after countdown
+GORILLA_SPLASH_BASE_PLAYER_RADIUS = 14  # Base follower radius used to scale gorilla splash radii
+
+# Gorilla visual settings
+GORILLA_SIZE_MULTIPLIER = 3.0  # 3x follower size
+GORILLA_ARM_LENGTH_MULTIPLIER = 1.2  # Arm length relative to body radius
+GORILLA_ARM_WIDTH_MULTIPLIER = 0.4   # Arm width relative to body radius
+GORILLA_ARM_SWING_AMPLITUDE = 30     # Degrees of arm swing
+GORILLA_ARM_SWING_PERIOD = 2.0       # Seconds per full arm swing cycle
+
+# Gorilla colors (brown/black variations)
+GORILLA_COLORS = [
+    (101, 67, 33),   # Medium brown
+    (40, 26, 13),    # Dark brown
+    (139, 90, 43),   # Light brown
+    (30, 20, 10)     # Nearly black
+]
+
+# Gorilla HP bar settings
+GORILLA_HP_BAR_WIDTH = 60
+GORILLA_HP_BAR_HEIGHT = 6
+
+# Follower stats for gorillas mode (NO boosts, default fighter stats)
+GORILLAS_MODE_FOLLOWER_STATS = {
+    "hp": 40,
+    "speed": 5,
+    "attack": 7.5,
+    "regeneration": 0,  # No regeneration
+    "knockback": 3,
+    "attack_speed": 30  # Attacks per second = value / 10 (3 attacks/sec)
+}
+
+# Arena dimensions (extended height)
+# Format: (x, y, width, height)
+GORILLAS_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, SCREEN_HEIGHT - 190)
 
 # Kill bonus points
 TEAM_BATTLE_KILL_BONUS = 1  # Points per kill

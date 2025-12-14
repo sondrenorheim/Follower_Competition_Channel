@@ -1,6 +1,7 @@
 import time
 import json
 import pickle
+import random
 from datetime import datetime
 from pathlib import Path
 from bs4 import BeautifulSoup
@@ -11,8 +12,14 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-USERNAME = "followerbattlegrounds"
-COOKIE_FILE = "instagram_session_cookies.pkl"
+# Account to scrape followers FROM
+TARGET_USERNAME = "followerbattlegrounds"
+
+# Your burner account username (for login verification only)
+# Leave empty if you don't want to verify specific account
+BURNER_USERNAME = "stinsonoscar22025"  # Optional: set to your burner account username
+
+COOKIE_FILE = "instagram_cookies_burner3.pkl"
 
 
 # -----------------------------
@@ -89,18 +96,26 @@ def verify_login(driver):
         driver.get("https://www.instagram.com/")
         time.sleep(3)
 
-        # Look for profile link or other logged-in indicators
-        # Instagram shows profile icon in top right when logged in
-        profile_links = driver.find_elements(By.XPATH, f"//a[contains(@href, '/{USERNAME}/')]")
-        if profile_links:
-            print("[OK] Session is valid - already logged in!")
-            return True
-
-        # Alternative check: look for login button (means NOT logged in)
+        # Check for login button (means NOT logged in)
         login_buttons = driver.find_elements(By.XPATH, "//a[@href='/accounts/login/']")
         if login_buttons:
             print("[WARN] Session expired - login required")
             return False
+
+        # Look for any profile link in nav bar (indicates logged in)
+        # Instagram shows profile icon in top right when logged in
+        nav_links = driver.find_elements(By.XPATH, "//nav//a[contains(@href, '/')]")
+
+        # If we have burner username set, verify it specifically
+        if BURNER_USERNAME:
+            profile_links = driver.find_elements(By.XPATH, f"//a[contains(@href, '/{BURNER_USERNAME}/')]")
+            if profile_links:
+                print(f"[OK] Session is valid - logged in as {BURNER_USERNAME}!")
+                return True
+        elif nav_links:
+            # Generic check - if we see navigation links and no login button, we're logged in
+            print("[OK] Session is valid - already logged in!")
+            return True
 
         # If we don't see clear indicators, assume we need to login
         print("[WARN] Could not verify session - will attempt login")
@@ -163,11 +178,12 @@ def login(driver):
     try:
         username_field = driver.find_element(By.NAME, "username")
         password_field = driver.find_element(By.NAME, "password")
-        print("[INFO] Enter your username and password manually.")
+        print("[INFO] Enter your BURNER ACCOUNT username and password manually.")
         print("[WARN] Do NOT hit Enter. Click the Login button manually.")
     except:
         print("[WARN] Could not detect login fields.")
         print("[INFO] Please complete login manually in the browser window.")
+        print("[INFO] Use your BURNER ACCOUNT credentials.")
 
     input("Press Enter AFTER you have successfully logged in... ")
 
@@ -185,8 +201,8 @@ def login(driver):
 # Scrape followers through scrolling
 # -----------------------------
 def scrape_followers(driver):
-    print("[INFO] Opening profile page...")
-    driver.get(f"https://www.instagram.com/{USERNAME}/")
+    print(f"[INFO] Opening profile page for {TARGET_USERNAME}...")
+    driver.get(f"https://www.instagram.com/{TARGET_USERNAME}/")
     time.sleep(4)
 
     # ---------- CLOSE POPUPS ----------
@@ -368,12 +384,17 @@ def scrape_followers(driver):
             client_height = driver.execute_script("return arguments[0].clientHeight;", scroll_panel)
 
             # Scroll by JavaScript - use smooth incremental scroll to trigger lazy loading
-            # Instead of jumping to the bottom, scroll incrementally
+            # Randomize scroll distance to appear more human-like
+            scroll_distance = random.randint(400, 700)  # Vary scroll amount
+
             driver.execute_script("""
                 var element = arguments[0];
-                element.scrollBy({top: 1000, behavior: 'smooth'});
-            """, scroll_panel)
-            time.sleep(2)  # Increased wait time for Instagram to load more content
+                element.scrollBy({top: arguments[1], behavior: 'smooth'});
+            """, scroll_panel, scroll_distance)
+
+            # Randomize delay between scrolls (2.5 to 5 seconds) - more human-like
+            delay = random.uniform(2.5, 5.0)
+            time.sleep(delay)
 
             # Check if scroll position changed
             new_scroll_top = driver.execute_script("return arguments[0].scrollTop;", scroll_panel)
@@ -408,12 +429,30 @@ def scrape_followers(driver):
             if added == 0:
                 retries += 1
                 print(f"[WAIT] No new followers loaded (retry {retries}/25)...")
+
+                # Instagram rate limiting detected - take a break
                 if retries > 25:
-                    print("[INFO] End of follower list reached.")
-                    break
+                    print("[WARN] Instagram may have rate-limited us. Taking a 2-minute break...")
+                    print(f"[STATS] Collected {len(followers)} so far. Pausing to avoid detection...")
+                    time.sleep(120)  # 2-minute break
+
+                    retries = 0  # Reset and try again
+                    print("[INFO] Resuming scraping...")
+                    continue
+
+                # If we've taken multiple breaks and still no progress, we're done
+                if retries == 0 and len(followers) > 0:
+                    no_progress_count = getattr(scrape_followers, 'no_progress_count', 0)
+                    no_progress_count += 1
+                    scrape_followers.no_progress_count = no_progress_count
+
+                    if no_progress_count > 3:
+                        print("[INFO] Tried multiple breaks, likely reached end of follower list.")
+                        break
             else:
                 retries = 0  # Reset retries on success
                 stale_retries = 0  # Reset stale retries on success
+                scrape_followers.no_progress_count = 0  # Reset no-progress counter
 
             print(f"[STATS] Total collected: {len(followers)}")
 
@@ -449,21 +488,27 @@ def scrape_followers(driver):
 # Load previous followers
 # -----------------------------
 def load_previous_followers():
-    """Load all previous follower files and merge them"""
+    """Load all previous follower files and merge them (from any scraper)"""
     import glob
 
-    # Find all previous follower files
-    files = glob.glob("followers_safe_*.json")
+    # Load from BOTH safe scraper AND alphabet scraper files
+    safe_files = glob.glob("followers_safe_*.json")
+    alphabet_files = glob.glob("followers_alphabet_*.json")
+    all_files = safe_files + alphabet_files
 
-    if not files:
+    if not all_files:
         print("[INFO] No previous follower files found")
         return {}
 
-    print(f"[INFO] Found {len(files)} previous follower file(s)")
+    print(f"[INFO] Found {len(all_files)} previous follower file(s)")
+    if safe_files:
+        print(f"       - {len(safe_files)} from safe scraper")
+    if alphabet_files:
+        print(f"       - {len(alphabet_files)} from alphabet scraper")
 
     # Merge all previous followers
     all_previous = {}
-    for file in files:
+    for file in all_files:
         try:
             with open(file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -474,7 +519,7 @@ def load_previous_followers():
         except Exception as e:
             print(f"[WARN] Could not load {file}: {e}")
 
-    print(f"[INFO] Loaded {len(all_previous)} unique followers from previous files")
+    print(f"[INFO] Loaded {len(all_previous)} unique followers from all previous files")
     return all_previous
 
 

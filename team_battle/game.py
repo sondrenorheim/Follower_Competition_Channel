@@ -168,14 +168,24 @@ class TeamBattleGame:
         self.hp_log_writer = None
         self.frame_number = 0
 
+        # Performance optimization - update throttling for large player counts
+        self.update_frame_counter = 0
+        self.update_batches_per_frame = config.UPDATE_BATCHES_PER_FRAME
+
         print("Team Battle Arena initialized!\n")
 
     def setup_fighters(self):
         """Fetch followers and assign to teams"""
-        print(f"Setting up {config.FOLLOWER_COUNT} fighters in 4 teams...")
+        print(f"Setting up fighters in 4 teams...")
 
-        # Fetch followers
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        # Fetch followers (support test mode)
+        if config.TEST_MINIMAL_PLAYERS:
+            print(f"🧪 TEST MODE: Using {config.TEST_MINIMAL_PLAYER_COUNT} test players")
+            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+
+        print(f"Setting up {len(follower_data)} fighters in 4 teams...")
         random.shuffle(follower_data)
 
         # Split into 4 equal groups
@@ -456,6 +466,8 @@ class TeamBattleGame:
         if self.game_over:
             return
 
+        # Performance profiling
+        prof_start = time.time()
         current_time = time.time()
         arena_rect = self.arena.get_rect()
 
@@ -569,8 +581,27 @@ class TeamBattleGame:
         # Determine if combat is enabled
         combat_enabled = self.phase in ("semifinals", "finals", "freeforall")
 
-        # Update all fighters
-        for fighter in self.fighters:
+        # Performance optimization: Update throttling for large player counts
+        total_fighters = len(self.fighters)
+        if config.ENABLE_UPDATE_THROTTLING and total_fighters > 5000:
+            # Increment frame counter
+            self.update_frame_counter += 1
+
+            # Calculate which batch to update this frame
+            batch_index = self.update_frame_counter % self.update_batches_per_frame
+            batch_size = (total_fighters + self.update_batches_per_frame - 1) // self.update_batches_per_frame
+
+            # Calculate start and end indices for this batch
+            start_idx = batch_index * batch_size
+            end_idx = min(start_idx + batch_size, total_fighters)
+
+            fighters_to_update = self.fighters[start_idx:end_idx]
+        else:
+            # For smaller player counts or if throttling disabled, update all fighters every frame
+            fighters_to_update = self.fighters
+
+        # Update fighters
+        for fighter in fighters_to_update:
             prev_x, prev_y = fighter.x, fighter.y
 
             # Use fighter update
@@ -590,12 +621,18 @@ class TeamBattleGame:
                 fighter.push_vy *= -0.5
 
         # Physics - handle collision knockback and resolve overlaps
+        prof_physics_start = time.time()
         self.physics.update(self.fighters, dt)  # Enabled: knockback from collisions
-        self.physics.resolve_overlaps(self.fighters)
+        prof_physics_time = (time.time() - prof_physics_start) * 1000
+
+        # DISABLED: resolve_overlaps is O(n²) and too slow for large counts
+        # self.physics.resolve_overlaps(self.fighters)
 
         # Re-apply wall/quadrant clamping after physics resolution
         # This prevents fighters from being pushed through walls
-        for fighter in self.fighters:
+        # OPTIMIZED: Only clamp fighters that were updated this frame
+        prof_clamp_start = time.time()
+        for fighter in fighters_to_update:
             if not fighter.alive:
                 continue
 
@@ -1052,6 +1089,11 @@ class TeamBattleGame:
         self.game_time = 0.0
         self.recording_start_time = None  # Will be set when recording starts
 
+        # Performance monitoring
+        self.frame_count = 0
+        self.fps_start_time = time.time()
+        self.last_fps_print = time.time()
+
         # Intro sequence
         print("Starting intro sequence...\n")
         self.phase = "intro"
@@ -1147,6 +1189,15 @@ class TeamBattleGame:
             self.update(dt)
             self._log_hp_frame()  # Log HP after each update
             self.render()
+
+            # Performance monitoring - print FPS every 3 seconds
+            self.frame_count += 1
+            if time.time() - self.last_fps_print >= 3.0:
+                elapsed = time.time() - self.fps_start_time
+                current_fps = self.frame_count / elapsed if elapsed > 0 else 0
+                alive_count = sum(1 for f in self.fighters if f.alive)
+                print(f"[PERF] FPS: {current_fps:.1f} | Alive: {alive_count:,} | Phase: {self.phase}")
+                self.last_fps_print = time.time()
 
             if self.game_over and game_over_start_time is None:
                 game_over_start_time = self.game_time

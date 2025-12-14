@@ -144,11 +144,12 @@ class InstagramAPI:
                 return cached_followers
 
         # Priority 1: Import from file(s) if specified (SAFE!)
+        # Skip import when in TEST_MINIMAL_PLAYERS mode - generate test data instead
         instagram_followers = []
         tiktok_followers = []
 
-        # Import Instagram followers
-        if self.import_file and os.path.exists(self.import_file):
+        # Import Instagram followers (skip if in test mode with specific count)
+        if self.import_file and os.path.exists(self.import_file) and not config.TEST_MINIMAL_PLAYERS:
             print(f"✅ Importing Instagram followers from: {self.import_file}")
             try:
                 instagram_followers = self._import_from_file(self.import_file, count) or []
@@ -156,8 +157,8 @@ class InstagramAPI:
             except Exception as e:
                 print(f"❌ Instagram import failed: {e}")
 
-        # Import TikTok followers
-        if self.tiktok_import_file and os.path.exists(self.tiktok_import_file):
+        # Import TikTok followers (skip if in test mode)
+        if self.tiktok_import_file and os.path.exists(self.tiktok_import_file) and not config.TEST_MINIMAL_PLAYERS:
             print(f"✅ Importing TikTok followers from: {self.tiktok_import_file}")
             try:
                 tiktok_followers = self._import_from_file(self.tiktok_import_file, count) or []
@@ -263,6 +264,10 @@ class InstagramAPI:
         Download avatar image from URL with retry logic and caching.
         Checks disk cache first if username is provided.
         """
+        # Skip loading profile pictures if disabled (for faster testing)
+        if not getattr(config, 'LOAD_PROFILE_PICTURES', True):
+            return None
+
         if not url:
             return None
 
@@ -277,9 +282,11 @@ class InstagramAPI:
                 try:
                     img = Image.open(cache_file).convert('RGBA')
                     _AVATAR_CACHE[url] = img  # Store in memory for this run
+                    # Cache hit - no download needed
                     return img
                 except Exception as e:
                     print(f"      Failed to load cached avatar for {username}: {e}")
+                    # Cache file corrupted, will re-download
 
         # Throttle requests to reduce 429s
         global _LAST_AVATAR_FETCH_TS
@@ -494,6 +501,11 @@ class InstagramAPI:
         followers = []
         file_ext = os.path.splitext(file_path)[1].lower()
 
+        # Track avatar loading statistics
+        cached_count = 0
+        downloaded_count = 0
+        failed_count = 0
+
         try:
             # Handle JSON files
             if file_ext == '.json':
@@ -550,10 +562,23 @@ class InstagramAPI:
                             avatar_img = None
                             download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
                             if profile_pic_url and download_pics:
+                                # Check if already cached
+                                cache_file = self.avatar_cache_dir / f"{username}.jpg"
+                                was_cached = cache_file.exists()
+
                                 avatar_img = self._download_avatar(profile_pic_url, username=username)
-                                # Show progress every 10 downloads
-                                if (i + 1) % 10 == 0:
-                                    print(f"   📥 Downloaded {i + 1} profile pictures...")
+
+                                # Track statistics
+                                if avatar_img is not None:
+                                    if was_cached:
+                                        cached_count += 1
+                                    else:
+                                        downloaded_count += 1
+                                else:
+                                    failed_count += 1
+                            # Show progress every 10 followers processed
+                            if (i + 1) % 1000 == 0:
+                                print(f"   📥 Processed {i + 1} profile pictures...")
 
                             followers.append({
                                 "id": f"imported_{i}",
@@ -561,6 +586,13 @@ class InstagramAPI:
                                 "avatar": avatar_img,
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
+
+                    # Print statistics summary for JSON
+                    download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
+                    if download_pics and followers:
+                        total_processed = cached_count + downloaded_count + failed_count
+                        if total_processed > 0:
+                            print(f"   📊 Avatar Stats: {cached_count} cached, {downloaded_count} downloaded, {failed_count} failed")
 
             # Handle CSV files
             elif file_ext == '.csv':
@@ -607,11 +639,24 @@ class InstagramAPI:
                             # Optionally download profile picture if URL provided and enabled
                             avatar_img = None
                             if profile_pic_url and download_pics:
+                                # Check if already cached
+                                cache_file = self.avatar_cache_dir / f"{username}.jpg"
+                                was_cached = cache_file.exists()
+
                                 avatar_img = self._download_avatar(profile_pic_url, username=username)
 
-                                # Show progress every 10 downloads
-                                if (i + 1) % 10 == 0:
-                                    print(f"   📥 Downloaded {i + 1}/{count} profile pictures...")
+                                # Track statistics
+                                if avatar_img is not None:
+                                    if was_cached:
+                                        cached_count += 1
+                                    else:
+                                        downloaded_count += 1
+                                else:
+                                    failed_count += 1
+
+                            # Show progress every 10 followers processed
+                            if (i + 1) % 10 == 0:
+                                print(f"   📥 Processed {i + 1}/{count} profile pictures...")
 
                             followers.append({
                                 "id": f"imported_{i}",
@@ -620,9 +665,12 @@ class InstagramAPI:
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
 
-                    # Print completion message if we downloaded profile pictures
+                    # Print completion message with statistics
                     if download_pics and followers:
-                        print(f"   ✅ Completed! Downloaded {len(followers)}/{count} profile pictures")
+                        total_processed = cached_count + downloaded_count + failed_count
+                        print(f"   ✅ Completed! Processed {len(followers)}/{count} profile pictures")
+                        if total_processed > 0:
+                            print(f"      📊 Stats: {cached_count} cached, {downloaded_count} downloaded, {failed_count} failed")
 
             # Handle plain text files (one username per line)
             elif file_ext == '.txt':

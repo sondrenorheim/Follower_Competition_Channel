@@ -1,0 +1,23 @@
+*** Begin Patch
+*** Update File: shared/physics.py
+@@
+-    def resolve_overlaps(self, followers: List['Follower']):
+-        """
+-        Immediately resolve overlapping followers by repositioning them.
+-        Uses spatial partitioning for O(n) performance instead of O(nAi).
+-
+-        Args:
+-            followers: List of all followers
+-        """
+-        alive_followers = [f for f in followers if f.alive]
++    def resolve_overlaps(self, followers: List['Follower']):
++        """
++        Immediately resolve overlapping followers by repositioning them.
++        Uses spatial partitioning for O(n) performance instead of O(n²).
++
++        Args:
++            followers: List of all followers
++        """
++        # Only resolve overlaps for regular followers; gorillas remain immovable.
++        alive_followers = [f for f in followers if f.alive and not self._is_gorilla(f)]
+*** End Patch

@@ -1,0 +1,123 @@
+================================================================================
+                        INSTAGRAM BURNER ACCOUNTS TRACKER
+================================================================================
+
+Target Account to Scrape: followerbattlegrounds
+
+================================================================================
+                              BURNER ACCOUNTS
+================================================================================
+
+BURNER #1:
+----------
+Username: stinsonoscar2
+Email: [original email]
+Password: [password]
+Cookie File: instagram_session_cookies.pkl
+Status: BLOCKED (Dec 13, 2024)
+Followers Scraped: ~2,000
+Notes: First burner account - got rate limited after scrolling followers
+       Give 48hr cooldown before trying again
+
+
+BURNER #2:
+----------
+Username:
+Email:
+Password:
+Cookie File: instagram_cookies_burner2.pkl
+Status:
+Followers Scraped:
+Notes:
+
+
+BURNER #3:
+----------
+Username:
+Email:
+Password:
+Cookie File: instagram_cookies_burner3.pkl
+Status:
+Followers Scraped:
+Notes:
+
+
+BURNER #4:
+----------
+Username:
+Email:
+Password:
+Cookie File: instagram_cookies_burner4.pkl
+Status:
+Followers Scraped:
+Notes:
+
+
+BURNER #5:
+----------
+Username:
+Email:
+Password:
+Cookie File: instagram_cookies_burner5.pkl
+Status:
+Followers Scraped:
+Notes:
+
+
+================================================================================
+                                STATUS CODES
+================================================================================
+
+READY      - Account created, ready to use for scraping
+ACTIVE     - Currently being used for scraping
+BLOCKED    - Rate limited / blocked by Instagram
+COOLDOWN   - Waiting 24-48 hours before using again
+RETIRED    - Permanently banned, don't use
+
+
+================================================================================
+                            GMAIL + TRICK REFERENCE
+================================================================================
+
+If your Gmail is: yourname@gmail.com
+
+Use for Instagram:
+  - yourname+burner1@gmail.com
+  - yourname+burner2@gmail.com
+  - yourname+burner3@gmail.com
+
+All codes go to: yourname@gmail.com inbox
+
+
+================================================================================
+                              SCRAPING PROGRESS
+================================================================================
+
+Total Unique Followers Collected: [update after each scrape]
+
+Scraping Sessions:
+  - Session 1 (Dec 13): 2,000 followers (Burner #1, safe_html_scraper)
+  - Session 2:
+  - Session 3:
+  - Session 4:
+  - Session 5:
+
+
+================================================================================
+                                  NOTES
+================================================================================
+
+Tips:
+  - Space out account creation by 30-60 minutes
+  - Use Gmail + trick for reliable email verification
+  - Each burner can scrape ~3,000-5,000 followers before getting flagged
+  - Wait 48 hours before reusing a blocked burner
+  - Use alphabet_follower_scraper.py for best results (bypasses scroll limit)
+
+Commands:
+  - Update scraper: Edit alphabet_follower_scraper.py lines 15-19
+  - Run scraper: python alphabet_follower_scraper.py
+  - Check progress: python test_scraping_progress.py
+
+
+================================================================================

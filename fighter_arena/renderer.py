@@ -137,7 +137,7 @@ class FighterRenderer:
         """
         # Count alive fighters to determine if we should show HP bars
         alive_count = sum(1 for f in fighters if f.alive)
-        show_hp_bars = alive_count <= 1000
+        show_hp_bars = alive_count <= 250
 
         for fighter in fighters:
             # Skip if completely faded out
@@ -168,6 +168,10 @@ class FighterRenderer:
             # Draw HP bar above fighter (only if <= 1000 fighters alive)
             if show_hp_bars and (fighter.alive or fighter.is_fading()):
                 self._draw_hp_bar(fighter)
+
+            # Draw nametag below fighter (same threshold as HP bars)
+            if alive_count <= config.NAMETAG_MAX_ALIVE_FIGHTER_ARENA and (fighter.alive or fighter.is_fading()):
+                self._draw_fighter_name(fighter)
 
     def _get_fighter_surface(self, fighter: Fighter) -> pygame.Surface:
         """
@@ -298,6 +302,39 @@ class FighterRenderer:
             (bar_x, bar_y, bar_width, bar_height),
             1
         )
+
+    def _draw_fighter_name(self, fighter: Fighter):
+        """
+        Draw fighter name below their avatar
+        Font size scales with fighter size for consistency
+
+        Args:
+            fighter: Fighter to draw name for
+        """
+        pos = fighter.get_position()
+
+        # Calculate scaled font size based on fighter size
+        scale_factor = config.FOLLOWER_RADIUS / config.FOLLOWER_BASE_RADIUS
+        font_size = max(14, int(config.NAMETAG_FONT_SIZE * scale_factor))
+        font = pygame.font.Font(None, font_size)
+
+        # Truncate username using config
+        username = fighter.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+
+        # Position below HP bar or avatar
+        text_y = pos[1] + config.FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET + 7
+
+        # Render text with outline
+        text_surface = font.render(username, True, config.NAMETAG_TEXT_COLOR)
+        text_rect = text_surface.get_rect(center=(int(pos[0]), int(text_y)))
+
+        # Draw outline for visibility
+        outline_surface = font.render(username, True, config.NAMETAG_OUTLINE_COLOR)
+        for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            outline_rect = outline_surface.get_rect(center=(text_rect.centerx + dx, text_rect.centery + dy))
+            self.screen.blit(outline_surface, outline_rect)
+
+        self.screen.blit(text_surface, text_rect)
 
     def _draw_attack_indicator(self, fighter: Fighter):
         """
