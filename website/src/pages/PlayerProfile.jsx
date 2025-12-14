@@ -48,28 +48,6 @@ export default function PlayerProfile() {
     }
   }, [selectedGameType, allGameHistory]);
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="text-xl text-gray-600">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!playerData) {
-    return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="text-center py-12">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Player Not Found</h2>
-          <p className="text-gray-600 mb-4">No statistics found for username: {username}</p>
-          <Link to="/" className="text-primary hover:underline">
-            ← Back to Daily Results
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   // Calculate stats from filtered game history (memoized)
   const stats = React.useMemo(() => {
     if (gameHistory.length === 0) {
@@ -82,7 +60,8 @@ export default function PlayerProfile() {
         top3Finishes: 0,
         top10PctFinishes: 0,
         totalKills: 0,
-        bestHotStreak: 0
+        bestHotStreak: 0,
+        firstEliminations: 0
       };
     }
 
@@ -94,6 +73,7 @@ export default function PlayerProfile() {
     const avgPlacement = gameHistory.reduce((sum, g) => sum + (g.placement || 0), 0) / gameHistory.length;
 
     const top10Pct = gameHistory.filter(g => g.placement <= 40).length;
+    const firstEliminations = gameHistory.filter(g => (g.placement || 0) === 0 || (g.placement || 0) === 1).length;
 
     let currentStreak = 0;
     let bestStreak = 0;
@@ -115,9 +95,32 @@ export default function PlayerProfile() {
       top3Finishes: top3,
       top10PctFinishes: top10Pct,
       totalKills,
-      bestHotStreak: bestStreak
+      bestHotStreak: bestStreak,
+      firstEliminations
     };
   }, [gameHistory]);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="text-xl text-gray-600">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!playerData) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="text-center py-12">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Player Not Found</h2>
+          <p className="text-gray-600 mb-4">No statistics found for username: {username}</p>
+          <Link to="/" className="text-primary hover:underline">
+            ← Back to Daily Results
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
