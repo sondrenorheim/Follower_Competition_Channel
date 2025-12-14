@@ -70,9 +70,9 @@ export default function PlayerProfile() {
     );
   }
 
-  // Calculate stats from filtered game history
-  const calculateStats = (games) => {
-    if (games.length === 0) {
+  // Calculate stats from filtered game history (memoized)
+  const stats = React.useMemo(() => {
+    if (gameHistory.length === 0) {
       return {
         totalPoints: 0,
         gamesPlayed: 0,
@@ -86,20 +86,18 @@ export default function PlayerProfile() {
       };
     }
 
-    const totalPoints = games.reduce((sum, g) => sum + (g.points || 0), 0);
-    const totalKills = games.reduce((sum, g) => sum + (g.kills || 0), 0);
-    const wins = games.filter(g => g.placement === 1).length;
-    const top3 = games.filter(g => g.placement <= 3).length;
-    const bestPlacement = Math.min(...games.map(g => g.placement || Infinity));
-    const avgPlacement = games.reduce((sum, g) => sum + (g.placement || 0), 0) / games.length;
+    const totalPoints = gameHistory.reduce((sum, g) => sum + (g.points || 0), 0);
+    const totalKills = gameHistory.reduce((sum, g) => sum + (g.kills || 0), 0);
+    const wins = gameHistory.filter(g => g.placement === 1).length;
+    const top3 = gameHistory.filter(g => g.placement <= 3).length;
+    const bestPlacement = Math.min(...gameHistory.map(g => g.placement || Infinity));
+    const avgPlacement = gameHistory.reduce((sum, g) => sum + (g.placement || 0), 0) / gameHistory.length;
 
-    // Calculate top 10% finishes (assuming max ~400 players per game)
-    const top10Pct = games.filter(g => g.placement <= 40).length;
+    const top10Pct = gameHistory.filter(g => g.placement <= 40).length;
 
-    // Simple hot streak calculation
     let currentStreak = 0;
     let bestStreak = 0;
-    games.forEach(g => {
+    gameHistory.forEach(g => {
       if (g.placement <= 40) {
         currentStreak++;
         bestStreak = Math.max(bestStreak, currentStreak);
@@ -110,7 +108,7 @@ export default function PlayerProfile() {
 
     return {
       totalPoints,
-      gamesPlayed: games.length,
+      gamesPlayed: gameHistory.length,
       bestPlacement,
       avgPlacement: avgPlacement.toFixed(1),
       wins,
@@ -119,9 +117,7 @@ export default function PlayerProfile() {
       totalKills,
       bestHotStreak: bestStreak
     };
-  };
-
-  const stats = calculateStats(gameHistory);
+  }, [gameHistory]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">

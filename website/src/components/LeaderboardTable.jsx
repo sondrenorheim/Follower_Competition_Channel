@@ -22,27 +22,30 @@ export default function LeaderboardTable({
     );
   }
 
-  // Calculate ranks with tie handling based on points (only if not already provided)
-  const dataWithRanks = data.map((row, index) => {
-    // If rank is already calculated (e.g., from filtered data), use it
-    if (row.calculatedRank) {
-      return row;
-    }
+  // Calculate ranks with tie handling in O(n log n) (only if not already provided)
+  let dataWithRanks = data;
+  const needsRank = !data.every((row) => row.calculatedRank !== undefined);
+  if (needsRank) {
+    const points = data.map((row, idx) => ({
+      idx,
+      points: row.points || row.totalPoints || 0
+    }));
 
-    // Otherwise calculate rank based on points (with tie handling)
-    // Rank = 1 + number of players with strictly higher points
-    const pointValue = row.points || row.totalPoints || 0;
-    let rank = 1;
-    for (let i = 0; i < data.length; i++) {
-      if (i !== index) {
-        const otherPoints = data[i].points || data[i].totalPoints || 0;
-        if (otherPoints > pointValue) {
-          rank++;
-        }
+    const sorted = [...points].sort((a, b) => b.points - a.points);
+    const ranks = new Array(data.length);
+    let currentRank = 1;
+    sorted.forEach((entry, i) => {
+      if (i > 0 && entry.points < sorted[i - 1].points) {
+        currentRank = i + 1;
       }
-    }
-    return { ...row, calculatedRank: rank };
-  });
+      ranks[entry.idx] = currentRank;
+    });
+
+    dataWithRanks = data.map((row, idx) => ({
+      ...row,
+      calculatedRank: ranks[idx]
+    }));
+  }
 
   // Pagination
   const totalPages = Math.ceil(dataWithRanks.length / itemsPerPage);

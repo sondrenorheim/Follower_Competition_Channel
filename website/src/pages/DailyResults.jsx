@@ -119,35 +119,40 @@ export default function DailyResults() {
     setSelectedGame(matchingGame || null);
   }, [selectedDayNumber, games, selectedGameType]);
 
-  // Sort all results and calculate ranks, then filter by search
-  const filteredResults = selectedGame
-    ? (() => {
-        // First, sort all results by points
-        const sortedResults = [...selectedGame.results].sort((a, b) => {
-          const pointsA = a.points || 0;
-          const pointsB = b.points || 0;
-          return pointsB - pointsA;
-        });
+  // Sort all results and calculate ranks once per selection, then filter by search
+  const rankedResults = React.useMemo(() => {
+    if (!selectedGame) return [];
 
-        // Calculate ranks for all players (with tie handling)
-        const resultsWithRanks = sortedResults.map((result) => {
-          const pointValue = result.points || 0;
-          let rank = 1;
-          for (let i = 0; i < sortedResults.length; i++) {
-            const otherPoints = sortedResults[i].points || 0;
-            if (otherPoints > pointValue) {
-              rank++;
-            }
-          }
-          return { ...result, calculatedRank: rank };
-        });
+    const sortedResults = [...selectedGame.results].sort((a, b) => {
+      const pointsA = a.points || 0;
+      const pointsB = b.points || 0;
+      return pointsB - pointsA;
+    });
 
-        // Then filter by search query
-        return resultsWithRanks.filter((result) =>
-          result.username.toLowerCase().includes(searchQuery.toLowerCase())
-        );
-      })()
-    : [];
+    const ranks = new Array(sortedResults.length);
+    let currentRank = 1;
+    sortedResults.forEach((res, idx) => {
+      if (idx > 0) {
+        const prevPoints = sortedResults[idx - 1].points || 0;
+        const points = res.points || 0;
+        if (points < prevPoints) {
+          currentRank = idx + 1;
+        }
+      }
+      ranks[idx] = currentRank;
+    });
+
+    return sortedResults.map((result, idx) => ({
+      ...result,
+      calculatedRank: ranks[idx]
+    }));
+  }, [selectedGame]);
+
+  const filteredResults = React.useMemo(() => {
+    if (!rankedResults.length) return [];
+    const q = searchQuery.toLowerCase();
+    return rankedResults.filter((result) => result.username.toLowerCase().includes(q));
+  }, [rankedResults, searchQuery]);
 
   if (loading) {
     return (

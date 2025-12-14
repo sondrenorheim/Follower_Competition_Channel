@@ -178,14 +178,15 @@ export default function MonthlyRankings() {
   }, [viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, historyData]);
 
   // Filter by search query but keep original ranks from the full sorted set
-  const filteredData = leaderboardData
-    .map((player, index) => ({
+  const filteredData = React.useMemo(() => {
+    const base = leaderboardData.map((player, index) => ({
       ...player,
       calculatedRank: index + 1
-    }))
-    .filter((player) =>
-      player.username.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    }));
+    if (!searchQuery) return base;
+    const q = searchQuery.toLowerCase();
+    return base.filter((player) => player.username.toLowerCase().includes(q));
+  }, [leaderboardData, searchQuery]);
 
   // Use available months only
   const monthOptions = availableMonths;
@@ -363,21 +364,6 @@ export default function MonthlyRankings() {
             </div>
           </div>
         </div>
-
-        {/* Disclaimer for All-Time view */}
-        {viewMode === 'all-time' && (
-          <div className="mb-6 p-4 bg-warning/10 border-l-4 border-warning rounded-card">
-            <div className="flex items-start gap-3">
-              <span className="text-2xl">⚠️</span>
-              <div>
-                <p className="text-sm font-medium text-text-primary">
-                  <strong>Note:</strong> The first 8 days of competition did not have sufficient data tracking.
-                  Detailed statistics and game breakdowns are not available for those early days.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Leaderboard Table */}
         {filteredData.length > 0 ? (
