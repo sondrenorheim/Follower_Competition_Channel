@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getPlayerStats, getPlayerGameHistory, loadGameHistory, getGameTypes } from '../utils/dataLoader';
-import { parseStats, formatPoints, formatDate, getPlacementSuffix, getGameTypeInfo } from '../utils/formatters';
+import { getPlayerStats, getPlayerGameHistory, getGameTypes } from '../utils/dataLoader';
+import { formatPoints, formatDate, getPlacementSuffix, getGameTypeInfo } from '../utils/formatters';
 import GameFilter from '../components/GameFilter';
 
 /**
