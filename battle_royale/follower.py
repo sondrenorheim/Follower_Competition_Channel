@@ -167,7 +167,7 @@ class Follower:
         distance_from_edge = safe_radius - distance_from_center - config.FOLLOWER_RADIUS
 
         # Start avoiding when within this distance from edge
-        avoidance_threshold = 60  # Start avoiding 60 pixels from edge
+        avoidance_threshold = 120  # Look further ahead to steer away sooner
 
         if distance_from_edge < avoidance_threshold:
             # Normalize direction to center
@@ -177,7 +177,8 @@ class Follower:
 
                 # Calculate avoidance strength (stronger as we get closer to edge)
                 avoidance_strength = 1.0 - (distance_from_edge / avoidance_threshold)
-                avoidance_strength = max(0.0, min(1.0, avoidance_strength))
+                # Bias upward to make fleeing the rim more decisive
+                avoidance_strength = max(0.0, min(1.0, avoidance_strength * 1.4))
 
                 # Apply strong force when very close to or in danger zone
                 if distance_from_edge < 0:
@@ -185,7 +186,7 @@ class Follower:
                     avoidance_strength = 1.3
 
                 # Return force toward center
-                force_magnitude = self.stats['base_speed'] * avoidance_strength * 1.2
+                force_magnitude = self.stats['base_speed'] * avoidance_strength * 1.5
                 return (dx_to_center * force_magnitude, dy_to_center * force_magnitude)
 
         return (0.0, 0.0)

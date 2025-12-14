@@ -129,8 +129,8 @@ class Fighter(Follower):
         # print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
         self.attack_animation_frames = 10  # Brief attack animation
 
-        # Deal damage - use 40 damage (one-shot) when more than 250 fighters, normal stats below that
-        if alive_count > 250:
+        # Deal damage - use 40 damage (one-shot) when more than 200 fighters, normal stats below that
+        if alive_count > 200:
             damage = 40  # One-shot kills for fast early game
         else:
             damage = self.attack_stat
@@ -202,7 +202,9 @@ class Fighter(Follower):
             regen_amount = (self.regeneration_stat / 2.0) * dt
             self.current_hp = min(self.max_hp, self.current_hp + regen_amount)
 
-    def update_fighter(self, dt: float, arena_rect: Tuple[int, int, int, int], all_fighters: List['Fighter'], current_time: float, combat_enabled: bool = True):
+    def update_fighter(self, dt: float, arena_rect: Tuple[int, int, int, int],
+                      all_fighters: List['Fighter'], current_time: float,
+                      combat_enabled: bool = True, alive_count_hint: int = None):
         """
         Update fighter state each frame (Fighter Arena specific)
 
@@ -212,6 +214,7 @@ class Fighter(Follower):
             all_fighters: List of all fighters for targeting
             current_time: Current game time
             combat_enabled: Whether combat is allowed (False during intro/countdown)
+            alive_count_hint: Optional precomputed alive count to avoid O(n) per fighter
         """
         if not self.alive:
             # Handle fade out animation
@@ -246,8 +249,8 @@ class Fighter(Follower):
 
             # Try to attack if in range (only if combat is enabled)
             if combat_enabled and isinstance(self.target_follower, Fighter):
-                # Count alive fighters for damage scaling
-                alive_count = sum(1 for f in all_fighters if f.alive)
+                # Use precomputed alive count when provided (huge speedup at 30k+ fighters)
+                alive_count = alive_count_hint if alive_count_hint is not None else sum(1 for f in all_fighters if f.alive)
                 self.attack(self.target_follower, current_time, combat_enabled, alive_count)
         else:
             self._random_movement_fighter(dt)

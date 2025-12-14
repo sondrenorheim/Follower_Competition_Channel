@@ -111,14 +111,19 @@ class PlatformerRaceGame:
         self.top_10_finishers = []
 
         # Statistics
-        self.day_number = 1
+        self.day_number = getattr(config, "DAY_NUMBER", 1)
         self.current_game_leaderboard = []
         self.all_time_leaderboard = []
 
     def setup_racers(self):
         """Fetch followers and place at starting line"""
+        # Decide how many followers to fetch/generate
+        follower_count = config.FOLLOWER_COUNT
+        if config.TEST_MINIMAL_PLAYERS and config.TEST_MINIMAL_PLAYER_COUNT:
+            follower_count = config.TEST_MINIMAL_PLAYER_COUNT
+
         # Fetch followers
-        follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        follower_data = self.api.fetch_followers(follower_count)
 
         # All racers start at exact same position (bottom-left of starting platform)
         # Starting platform is at x=10, y=600, width=140 (Floor 1)

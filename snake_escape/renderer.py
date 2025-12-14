@@ -51,6 +51,7 @@ class SnakeEscapeRenderer(RendererTemplate):
 
         # Additional fonts
         self.font_status = pygame.font.Font(None, 28)
+        self.font_small = pygame.font.Font(None, 12)  # Smaller nametag font
 
     def _draw_game_area(self, players: List, game_state: dict):
         """Draw the arena background."""

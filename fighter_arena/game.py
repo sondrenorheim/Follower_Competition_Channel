@@ -230,13 +230,20 @@ class FighterBattleArena:
             print(f"🎮 [{time_module.time():.2f}] Phase: {self.game_phase} | Combat: {'ENABLED' if combat_enabled else 'DISABLED'}")
             self._last_combat_state = combat_enabled
 
+        # Precompute alive count once per frame (avoid O(n²) alive scans inside each fighter)
+        alive_count_hint = sum(1 for f in self.fighters if f.alive)
+
         for fighter in self.fighters:
             # Always use fighter-specific update (no zone avoidance)
-            fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled)
+            fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled, alive_count_hint)
 
         # Physics: collision detection and overlap resolution
         self.physics.update(self.fighters, current_time)
-        self.physics.resolve_overlaps(self.fighters)
+        # Overlap resolution is expensive; skip it for massive crowds and use gentle separation instead
+        if len(self.fighters) < 10000:
+            self.physics.resolve_overlaps(self.fighters)
+        else:
+            self.physics.apply_separation_force(self.fighters, strength=0.1)
 
         # Update particles
         self.particles.update(dt)
@@ -496,7 +503,10 @@ class FighterBattleArena:
 
             # Physics: collision detection and overlap resolution
             self.physics.update(self.fighters, current_time)
-            self.physics.resolve_overlaps(self.fighters)
+            if len(self.fighters) < 10000:
+                self.physics.resolve_overlaps(self.fighters)
+            else:
+                self.physics.apply_separation_force(self.fighters, strength=0.1)
 
             self.particles.update(dt)
             self.sound.update_music_volume()

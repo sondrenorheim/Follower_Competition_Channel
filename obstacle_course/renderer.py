@@ -26,7 +26,7 @@ class ObstacleCourseRenderer:
         """
         self.screen = screen
         self.font = pygame.font.Font(None, 32)
-        self.font_small = pygame.font.Font(None, 24)
+        self.font_small = pygame.font.Font(None, 12)
         self.font_title = pygame.font.Font(None, 56)      # For main title
         self.font_subtitle = pygame.font.Font(None, 32)   # For subtitle
         self.font_day = pygame.font.Font(None, 36)        # For day counter

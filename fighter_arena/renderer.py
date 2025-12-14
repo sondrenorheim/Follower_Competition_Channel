@@ -137,7 +137,7 @@ class FighterRenderer:
         """
         # Count alive fighters to determine if we should show HP bars
         alive_count = sum(1 for f in fighters if f.alive)
-        show_hp_bars = alive_count <= 250
+        show_hp_bars = alive_count <= 200
 
         for fighter in fighters:
             # Skip if completely faded out

@@ -257,6 +257,9 @@ class SnakeEscapeGame:
         for follower in followers_to_update:
             follower.update(dt, self.arena, fake_snake, alive_followers)
 
+        # Keep distant followers moving with a small ambient wander
+        self._apply_background_wander(alive_followers)
+
         # Apply snake repulsion field (THIS IS THE MAGIC!)
         # Only affects ALIVE players near the snake
         if self.snakes and alive_followers:
@@ -391,6 +394,9 @@ class SnakeEscapeGame:
             for follower in alive_followers:
                 follower.update(dt, self.arena, fake_snake, alive_followers)
 
+            # Keep distant followers moving with a small ambient wander
+            self._apply_background_wander(alive_followers)
+
             # Apply snake repulsion field (makes them appear to flee intelligently)
             if self.snakes and alive_followers:
                 self._apply_snake_repulsion_field(dt, alive_followers)
@@ -467,7 +473,7 @@ class SnakeEscapeGame:
         # Configuration
         repulsion_radius = 200  # Distance at which repulsion starts
         panic_radius = 80       # Inner radius with extra strong repulsion
-        base_force = 3.5        # Base repulsion strength
+        base_force = 0.5        # Base repulsion strength (reduced from 3.5)
 
         # For each snake, apply repulsion to nearby followers
         for snake in self.snakes:
@@ -506,7 +512,7 @@ class SnakeEscapeGame:
 
                 # Extra panic mode when very close to snake
                 if dist < panic_radius:
-                    strength *= 2.5  # Much stronger push in panic zone!
+                    strength *= 1.8  # Stronger push in panic zone (reduced from 2.5)
 
                 # Normalize direction (away from snake)
                 dx_norm = dx / dist
@@ -516,6 +522,48 @@ class SnakeEscapeGame:
                 repulsion_force = strength * base_force
                 follower.vx += dx_norm * repulsion_force
                 follower.vy += dy_norm * repulsion_force
+
+    def _apply_background_wander(self, alive_followers: list):
+        """
+        Add a tiny random push to followers that are far from any snake so they
+        keep drifting instead of coming to a stop.
+        """
+        if not alive_followers:
+            return
+
+        # Use the same radius as the repulsion field to define "near the snake"
+        wander_ignore_radius = 200
+        wander_ignore_radius_sq = wander_ignore_radius * wander_ignore_radius
+
+        # Minimum wandering speed and jitter
+        min_speed = config.SNAKE_ESCAPE_DEFAULT_STATS["base_speed"] * 0.35
+        jitter = min_speed * 0.2
+
+        has_snakes = bool(self.snakes)
+
+        for follower in alive_followers:
+            if has_snakes:
+                # Skip adding wander if within the danger zone of any snake
+                close_to_snake = False
+                for snake in self.snakes:
+                    dx = follower.x - snake.x
+                    dy = follower.y - snake.y
+                    if dx * dx + dy * dy <= wander_ignore_radius_sq:
+                        close_to_snake = True
+                        break
+                if close_to_snake:
+                    continue
+
+            # If moving too slowly, give a nudge in a random direction
+            speed = math.hypot(follower.vx, follower.vy)
+            if speed < min_speed:
+                angle = random.uniform(0, 2 * math.pi)
+                follower.vx += math.cos(angle) * min_speed
+                follower.vy += math.sin(angle) * min_speed
+            else:
+                # Light jitter to keep motion alive
+                follower.vx += random.uniform(-jitter, jitter)
+                follower.vy += random.uniform(-jitter, jitter)
 
     def _handle_game_over(self, survivors: List[SnakeEscapeFollower]):
         """Handle game over."""

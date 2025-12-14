@@ -552,7 +552,11 @@ class ObstacleCourseGame:
                         self.running = False
                         return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap dt to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
 
             # Calculate elapsed time for animation
             elapsed = time.time() - intro_start_time
@@ -630,7 +634,11 @@ class ObstacleCourseGame:
                         self.running = False
                         return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap dt to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
 
             # Check if countdown finished
             elapsed = time.time() - self.countdown_start_time
@@ -655,7 +663,11 @@ class ObstacleCourseGame:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+            target_fps = config.SIMULATION_FPS_DURING_EXPORT if config.EXPORT_VIDEO else config.FPS
+            dt = self.clock.tick(target_fps) / 1000.0
+
+            # Cap dt to prevent huge jumps when system lags
+            dt = min(dt, config.MAX_DELTA_TIME)
 
             self.update(dt)
             self.render()

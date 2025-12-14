@@ -29,6 +29,7 @@ class PlatformerRenderer:
         self.font_subtitle = pygame.font.Font(None, 32)
         self.font_day = pygame.font.Font(None, 36)
         self.font_large = pygame.font.Font(None, 72)
+        self.font_nametag = pygame.font.Font(None, 12)
 
         # Reuse fighter renderer for high-res avatar rendering
         self.fighter_renderer = FighterRenderer(screen)
@@ -991,7 +992,7 @@ class PlatformerRenderer:
                     # Use existing helper method with config values
                     self._draw_text_with_outline(
                         username,
-                        self.font_small,
+                        self.font_nametag,
                         config.NAMETAG_TEXT_COLOR,
                         config.NAMETAG_OUTLINE_COLOR,
                         (text_x, text_y),
