@@ -1,0 +1,2 @@
+game_history.json filter=lfs diff=lfs merge=lfs -text
+website/public/game_history.json filter=lfs diff=lfs merge=lfs -text
