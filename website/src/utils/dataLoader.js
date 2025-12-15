@@ -18,8 +18,31 @@ export async function loadPlayerStats() {
     return cachedPlayerStats;
   }
 
-  try {
-    const response = await fetch(`${DATA_BASE_PATH}player_statistics.json`);
+  const primaryPaths = [
+    `${DATA_BASE_PATH}player_statistics_web.json`,
+    `${DATA_BASE_PATH}player_statistics.json`,
+  ];
+
+  for (const path of primaryPaths) {
+    try {
+      const response = await fetch(path);
+      if (!response.ok) continue;
+      const data = await response.json();
+      cachedPlayerStats = data;
+      return data;
+    } catch (err) {
+      // try next
+    }
+  }
+
+  console.error('Error loading player statistics (all sources failed)');
+  // Return mock data for development
+  return {
+    last_updated: new Date().toISOString(),
+    total_games_recorded: 0,
+    players: {}
+  };
+}
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -46,21 +69,28 @@ export async function loadGameHistory() {
     return cachedGameHistory;
   }
 
-  try {
-    const response = await fetch(`${DATA_BASE_PATH}game_history.json`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+  const primaryPaths = [
+    `${DATA_BASE_PATH}game_history_web.json`,
+    `${DATA_BASE_PATH}game_history.json`,
+  ];
+
+  for (const path of primaryPaths) {
+    try {
+      const response = await fetch(path);
+      if (!response.ok) continue;
+      const data = await response.json();
+      cachedGameHistory = data;
+      return data;
+    } catch (err) {
+      // try next
     }
-    const data = await response.json();
-    cachedGameHistory = data;
-    return data;
-  } catch (error) {
-    console.error('Error loading game history:', error);
-    // Return mock data for development
-    return {
-      games: []
-    };
   }
+
+  console.error('Error loading game history (all sources failed)');
+  // Return mock data for development
+  return {
+    games: []
+  };
 }
 
 /**
