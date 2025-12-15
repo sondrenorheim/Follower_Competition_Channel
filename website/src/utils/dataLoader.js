@@ -43,22 +43,6 @@ export async function loadPlayerStats() {
     players: {}
   };
 }
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const data = await response.json();
-    cachedPlayerStats = data;
-    return data;
-  } catch (error) {
-    console.error('Error loading player statistics:', error);
-    // Return mock data for development
-    return {
-      last_updated: new Date().toISOString(),
-      total_games_recorded: 0,
-      players: {}
-    };
-  }
-}
 
 /**
  * Load game history from JSON file
