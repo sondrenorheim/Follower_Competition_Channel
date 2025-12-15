@@ -9,6 +9,20 @@ const DATA_BASE_PATH = '/'; // Serve from root (works in both dev and production
 let cachedPlayerStats = null;
 let cachedGameHistory = null;
 
+// Game code mapping for compact web stats
+const GAME_CODE_MAP = {
+  pr: 'platformer_race',
+  oc: 'obstacle_course',
+  br: 'battle_royale',
+  fa: 'fighter_arena',
+  se: 'snake_escape',
+  tb: 'team_battle',
+  gv: 'gorillas_vs_followers',
+  sp: 'spleef',
+  tr: 'platformer_race', // legacy code reuse
+};
+const GAME_CODE_MAP_REVERSE = Object.fromEntries(Object.entries(GAME_CODE_MAP).map(([k, v]) => [v, k]));
+
 /**
  * Load player statistics from JSON file
  * @returns {Promise<Object>} Player statistics data
@@ -27,7 +41,8 @@ export async function loadPlayerStats() {
     try {
       const response = await fetch(path);
       if (!response.ok) continue;
-      const data = await response.json();
+      const raw = await response.json();
+      const data = normalizePlayerStats(raw);
       cachedPlayerStats = data;
       return data;
     } catch (err) {
@@ -41,6 +56,48 @@ export async function loadPlayerStats() {
     last_updated: new Date().toISOString(),
     total_games_recorded: 0,
     players: {}
+  };
+}
+
+// Normalize compact or full player stats into canonical shape
+function normalizePlayerStats(raw) {
+  // Canonical shape already
+  if (raw && raw.players && raw.last_updated !== undefined) {
+    return raw;
+  }
+
+  // Compact shape: {lu, tgr, p:{ username: {s:[...], gb:{code:count}, rg:[...] } } }
+  if (raw && raw.p) {
+    const out = {
+      last_updated: raw.lu || null,
+      total_games_recorded: raw.tgr || 0,
+      players: {},
+    };
+
+    Object.entries(raw.p).forEach(([username, pdata]) => {
+      const statsArr = pdata.s || [];
+      const breakdown = {};
+      const gb = pdata.gb || {};
+      Object.entries(gb).forEach(([code, count]) => {
+        const full = GAME_CODE_MAP[code] || code;
+        breakdown[full] = count;
+      });
+
+      out.players[username] = {
+        stats: statsArr,
+        game_breakdown: breakdown,
+        recent_games: pdata.rg || [],
+      };
+    });
+
+    return out;
+  }
+
+  // Fallback
+  return {
+    last_updated: null,
+    total_games_recorded: 0,
+    players: {},
   };
 }
 
@@ -62,7 +119,8 @@ export async function loadGameHistory() {
     try {
       const response = await fetch(path);
       if (!response.ok) continue;
-      const data = await response.json();
+      const raw = await response.json();
+      const data = normalizeGameHistory(raw);
       cachedGameHistory = data;
       return data;
     } catch (err) {
@@ -75,6 +133,37 @@ export async function loadGameHistory() {
   return {
     games: []
   };
+}
+
+// Normalize compact or full game history into canonical shape
+function normalizeGameHistory(raw) {
+  // Full shape already
+  if (raw && raw.games) return raw;
+
+  // Compact shape: {g:[{id,t,n,d,ts,r:[[u,pl,pts,k]]}]}
+  if (raw && Array.isArray(raw.g)) {
+    const games = raw.g.map((g) => {
+      const gameType = GAME_CODE_MAP[g.t] || g.t || 'unknown';
+      const results = (g.r || []).map((r) => ({
+        username: r[0],
+        placement: r[1],
+        points: r[2],
+        kills: r[3] || 0,
+      }));
+      return {
+        game_id: g.id,
+        game_type: gameType,
+        game_display_name: g.n || gameType,
+        day_number: g.d,
+        timestamp: g.ts,
+        results,
+      };
+    });
+    return { games };
+  }
+
+  // Fallback
+  return { games: [] };
 }
 
 /**
