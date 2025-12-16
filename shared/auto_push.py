@@ -8,7 +8,9 @@ import os
 from datetime import datetime
 from typing import List, Optional
 
+import json
 import config
+from shared import game_history, statistics
 
 
 def push_stats_to_github(
@@ -34,7 +36,9 @@ def push_stats_to_github(
     if files is None:
         files = [
             "player_statistics.json",
-            "game_history.json"
+            "game_history.json",
+            "website/public/player_statistics_web.json",
+            "website/public/game_history.json"
         ]
 
         # Conditionally add video files based on config
@@ -66,6 +70,26 @@ def push_stats_to_github(
     print(f"   Message: {commit_message}")
 
     try:
+        # Before git add/commit, regenerate web bundles if not in TEST_MODE
+        if not config.TEST_MODE:
+            try:
+                # Build website/public/player_statistics_web.json
+                stats = statistics.PlayerStatistics()
+                stats.export_web_stats(
+                    output_path="website/public/player_statistics_web.json"
+                )
+                print("   + Regenerated website/public/player_statistics_web.json")
+            except Exception as e:
+                print(f"   ! Failed to regenerate player_statistics_web.json: {e}")
+            try:
+                gh = game_history.GameHistory("game_history.json")
+                gh.export_web_history(
+                    output_path="website/public/game_history.json"
+                )
+                print("   + Regenerated website/public/game_history.json")
+            except Exception as e:
+                print(f"   ! Failed to regenerate game_history.json (web): {e}")
+
         # Check if we're in a git repository
         result = subprocess.run(
             ['git', 'rev-parse', '--git-dir'],
