@@ -13,6 +13,8 @@ import os
 from dotenv import load_dotenv
 from collections import defaultdict
 import time
+import ijson
+import io
 
 # Load environment variables
 load_dotenv()
@@ -37,28 +39,64 @@ class StatsCache:
         self.update_lock = asyncio.Lock()
 
     async def fetch_json(self, url: str) -> Optional[dict]:
-        """Fetch JSON data from URL"""
+        """Fetch JSON data from URL using streaming parser for memory efficiency"""
         try:
             print(f"📥 Fetching {url}...")
             loop = asyncio.get_event_loop()
+
+            # Download with streaming to avoid loading entire response in memory
             response = await loop.run_in_executor(
                 None,
-                lambda: requests.get(url, timeout=30)  # Increased timeout for large files
+                lambda: requests.get(url, timeout=60, stream=True)
             )
             response.raise_for_status()
-            print(f"✓ Downloaded, parsing JSON...")
-            data = response.json()
-            print(f"✓ Parsed successfully")
+
+            print(f"✓ Downloaded, streaming parse (memory-efficient)...")
+
+            # Use ijson to parse the JSON incrementally
+            # This builds the complete object while using minimal memory
+            data = await loop.run_in_executor(
+                None,
+                lambda: self._parse_json_stream(response.raw)
+            )
+
+            print(f"✓ Parsed successfully ({len(str(data))} chars)")
             return data
+
         except requests.Timeout:
-            print(f"❌ Timeout fetching {url} (took longer than 30s)")
+            print(f"❌ Timeout fetching {url} (took longer than 60s)")
             return None
         except requests.RequestException as e:
             print(f"❌ Network error fetching {url}: {e}")
             return None
-        except Exception as e:
-            print(f"❌ Error parsing {url}: {e}")
+        except MemoryError as e:
+            print(f"❌ Out of memory parsing {url}: {e}")
             return None
+        except Exception as e:
+            print(f"❌ Error parsing {url}: {type(e).__name__}: {e}")
+            return None
+
+    def _parse_json_stream(self, stream) -> dict:
+        """Parse JSON from stream using ijson for memory efficiency"""
+        # For large JSON objects, ijson.kvitems is memory-efficient
+        # It yields key-value pairs without loading the entire structure
+        result = {}
+
+        try:
+            # Parse top-level key-value pairs
+            parser = ijson.kvitems(stream, '')
+            for key, value in parser:
+                result[key] = value
+                print(f"  Parsed key: {key} ({type(value).__name__})")
+        except Exception as e:
+            print(f"  ijson parsing failed, trying alternative: {e}")
+            # Fallback: try parsing as complete items
+            stream.seek(0)
+            items = list(ijson.items(stream, ''))
+            if items:
+                result = items[0]
+
+        return result
 
     async def update(self):
         """Update cached data from URLs"""
@@ -550,10 +588,7 @@ async def on_ready():
     print(f'👥 Player Stats URL: {PLAYER_STATS_URL}')
     print(f'🔄 Cache refresh interval: {CACHE_REFRESH_MINUTES} minutes')
 
-    # Initial cache update
-    await cache.update()
-
-    # Sync commands
+    # Sync commands first (don't wait for data)
     try:
         synced = await tree.sync()
         print(f'✅ Synced {len(synced)} command(s)')
@@ -561,7 +596,22 @@ async def on_ready():
         print(f'❌ Failed to sync commands: {e}')
 
     # Start background task for cache refresh
+    # This runs continuously and handles errors gracefully
     client.loop.create_task(cache_refresh_task())
+
+    # Trigger initial cache update in background (non-blocking)
+    print(f'🔄 Starting initial cache update in background...')
+    client.loop.create_task(initial_cache_update())
+
+async def initial_cache_update():
+    """Initial cache update with error handling"""
+    try:
+        await cache.update()
+        print(f"✅ Initial cache loaded successfully")
+    except Exception as e:
+        print(f"⚠️ Initial cache update failed: {type(e).__name__}: {e}")
+        print(f"   Bot will retry in {CACHE_REFRESH_MINUTES} minutes")
+        print(f"   Commands will work once data is loaded")
 
 async def cache_refresh_task():
     """Background task to refresh cache periodically"""
