@@ -30,6 +30,8 @@ class VideoRecorder:
         """
         self.output_path = output_path or config.OUTPUT_VIDEO_PATH
         self.fps = fps or config.VIDEO_FPS
+        # Playback speed scaling during export (e.g., 0.5 = slow down 2x, 2.0 = speed up 2x)
+        self.export_speed_factor = getattr(config, "EXPORT_SPEED_FACTOR", 1.0)
         self.frames: List[np.ndarray] = []
         self.recording = config.EXPORT_VIDEO
 
@@ -138,7 +140,54 @@ class VideoRecorder:
                 upscaled = np.repeat(np.repeat(frame, int(scale_factor), axis=0), int(scale_factor), axis=1)
                 return upscaled
 
-    def _generate_mixed_audio(self, video_duration: float) -> Optional[str]:
+    def _generate_elimination_sfx(self):
+        """
+        Generate elimination sound effect (descending tone)
+        Returns pydub AudioSegment
+        """
+        try:
+            from pydub import AudioSegment
+            from pydub.generators import Sine
+            import numpy as np
+
+            # Create a descending tone (similar to the pygame version)
+            duration_ms = 300  # 0.3 seconds
+            start_freq = 800
+            end_freq = 200
+
+            # Generate frequency sweep
+            samples = []
+            sample_rate = 22050
+            num_samples = int(sample_rate * duration_ms / 1000)
+
+            for i in range(num_samples):
+                t = i / sample_rate
+                progress = i / num_samples
+                freq = start_freq + (end_freq - start_freq) * progress
+                envelope = (1 - progress) * 0.3  # Fade out
+
+                # Generate sine wave
+                value = int(32767 * envelope * np.sin(2 * np.pi * freq * t))
+                samples.append(value)
+
+            # Convert to bytes for pydub
+            audio_data = np.array(samples, dtype=np.int16).tobytes()
+            sfx = AudioSegment(
+                data=audio_data,
+                sample_width=2,  # 16-bit
+                frame_rate=sample_rate,
+                channels=1  # Mono
+            )
+
+            # Convert to stereo
+            sfx = sfx.set_channels(2)
+            return sfx
+
+        except Exception as e:
+            print(f"⚠️  Error generating elimination SFX: {e}")
+            return None
+
+    def _generate_mixed_audio(self, video_duration: float, export_fps: int) -> Optional[str]:
         """
         Generate mixed audio track from audio files (background music and countdown)
         Note: Video recording starts from countdown phase, so day/intro audio are not included
@@ -206,10 +255,30 @@ class VideoRecorder:
 
                 # Calculate countdown start position in milliseconds
                 countdown_start_frame = self.greenscreen_start_frame if self.greenscreen_start_frame is not None else 0
-                countdown_start_time_ms = int((countdown_start_frame / self.fps) * 1000)
+                countdown_start_time_ms = int((countdown_start_frame / export_fps) * 1000)
 
                 mixed_audio = mixed_audio.overlay(countdown_audio, position=countdown_start_time_ms)
                 print(f"   ✓ Countdown audio added at {countdown_start_time_ms/1000:.1f}s (frame {countdown_start_frame})")
+
+            # 3. Add sound effects from audio logger
+            if self.audio_logger and hasattr(self.audio_logger, 'events'):
+                sound_effects = [e for e in self.audio_logger.events if e.event_type == 'sound_effect']
+                if sound_effects:
+                    print(f"   Adding {len(sound_effects)} sound effects...")
+                    for event in sound_effects:
+                        sound_name = event.data.get('sound_name', '')
+                        timestamp_ms = int(event.timestamp * 1000)
+                        volume_db = event.data.get('volume', 1.0)
+
+                        # Generate elimination sound effect
+                        if sound_name == 'elimination':
+                            sfx = self._generate_elimination_sfx()
+                            if sfx:
+                                # Adjust volume
+                                sfx = sfx + (20 * (volume_db - 1.0))  # Convert to dB adjustment
+                                mixed_audio = mixed_audio.overlay(sfx, position=timestamp_ms)
+
+                    print(f"   ✓ Sound effects added")
 
             # Save final audio mix
             output_file = tempfile.mktemp(suffix='.wav')
@@ -246,7 +315,7 @@ class VideoRecorder:
         self.greenscreen_start_frame = len(self.frames)
         print(f"🎬 Countdown start marked at frame {self.greenscreen_start_frame}")
 
-    def _apply_greenscreen_overlay(self, frames: List[np.ndarray]) -> List[np.ndarray]:
+    def _apply_greenscreen_overlay(self, frames: List[np.ndarray], export_fps: int) -> List[np.ndarray]:
         """
         Apply green screen video overlay starting from the countdown start frame
 
@@ -280,8 +349,8 @@ class VideoRecorder:
             gs_frame_count = int(gs_video.get(cv2.CAP_PROP_FRAME_COUNT))
             gs_duration = gs_frame_count / gs_fps
 
-            # Calculate how many output frames the overlay covers
-            overlay_frame_count = int(gs_duration * self.fps)
+            # Calculate how many output frames the overlay covers (respect export fps)
+            overlay_frame_count = int(gs_duration * export_fps)
             # Ensure we don't exceed available frames after start point
             overlay_frame_count = min(overlay_frame_count, len(frames) - start_frame_idx)
 
@@ -418,18 +487,21 @@ class VideoRecorder:
             print(f"\n🎬 Exporting video with {len(self.frames)} frames...")
             print(f"   Greenscreen path configured: {self.greenscreen_video_path}")
 
-            # Apply green screen overlay if set
-            frames_to_export = self._apply_greenscreen_overlay(list(self.frames))
-
             # Import MoviePy (only when needed to save startup time)
             from moviepy.editor import ImageSequenceClip, AudioFileClip
 
+            # Adjust playback speed by scaling the fps used for export
+            out_fps = max(1, int(self.fps * self.export_speed_factor))
+
+            # Apply green screen overlay if set (needs export fps for timing)
+            frames_to_export = self._apply_greenscreen_overlay(list(self.frames), out_fps)
+
             # Create video clip from frames
-            video_clip = ImageSequenceClip(frames_to_export, fps=self.fps)
+            video_clip = ImageSequenceClip(frames_to_export, fps=out_fps)
             video_duration = video_clip.duration
 
             # Generate mixed audio from all audio files
-            audio_file = self._generate_mixed_audio(video_duration)
+            audio_file = self._generate_mixed_audio(video_duration, out_fps)
 
             audio_clip = None
             has_audio = False

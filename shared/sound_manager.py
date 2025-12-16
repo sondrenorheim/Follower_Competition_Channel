@@ -246,8 +246,13 @@ class SoundManager:
         """Play elimination sound effect"""
         if 'elimination' in self.sounds:
             sound = self.sounds['elimination']
-            sound.set_volume(self.sfx_volume * self.master_volume)
+            volume = self.sfx_volume * self.master_volume
+            sound.set_volume(volume)
             self.sfx_channel.play(sound)
+
+            # Log to audio logger for video export
+            if self.audio_logger:
+                self.audio_logger.log_sound_effect('elimination', volume)
 
     def play_collision(self):
         """Play collision sound effect"""
@@ -670,6 +675,15 @@ class SoundManager:
             volume: Volume level (0.0 to 1.0)
         """
         self.master_volume = max(0.0, min(1.0, volume))
+
+    def stop(self):
+        """
+        Stop all audio playback (music, SFX, announcer). Used during game teardown.
+        """
+        try:
+            pygame.mixer.stop()
+        except Exception:
+            pass
 
     def cleanup(self):
         """Clean up sound resources"""
