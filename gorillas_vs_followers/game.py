@@ -80,6 +80,10 @@ class GorillasVsFollowersGame:
         # Preload audio
         self.sound.preload_audio()
 
+        # Disable any nametags/usernames in this mode
+        config.SHOW_NAMETAGS = False
+        config.SHOW_FOLLOWER_NAMES = False
+
         # Game state
         self.followers: List[GorillaFollower] = []
         self.gorillas: List[Gorilla] = []
@@ -113,6 +117,7 @@ class GorillasVsFollowersGame:
         self.total_eliminations = 0
         self.last_alive_followers = 0
         self.last_alive_gorillas = 0
+        self._last_debuff_check = 0.0
 
         # Leaderboard data
         self.current_game_leaderboard = []
@@ -136,22 +141,38 @@ class GorillasVsFollowersGame:
         else:
             follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
 
-        follower_count = len(follower_data)
+        real_follower_count = len(follower_data)
 
-        # Calculate gorilla count (1 per 100 followers)
+        # Downscale participants: 1 follower entity per 100 real followers
+        chunk_size = 100
+        follower_chunks = [follower_data[i:i + chunk_size] for i in range(0, len(follower_data), chunk_size)]
+        follower_count = max(1, len(follower_chunks))
+
+        # Gorillas: 1 per 100 simulated fighters (e.g., 500 fighters -> 5 gorillas, 360 -> 3-4)
         gorilla_count = max(1, follower_count // 100)
 
         print(f"📊 {follower_count} followers vs {gorilla_count} gorillas")
 
-        # Store initial values for dynamic scaling
-        self.initial_total_players = follower_count
+        # Store initial values for dynamic scaling and UI labels
+        self.initial_total_players = real_follower_count                # real-world followers (scoring)
+        self.initial_followers_count = real_follower_count              # real-world followers (scoring)
+        self.initial_followers_count_sim = follower_count               # simulated fighters on field
+        self.scaling_total_players = follower_count                     # use simulated count for sizing
+        self.initial_gorillas_count = gorilla_count
+
+        # Scale gorilla HP by (effective) participants: base formula boosted by chunk_size so
+        # downscaled simulations still give gorillas meaningful health at high real counts.
+        scale_divisor = max(1, real_follower_count)
+        scaled_gorilla_hp = max(1, 15000 * 1000 * chunk_size / scale_divisor)
+        # Store follower totals for debuff logic
+        self._total_follower_hp = 0
 
         # Calculate initial dynamic radius
         arena_rect = self.arena.get_rect()
         if config.USE_DYNAMIC_SCALING:
             initial_radius = config.calculate_dynamic_follower_radius(
-                total_players=self.initial_total_players,
-                alive_count=self.initial_total_players,
+                total_players=self.scaling_total_players,
+                alive_count=self.scaling_total_players,
                 safe_zone_radius=min(arena_rect[2], arena_rect[3]) // 2,
                 initial_zone_radius=min(arena_rect[2], arena_rect[3]) // 2
             )
@@ -165,10 +186,19 @@ class GorillasVsFollowersGame:
         # Create followers
         left, top, right, bottom = self.arena.get_bounds()
         gate_y = (top + bottom) / 2.0
-        for data in follower_data:
+        self._total_follower_hp = 0
+        for chunk in follower_chunks:
+            data = dict(chunk[0])  # shallow copy so we can adjust avatar safely
+
+            # Randomly pick an available avatar from the chunk (if any)
+            avatars = [d.get("avatar") for d in chunk if d.get("avatar")]
+            data["avatar"] = random.choice(avatars) if avatars else None
+
             x = random.uniform(left + config.FOLLOWER_RADIUS, right - config.FOLLOWER_RADIUS)
             y = random.uniform(gate_y + config.FOLLOWER_RADIUS, bottom - config.FOLLOWER_RADIUS)
-            follower = GorillaFollower(data, (x, y))
+            proxy_usernames = [d.get("username", "") for d in chunk if d.get("username")]
+            follower = GorillaFollower(data, (x, y), proxy_usernames=proxy_usernames)
+            self._total_follower_hp += getattr(follower, "max_hp", 0)
             self.followers.append(follower)
 
         # Create gorillas
@@ -177,6 +207,10 @@ class GorillasVsFollowersGame:
             x = random.uniform(left + radius, right - radius)
             y = random.uniform(top + radius, gate_y - radius)
             gorilla = Gorilla((x, y), i + 1)
+            gorilla.max_hp = scaled_gorilla_hp
+            gorilla.current_hp = scaled_gorilla_hp
+            # Inject baseline follower HP for debuff logic
+            gorilla.total_follower_hp_baseline = self._total_follower_hp
             self.gorillas.append(gorilla)
 
         # Combine into single list for combat
@@ -285,6 +319,27 @@ class GorillasVsFollowersGame:
         # Followers can cluster together without pushing each other
         self._resolve_gorilla_collisions()
 
+        # Secret debuff: check every 2 seconds; if gorilla total HP exceeds follower total HP, halve gorilla attack speed.
+        # If followers are ahead in total HP, halve their damage output.
+        if current_time - getattr(self, "_last_debuff_check", 0.0) >= 2.0:
+            alive_followers = [f for f in self.followers if f.alive]
+            alive_gorillas = [g for g in self.gorillas if g.alive]
+            if alive_followers and alive_gorillas:
+                total_f_hp = sum(getattr(f, "current_hp", 0) for f in alive_followers)
+                total_g_hp = sum(getattr(g, "current_hp", 0) for g in alive_gorillas)
+                gorilla_debuff = 0.5 if total_g_hp > total_f_hp else 1.0
+                follower_damage_debuff = 0.5 if total_f_hp > total_g_hp else 1.0
+                for g in alive_gorillas:
+                    g.attack_speed_debuff = gorilla_debuff
+                for f in alive_followers:
+                    f.damage_debuff = follower_damage_debuff
+            else:
+                for g in alive_gorillas:
+                    g.attack_speed_debuff = 1.0
+                for f in alive_followers:
+                    f.damage_debuff = 1.0
+            self._last_debuff_check = current_time
+
         # Update particles and sound
         self.particles.update(dt)
         self.sound.update_music_volume()
@@ -299,7 +354,7 @@ class GorillasVsFollowersGame:
             # Update dynamic radius (only count alive followers for scaling)
             if config.USE_DYNAMIC_SCALING:
                 new_radius = config.calculate_dynamic_follower_radius(
-                    total_players=self.initial_total_players,
+                    total_players=getattr(self, "scaling_total_players", self.initial_total_players),
                     alive_count=alive_follower_count,
                     safe_zone_radius=min(arena_rect[2], arena_rect[3]) // 2,
                     initial_zone_radius=min(arena_rect[2], arena_rect[3]) // 2
@@ -371,6 +426,8 @@ class GorillasVsFollowersGame:
             "victory_team": self.victory_team,
             "current_game_leaderboard": self.current_game_leaderboard,
             "gate_progress": self.gate_open_progress,
+            "initial_followers": getattr(self, "initial_followers_count_sim", len(self.followers)),
+            "initial_gorillas": getattr(self, "initial_gorillas_count", len(self.gorillas)),
         }
 
         self.renderer.render_frame(
@@ -464,7 +521,7 @@ class GorillasVsFollowersGame:
         game_display_name = "Gorillas vs Followers"
         day_number = getattr(config, 'DAY_NUMBER', 1)
 
-        total_participants = len(self.followers)
+        total_participants = self.initial_followers_count
         game_results = []
         game_history_results = []
 
@@ -483,47 +540,50 @@ class GorillasVsFollowersGame:
                 # Score is raw damage dealt to gorillas
                 points_earned = follower.gorilla_damage_dealt
 
-                self.statistics.update_player_stats(
-                    username=follower.username,
-                    placement=placement,
-                    points_earned=points_earned,
-                    survival_time=follower.get_survival_time(),
-                    total_participants=total_participants,
-                    kills=follower.kills,
-                    damage_dealt=follower.gorilla_damage_dealt,  # Use gorilla damage
-                    game_type=game_type,
-                    game_id=""
-                )
+                # Apply scoring to all real followers represented by this fighter
+                for uname in getattr(follower, "proxy_usernames", [follower.username]):
+                    self.statistics.update_player_stats(
+                        username=uname,
+                        placement=placement,
+                        points_earned=points_earned,
+                        survival_time=follower.get_survival_time(),
+                        total_participants=total_participants,
+                        kills=follower.kills,
+                        damage_dealt=follower.gorilla_damage_dealt,  # Use gorilla damage
+                        game_type=game_type,
+                        game_id=""
+                    )
 
-                game_results.append((
-                    follower.username,
-                    placement,
-                    points_earned,
-                    follower.gorilla_damage_dealt
-                ))
+                    game_results.append((
+                        uname,
+                        placement,
+                        points_earned,
+                        follower.gorilla_damage_dealt
+                    ))
 
-                game_history_results.append({
-                    "username": follower.username,
-                    "placement": placement,
-                    "points": points_earned,
-                    "survival_time": follower.get_survival_time(),
-                    "kills": follower.kills,
-                    "damage": follower.gorilla_damage_dealt
-                })
+                    game_history_results.append({
+                        "username": uname,
+                        "placement": placement,
+                        "points": points_earned,
+                        "survival_time": follower.get_survival_time(),
+                        "kills": follower.kills,
+                        "damage": follower.gorilla_damage_dealt
+                    })
 
         else:
             # GORILLAS WON - No points awarded
             print("❌ Gorillas won! No points awarded.")
 
             for follower in self.followers:
-                game_history_results.append({
-                    "username": follower.username,
-                    "placement": 0,
-                    "points": 0,
-                    "survival_time": follower.get_survival_time(),
-                    "kills": follower.kills,
-                    "damage": follower.gorilla_damage_dealt
-                })
+                for uname in getattr(follower, "proxy_usernames", [follower.username]):
+                    game_history_results.append({
+                        "username": uname,
+                        "placement": 0,
+                        "points": 0,
+                        "survival_time": follower.get_survival_time(),
+                        "kills": follower.kills,
+                        "damage": follower.gorilla_damage_dealt
+                    })
 
         # Record game session
         self.game_history.record_game_session(

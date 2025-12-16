@@ -495,6 +495,25 @@ class VideoRecorder:
         """
         return len(self.frames)
 
+    def finalize(self):
+        """
+        Finalize the recording safely.
+        - If recording is disabled or no frames were captured, do nothing.
+        - Otherwise export the video and expose the saved path as `video_path`
+          for callers that expect it.
+        - Always clear frames afterward to free memory.
+        """
+        if not self.recording:
+            return
+
+        # Expose a stable path attribute for callers (some use `video_path`)
+        self.video_path = getattr(self, "output_path", None)
+
+        try:
+            self.export_video()
+        finally:
+            self.clear_frames()
+
     def get_video_duration(self) -> float:
         """
         Get estimated video duration in seconds

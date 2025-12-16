@@ -8,7 +8,7 @@ import pygame
 import math
 import time
 import random
-from typing import Tuple
+from typing import Tuple, List
 import config
 from fighter_arena import Fighter
 
@@ -20,13 +20,14 @@ class GorillaFollower(Fighter):
     Uses default stats (no 1000+ boost) and tracks damage dealt to gorillas for scoring
     """
 
-    def __init__(self, follower_data: dict, position: Tuple[float, float]):
+    def __init__(self, follower_data: dict, position: Tuple[float, float], proxy_usernames: List[str] | None = None):
         """
         Initialize a gorilla follower
 
         Args:
             follower_data: Dictionary containing 'id', 'username', 'avatar', and optionally 'color'
             position: (x, y) starting position
+            proxy_usernames: Optional list of real usernames this fighter represents (for downscaled sims)
         """
         # Initialize as normal follower, but we'll override stats
         super().__init__(follower_data, position)
@@ -42,8 +43,16 @@ class GorillaFollower(Fighter):
         self.knockback_stat = stats["knockback"]
         self.attack_speed_stat = stats["attack_speed"]
 
+        # Attack speed debuff multiplier (1.0 = normal). Can be set by game logic.
+        self.attack_speed_debuff = 1.0
+        # Damage debuff multiplier (1.0 = normal). Can be set by game logic.
+        self.damage_debuff = 1.0
+
         # Damage tracking for scoring (only damage to gorillas counts)
         self.gorilla_damage_dealt = 0.0
+
+        # Track the real usernames this simulated fighter represents
+        self.proxy_usernames: List[str] = proxy_usernames if proxy_usernames else [self.username]
 
     def _choose_target_fighter(self, all_fighters: list):
         """
@@ -134,7 +143,7 @@ class GorillaFollower(Fighter):
         self.attack_animation_frames = 10
 
         # Damage calculation
-        damage = self.attack_stat
+        damage = self.attack_stat * self.damage_debuff
 
         killed = target.take_damage(damage, self)
         self.damage_dealt += damage
@@ -157,9 +166,13 @@ class GorillaFollower(Fighter):
 
         # Track damage to gorillas
         if target.__class__.__name__ == 'Gorilla':
-            self.gorilla_damage_dealt += self.attack_stat
+            self.gorilla_damage_dealt += damage
 
         return True
+
+    def get_attacks_per_second(self) -> float:
+        """Attack speed with debuff scaling applied."""
+        return (self.attack_speed_stat / 10.0) * self.attack_speed_debuff
 
     def get_stats_summary(self) -> dict:
         """Get summary of follower's stats for debugging"""

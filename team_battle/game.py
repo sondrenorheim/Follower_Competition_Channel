@@ -7,8 +7,6 @@ import pygame
 import random
 import math
 import time
-import csv
-from datetime import datetime
 from typing import List, Dict, Optional
 
 import config
@@ -163,11 +161,6 @@ class TeamBattleGame:
         self.winner = None
         self.winning_team = None
 
-        # HP logging
-        self.hp_log_file = None
-        self.hp_log_writer = None
-        self.frame_number = 0
-
         # Performance optimization - update throttling for large player counts
         self.update_frame_counter = 0
         self.update_batches_per_frame = config.UPDATE_BATCHES_PER_FRAME
@@ -247,44 +240,6 @@ class TeamBattleGame:
             print(f"  {team.value.upper()}: {len(self.teams[team])} fighters")
 
         print(f"Total: {len(self.fighters)} fighters ready!\n")
-
-        # Initialize HP logging CSV
-        self._init_hp_logging()
-
-    def _init_hp_logging(self):
-        """Initialize CSV file for HP logging"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_filename = f"hp_log_{timestamp}.csv"
-
-        self.hp_log_file = open(log_filename, 'w', newline='')
-        self.hp_log_writer = csv.writer(self.hp_log_file)
-
-        # Write header row
-        header = ['frame', 'phase', 'time']
-        for fighter in self.fighters:
-            header.append(f"{fighter.username}_hp")
-            header.append(f"{fighter.username}_alive")
-            header.append(f"{fighter.username}_team")
-
-        self.hp_log_writer.writerow(header)
-        print(f"HP logging initialized: {log_filename}\n")
-
-    def _log_hp_frame(self):
-        """Log HP of fighters from non-eliminated teams only"""
-        if not self.hp_log_writer:
-            return
-
-        row = [self.frame_number, self.phase, time.time() - self.game_start_time]
-
-        for fighter in self.fighters:
-            # Only log fighters from teams that haven't been eliminated
-            if fighter.team not in self.eliminated_teams:
-                row.append(f"{fighter.current_hp:.1f}")
-                row.append(1 if fighter.alive else 0)
-                row.append(fighter.team.value)
-
-        self.hp_log_writer.writerow(row)
-        self.frame_number += 1
 
     def get_alive_count_by_team(self) -> Dict[Team, int]:
         """Get count of alive fighters per team"""
@@ -1187,7 +1142,6 @@ class TeamBattleGame:
             self.game_time += dt
 
             self.update(dt)
-            self._log_hp_frame()  # Log HP after each update
             self.render()
 
             # Performance monitoring - print FPS every 3 seconds
@@ -1237,11 +1191,6 @@ class TeamBattleGame:
     def cleanup(self):
         """Clean up and export video"""
         self.audio_logger.stop()
-
-        # Close HP log file
-        if self.hp_log_file:
-            self.hp_log_file.close()
-            print("HP log saved successfully")
 
         print("\n" + "=" * 60)
         print("  GAME STATISTICS")

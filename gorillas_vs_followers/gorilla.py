@@ -34,28 +34,32 @@ class Gorilla(Follower):
             gorilla_id: Unique identifier for this gorilla
         """
         # Create dummy follower data for base class
+        # Pick a variant based on weighted probabilities
+        variant_name, variant = self._choose_variant()
+
         follower_data = {
             'id': f'gorilla_{gorilla_id}',
-            'username': f'Gorilla #{gorilla_id}',
+            'username': f'{variant_name.capitalize()} Gorilla #{gorilla_id}',
             'avatar': None,
-            'color': random.choice(config.GORILLA_COLORS)
+            'color': variant.get('color', random.choice(config.GORILLA_COLORS))
         }
 
         super().__init__(follower_data, position)
 
-        # Override with gorilla stats
-        stats = config.GORILLA_STATS
-        self.max_hp = stats["hp"]
+        # Override with gorilla stats (variant)
+        self.max_hp = variant["hp"]
         self.current_hp = self.max_hp
-        self.speed_stat = stats["speed"]
-        self.attack_stat = stats["attack"]
-        self.regeneration_stat = stats["regeneration"]
-        self.knockback_stat = stats["knockback_distance"]
-        self.attack_speed_stat = stats["attack_speed"]
+        self.speed_stat = variant["speed"]
+        self.attack_stat = variant["attack"]
+        self.regeneration_stat = variant["regeneration"]
+        self.knockback_stat = variant["knockback_distance"]
+        self.attack_speed_stat = variant["attack_speed"]
 
         # Gorilla visual properties
-        self.radius = config.FOLLOWER_RADIUS * config.GORILLA_SIZE_MULTIPLIER
+        size_mult = variant.get("size_multiplier", 1.0) * config.GORILLA_SIZE_MULTIPLIER
+        self.radius = config.FOLLOWER_RADIUS * size_mult
         self.color = follower_data['color']
+        self.attack_speed_debuff = 1.0
 
         # Animation state for arms
         self.animation_time = random.uniform(0, 2 * math.pi)  # Random starting phase
@@ -69,6 +73,25 @@ class Gorilla(Follower):
         self.attack_range = config.FIGHTER_ATTACK_RANGE * config.GORILLA_SIZE_MULTIPLIER
         self.base_attack_range = self.attack_range
         self.knockback_frames_remaining = 0  # Stun frames from being attacked
+
+    def _choose_variant(self):
+        """
+        Choose a gorilla variant based on configured weights.
+        """
+        variants = getattr(config, "GORILLA_VARIANTS", {})
+        if not variants:
+            return "default", config.GORILLA_STATS
+
+        names = list(variants.keys())
+        weights = [variants[n].get("weight", 1.0) for n in names]
+        total = sum(weights)
+        pick = random.uniform(0, total)
+        accum = 0.0
+        for name, w in zip(names, weights):
+            accum += w
+            if pick <= accum:
+                return name, variants[name]
+        return names[-1], variants[names[-1]]
 
     def update(self, dt: float, arena, all_entities: List, combat_enabled: bool = True, gate_progress: float = 1.0):
         """
@@ -322,7 +345,7 @@ class Gorilla(Follower):
     def get_attacks_per_second(self) -> float:
         """Calculate attacks per second based on attack_speed_stat"""
         # attack_speed_stat = 20 means 2 attacks per second
-        return self.attack_speed_stat / 10.0
+        return (self.attack_speed_stat / 10.0) * self.attack_speed_debuff
 
     def get_hp_percentage(self) -> float:
         """Get current HP as percentage (0.0 to 1.0)"""
