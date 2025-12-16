@@ -65,7 +65,9 @@ class StatsCache:
             player_stats = await self.fetch_json(PLAYER_STATS_URL)
             if player_stats:
                 self.player_stats = player_stats
-                print(f"✅ Player stats updated ({len(player_stats.get('players', {}))} players)")
+                # Handle both full and compact format
+                players = player_stats.get('players', player_stats.get('p', {}))
+                print(f"✅ Player stats updated ({len(players)} players)")
 
             self.last_update = datetime.now()
             print(f"✅ Cache updated at {self.last_update}")
@@ -151,17 +153,62 @@ def get_latest_day() -> Optional[int]:
 
     return max(g.get('day_number', 0) for g in games)
 
+def expand_compact_stats(compact_stats: dict) -> dict:
+    """
+    Expand compact player stats format to full format
+
+    Compact format:
+    - 's': [13-item array]
+    - 'gb': {game_type_code: count}
+
+    Array indices:
+    [0] total_points, [1] games_played, [2] best_placement,
+    [3] total_placements, [4] wins, [5] top_3_finishes,
+    [6] top_10%_finishes, [7] total_survival_time,
+    [8] first_eliminations, [9] current_hot_streak,
+    [10] best_hot_streak, [11] total_kills, [12] total_damage
+    """
+    s = compact_stats.get('s', [])
+
+    # Ensure we have enough values
+    while len(s) < 13:
+        s.append(0)
+
+    expanded = {
+        'total_points': s[0],
+        'games_played': s[1],
+        'best_placement': s[2],
+        'total_placements': s[3],
+        'wins': s[4],
+        'top_3_finishes': s[5],
+        'top_10_percent_finishes': s[6],
+        'total_survival_time': s[7],
+        'first_eliminations': s[8],
+        'current_hot_streak': s[9],
+        'best_hot_streak': s[10],
+        'total_kills': s[11],
+        'total_damage': s[12],
+        'average_points': s[0] / s[1] if s[1] > 0 else 0,
+        'game_breakdown': compact_stats.get('gb', {})
+    }
+
+    return expanded
+
 def get_player_stats(username: str) -> Optional[dict]:
     """Get stats for a specific player"""
     if not cache.player_stats:
         return None
 
-    players = cache.player_stats.get('players', {})
+    # Handle both full and compact format ('players' or 'p')
+    players = cache.player_stats.get('players', cache.player_stats.get('p', {}))
 
     # Case-insensitive search
     username_lower = username.lower()
     for player_name, stats in players.items():
         if player_name.lower() == username_lower:
+            # Check if stats are in compact format
+            if isinstance(stats, dict) and 's' in stats:
+                stats = expand_compact_stats(stats)
             return {'username': player_name, **stats}
 
     return None
