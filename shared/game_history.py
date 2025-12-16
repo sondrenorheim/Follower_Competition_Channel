@@ -64,6 +64,16 @@ class GameHistory:
         except Exception as e:
             print(f"Error saving game history: {e}")
 
+    def export_web_history(self, output_path: str = "website/public/game_history_web.json"):
+        """
+        Export the game history to the website/public path.
+        Uses the current in-memory history structure.
+        """
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(self.history, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"Exported web game history to {output_path}")
+
     def record_game_session(
         self,
         game_type: str,

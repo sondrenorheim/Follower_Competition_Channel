@@ -18,8 +18,9 @@ import random
 from pathlib import Path
 
 import config
-from shared import auto_push
+from shared import auto_push, statistics, game_history
 from instagrapi import Client
+from shared import statistics, game_history
 
 
 def build_video_path(game_mode: str) -> Path:
@@ -206,6 +207,19 @@ def upload_tiktok(session_id: str, video_path: Path, caption: str):
 def push_stats(commit_message: str | None):
     if getattr(config, "TEST_MODE", False):
         raise SystemExit("TEST_MODE is True: stats/history not saved. Re-run games with TEST_MODE=False before pushing.")
+    # Regenerate web bundles before pushing
+    try:
+        stats = statistics.PlayerStatistics()
+        stats.export_web_stats(output_path="website/public/player_statistics_web.json")
+        print("Regenerated website/public/player_statistics_web.json")
+    except Exception as e:
+        print(f"Failed to regenerate player_statistics_web.json: {e}")
+    try:
+        gh = game_history.GameHistory("game_history.json")
+        gh.export_web_history(output_path="website/public/game_history_web.json")
+        print("Regenerated website/public/game_history_web.json")
+    except Exception as e:
+        print(f"Failed to regenerate game_history.json (web): {e}")
     ok = auto_push.push_stats_to_github(commit_message=commit_message)
     if not ok:
         raise SystemExit("Git push failed. See logs above.")

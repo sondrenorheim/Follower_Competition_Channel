@@ -38,7 +38,7 @@ def push_stats_to_github(
             "player_statistics.json",
             "game_history.json",
             "website/public/player_statistics_web.json",
-            "website/public/game_history.json"
+            "website/public/game_history_web.json"
         ]
 
         # Conditionally add video files based on config
@@ -84,9 +84,9 @@ def push_stats_to_github(
             try:
                 gh = game_history.GameHistory("game_history.json")
                 gh.export_web_history(
-                    output_path="website/public/game_history.json"
+                    output_path="website/public/game_history_web.json"
                 )
-                print("   + Regenerated website/public/game_history.json")
+                print("   + Regenerated website/public/game_history_web.json")
             except Exception as e:
                 print(f"   ! Failed to regenerate game_history.json (web): {e}")
 
