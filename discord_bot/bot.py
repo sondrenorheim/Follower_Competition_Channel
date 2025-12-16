@@ -39,15 +39,25 @@ class StatsCache:
     async def fetch_json(self, url: str) -> Optional[dict]:
         """Fetch JSON data from URL"""
         try:
+            print(f"📥 Fetching {url}...")
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: requests.get(url, timeout=10)
+                lambda: requests.get(url, timeout=30)  # Increased timeout for large files
             )
             response.raise_for_status()
-            return response.json()
+            print(f"✓ Downloaded, parsing JSON...")
+            data = response.json()
+            print(f"✓ Parsed successfully")
+            return data
+        except requests.Timeout:
+            print(f"❌ Timeout fetching {url} (took longer than 30s)")
+            return None
+        except requests.RequestException as e:
+            print(f"❌ Network error fetching {url}: {e}")
+            return None
         except Exception as e:
-            print(f"Error fetching {url}: {e}")
+            print(f"❌ Error parsing {url}: {e}")
             return None
 
     async def update(self):
