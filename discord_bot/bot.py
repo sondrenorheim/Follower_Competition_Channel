@@ -15,6 +15,7 @@ from collections import defaultdict
 import time
 import ijson
 import io
+import gzip
 
 # Load environment variables
 load_dotenv()
@@ -78,23 +79,38 @@ class StatsCache:
 
     def _parse_json_stream(self, stream) -> dict:
         """Parse JSON from stream using ijson for memory efficiency"""
-        # For large JSON objects, ijson.kvitems is memory-efficient
-        # It yields key-value pairs without loading the entire structure
         result = {}
 
         try:
-            # Parse top-level key-value pairs
+            # Check if stream is gzip-compressed by reading first few bytes
+            # Read some data to check for gzip magic number
+            initial_bytes = stream.read(3)
+
+            # Check for gzip magic number (1f 8b 08)
+            if initial_bytes[:2] == b'\x1f\x8b':
+                print(f"  Detected gzip compression, decompressing...")
+                # Reset and wrap in gzip decompressor
+                # We need to read the rest and decompress
+                remaining = stream.read()
+                compressed_data = initial_bytes + remaining
+                decompressed_data = gzip.decompress(compressed_data)
+                # Create a file-like object from decompressed data
+                stream = io.BytesIO(decompressed_data)
+            else:
+                # Not gzipped, create BytesIO with what we read plus the rest
+                remaining = stream.read()
+                stream = io.BytesIO(initial_bytes + remaining)
+
+            # Parse top-level key-value pairs using ijson
             parser = ijson.kvitems(stream, '')
             for key, value in parser:
                 result[key] = value
                 print(f"  Parsed key: {key} ({type(value).__name__})")
+
         except Exception as e:
-            print(f"  ijson parsing failed, trying alternative: {e}")
-            # Fallback: try parsing as complete items
-            stream.seek(0)
-            items = list(ijson.items(stream, ''))
-            if items:
-                result = items[0]
+            print(f"  Error during parsing: {type(e).__name__}: {e}")
+            # If parsing failed, return empty dict
+            result = {}
 
         return result
 
