@@ -36,8 +36,11 @@ class Follower:
 
         # Position and movement
         self.x, self.y = position
-        self.vx = 0.0  # Velocity X
-        self.vy = 0.0  # Velocity Y
+        # Initialize with random direction for immediate movement
+        angle = random.random() * 2 * math.pi
+        initial_speed = self.stats['base_speed'] * 0.5
+        self.vx = math.cos(angle) * initial_speed
+        self.vy = math.sin(angle) * initial_speed
         self.target_x = self.x
         self.target_y = self.y
 
@@ -106,13 +109,30 @@ class Follower:
         dx = self.x - arena_center[0]
         dy = self.y - arena_center[1]
         distance = math.sqrt(dx * dx + dy * dy)
+
+        # Add wall avoidance before hitting the boundary
+        wall_avoid_distance = config.FOLLOWER_RADIUS * 4
+        if distance > max_distance - wall_avoid_distance:
+            # Getting close to outer wall - add inward force
+            avoidance_strength = (distance - (max_distance - wall_avoid_distance)) / wall_avoid_distance
+            avoidance_strength = min(1.0, avoidance_strength)
+
+            # Push toward center
+            if distance > 0.1:
+                push_toward_center_x = -dx / distance * self.stats['base_speed'] * avoidance_strength * 0.3
+                push_toward_center_y = -dy / distance * self.stats['base_speed'] * avoidance_strength * 0.3
+                self.vx += push_toward_center_x
+                self.vy += push_toward_center_y
+
         if distance > max_distance:
-            # Push back inside
+            # Hit the wall - push back inside actively
             angle = math.atan2(dy, dx)
             self.x = arena_center[0] + math.cos(angle) * max_distance
             self.y = arena_center[1] + math.sin(angle) * max_distance
-            self.vx *= -0.5
-            self.vy *= -0.5
+
+            # Reverse velocity toward center instead of just dampening
+            self.vx = -dx / distance * abs(self.vx) * 0.5
+            self.vy = -dy / distance * abs(self.vy) * 0.5
 
     def _choose_target(self, all_followers: list):
         """
@@ -247,8 +267,8 @@ class Follower:
             arena_center: Center of the arena for zone avoidance
             safe_radius: Current safe zone radius for avoidance
         """
-        # Occasionally change direction
-        if random.random() < 0.02:  # 2% chance per frame
+        # More frequent direction changes for active movement (5% vs 2%)
+        if random.random() < 0.05:
             angle = random.random() * 2 * math.pi
             target_vx = math.cos(angle) * self.stats['base_speed']
             target_vy = math.sin(angle) * self.stats['base_speed']
