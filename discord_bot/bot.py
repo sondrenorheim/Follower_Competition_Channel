@@ -83,33 +83,40 @@ class StatsCache:
 
         try:
             # Check if stream is gzip-compressed by reading first few bytes
-            # Read some data to check for gzip magic number
             initial_bytes = stream.read(3)
 
             # Check for gzip magic number (1f 8b 08)
             if initial_bytes[:2] == b'\x1f\x8b':
-                print(f"  Detected gzip compression, decompressing...")
-                # Reset and wrap in gzip decompressor
-                # We need to read the rest and decompress
+                print(f"  Detected gzip, streaming decompress...")
+                # Put bytes back and wrap in streaming gzip decompressor
                 remaining = stream.read()
-                compressed_data = initial_bytes + remaining
-                decompressed_data = gzip.decompress(compressed_data)
-                # Create a file-like object from decompressed data
-                stream = io.BytesIO(decompressed_data)
+                compressed_stream = io.BytesIO(initial_bytes + remaining)
+                # Use GzipFile for streaming decompression
+                stream = gzip.GzipFile(fileobj=compressed_stream)
             else:
                 # Not gzipped, create BytesIO with what we read plus the rest
                 remaining = stream.read()
                 stream = io.BytesIO(initial_bytes + remaining)
 
+            print(f"  Parsing JSON with ijson...")
+
             # Parse top-level key-value pairs using ijson
+            # This reads and parses incrementally
             parser = ijson.kvitems(stream, '')
+            count = 0
             for key, value in parser:
                 result[key] = value
-                print(f"  Parsed key: {key} ({type(value).__name__})")
+                count += 1
+                value_type = type(value).__name__
+                value_len = len(value) if isinstance(value, (list, dict)) else 'N/A'
+                print(f"  ✓ Key {count}: '{key}' ({value_type}, len={value_len})")
+
+            print(f"  ✓ Parsing complete, {count} top-level keys")
 
         except Exception as e:
-            print(f"  Error during parsing: {type(e).__name__}: {e}")
-            # If parsing failed, return empty dict
+            print(f"  ❌ Parsing error: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             result = {}
 
         return result
