@@ -584,6 +584,487 @@ async def latest_command(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed)
 
+@tree.command(name="today", description="Get top 10 players from today")
+async def today_command(interaction: discord.Interaction):
+    """Show top 10 players from today"""
+
+    # Rate limiting
+    if not rate_limiter.check_user_limit(interaction.user.id):
+        await interaction.response.send_message(
+            "⏱️ You're using commands too quickly! Please wait a moment.",
+            ephemeral=True
+        )
+        return
+
+    if not rate_limiter.check_global_limit():
+        await interaction.response.send_message(
+            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    await cache.ensure_fresh()
+
+    if not cache.index:
+        await interaction.followup.send(
+            "❌ Could not fetch game data. Please try again later.",
+            ephemeral=True
+        )
+        return
+
+    # Get latest day
+    latest_day = get_latest_day()
+    if latest_day is None:
+        await interaction.followup.send(
+            "❌ No games found.",
+            ephemeral=True
+        )
+        return
+
+    games = await get_games_for_day(latest_day)
+    if not games:
+        await interaction.followup.send(
+            f"❌ No games found for today.",
+            ephemeral=True
+        )
+        return
+
+    # Aggregate points per player
+    player_points = {}
+    for game in games:
+        for result in game.get('results', []):
+            username = result.get('username')
+            if username:
+                points = result.get('points', 0)
+                player_points[username] = player_points.get(username, 0) + points
+
+    # Get top 10
+    top_players = sorted(
+        [{'username': u, 'points': p} for u, p in player_points.items()],
+        key=lambda r: r['points'],
+        reverse=True
+    )[:10]
+
+    # Create embed
+    embed = discord.Embed(
+        title=f"🏆 Top 10 Players Today (Day {latest_day})",
+        description=f"{len(games)} games played",
+        color=discord.Color.gold()
+    )
+
+    if top_players:
+        leaderboard_text = "\n".join([
+            f"{i+1}. **{p['username']}** - {format_number(p['points'])} pts"
+            for i, p in enumerate(top_players)
+        ])
+        embed.add_field(
+            name="Leaderboard",
+            value=leaderboard_text,
+            inline=False
+        )
+
+    embed.set_footer(text=f"Data from followerbattlegrounds.com")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="gameleaderboard", description="Top 10 players for a specific game mode")
+async def gameleaderboard_command(interaction: discord.Interaction, game_type: str):
+    """Show top 10 players for a specific game type"""
+
+    # Rate limiting
+    if not rate_limiter.check_user_limit(interaction.user.id):
+        await interaction.response.send_message(
+            "⏱️ You're using commands too quickly! Please wait a moment.",
+            ephemeral=True
+        )
+        return
+
+    if not rate_limiter.check_global_limit():
+        await interaction.response.send_message(
+            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    await cache.ensure_fresh()
+
+    # Normalize game type
+    game_type = game_type.lower().replace(' ', '_')
+
+    # Load all available days and aggregate
+    player_stats = {}
+
+    if not cache.index:
+        await interaction.followup.send(
+            "❌ Could not fetch game data. Please try again later.",
+            ephemeral=True
+        )
+        return
+
+    available_days = cache.index.get('available_days', [])
+
+    for day_num in available_days:
+        games = await get_games_for_day(day_num)
+        if not games:
+            continue
+
+        for game in games:
+            if game.get('game_type', '').lower() != game_type:
+                continue
+
+            for result in game.get('results', []):
+                username = result.get('username')
+                if username:
+                    if username not in player_stats:
+                        player_stats[username] = {
+                            'points': 0,
+                            'games': 0,
+                            'wins': 0,
+                            'best_placement': float('inf')
+                        }
+
+                    player_stats[username]['points'] += result.get('points', 0)
+                    player_stats[username]['games'] += 1
+
+                    placement = result.get('placement', 999)
+                    if placement == 1:
+                        player_stats[username]['wins'] += 1
+                    if placement < player_stats[username]['best_placement']:
+                        player_stats[username]['best_placement'] = placement
+
+    if not player_stats:
+        await interaction.followup.send(
+            f"❌ No games found for game type: **{game_type}**\n\nAvailable types: battle_royale, fighter_arena, platformer_race, obstacle_course, snake_escape, team_battle, gorillas_vs_followers",
+            ephemeral=True
+        )
+        return
+
+    # Get top 10
+    top_players = sorted(
+        [{'username': u, **stats} for u, stats in player_stats.items()],
+        key=lambda r: r['points'],
+        reverse=True
+    )[:10]
+
+    # Create embed
+    game_display = game_type.replace('_', ' ').title()
+    embed = discord.Embed(
+        title=f"🎮 Top 10 Players - {game_display}",
+        description=f"All-time leaderboard for {game_display}",
+        color=discord.Color.purple()
+    )
+
+    if top_players:
+        leaderboard_text = "\n".join([
+            f"{i+1}. **{p['username']}** - {format_number(p['points'])} pts ({p['games']} games, {p['wins']} wins)"
+            for i, p in enumerate(top_players)
+        ])
+        embed.add_field(
+            name="Leaderboard",
+            value=leaderboard_text,
+            inline=False
+        )
+
+    embed.set_footer(text=f"Data from followerbattlegrounds.com")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="compare", description="Compare stats between two players")
+async def compare_command(interaction: discord.Interaction, player1: str, player2: str):
+    """Compare stats between two players"""
+
+    # Rate limiting
+    if not rate_limiter.check_user_limit(interaction.user.id):
+        await interaction.response.send_message(
+            "⏱️ You're using commands too quickly! Please wait a moment.",
+            ephemeral=True
+        )
+        return
+
+    if not rate_limiter.check_global_limit():
+        await interaction.response.send_message(
+            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    await cache.ensure_fresh()
+
+    # Get stats for both players
+    stats1 = await get_player_stats(player1)
+    stats2 = await get_player_stats(player2)
+
+    if not stats1:
+        await interaction.followup.send(
+            f"❌ Player not found: **{player1}**",
+            ephemeral=True
+        )
+        return
+
+    if not stats2:
+        await interaction.followup.send(
+            f"❌ Player not found: **{player2}**",
+            ephemeral=True
+        )
+        return
+
+    # Create comparison embed
+    embed = discord.Embed(
+        title=f"⚔️ Player Comparison",
+        description=f"**{stats1['username']}** vs **{stats2['username']}**",
+        color=discord.Color.red()
+    )
+
+    # Total Points
+    p1_points = stats1.get('total_points', 0)
+    p2_points = stats2.get('total_points', 0)
+    winner1 = "🏆" if p1_points > p2_points else ""
+    winner2 = "🏆" if p2_points > p1_points else ""
+    embed.add_field(
+        name="💰 Total Points",
+        value=f"{winner1} {format_number(p1_points)} vs {format_number(p2_points)} {winner2}",
+        inline=False
+    )
+
+    # Games Played
+    p1_games = stats1.get('games_played', 0)
+    p2_games = stats2.get('games_played', 0)
+    embed.add_field(
+        name="🎮 Games Played",
+        value=f"{p1_games} vs {p2_games}",
+        inline=True
+    )
+
+    # Wins
+    p1_wins = stats1.get('wins', 0)
+    p2_wins = stats2.get('wins', 0)
+    winner1 = "🏆" if p1_wins > p2_wins else ""
+    winner2 = "🏆" if p2_wins > p1_wins else ""
+    embed.add_field(
+        name="🥇 Wins",
+        value=f"{winner1} {p1_wins} vs {p2_wins} {winner2}",
+        inline=True
+    )
+
+    # Win Rate
+    p1_winrate = (p1_wins / p1_games * 100) if p1_games > 0 else 0
+    p2_winrate = (p2_wins / p2_games * 100) if p2_games > 0 else 0
+    winner1 = "🏆" if p1_winrate > p2_winrate else ""
+    winner2 = "🏆" if p2_winrate > p1_winrate else ""
+    embed.add_field(
+        name="🎯 Win Rate",
+        value=f"{winner1} {p1_winrate:.1f}% vs {p2_winrate:.1f}% {winner2}",
+        inline=True
+    )
+
+    # Best Placement
+    p1_best = stats1.get('best_placement', 999)
+    p2_best = stats2.get('best_placement', 999)
+    winner1 = "🏆" if p1_best < p2_best else ""
+    winner2 = "🏆" if p2_best < p1_best else ""
+    embed.add_field(
+        name="🏆 Best Placement",
+        value=f"{winner1} #{p1_best} vs #{p2_best} {winner2}",
+        inline=True
+    )
+
+    # Total Kills
+    p1_kills = stats1.get('total_kills', 0)
+    p2_kills = stats2.get('total_kills', 0)
+    winner1 = "🏆" if p1_kills > p2_kills else ""
+    winner2 = "🏆" if p2_kills > p1_kills else ""
+    embed.add_field(
+        name="💀 Total Kills",
+        value=f"{winner1} {format_number(p1_kills)} vs {format_number(p2_kills)} {winner2}",
+        inline=True
+    )
+
+    # Total Damage
+    p1_damage = stats1.get('total_damage', 0)
+    p2_damage = stats2.get('total_damage', 0)
+    winner1 = "🏆" if p1_damage > p2_damage else ""
+    winner2 = "🏆" if p2_damage > p1_damage else ""
+    embed.add_field(
+        name="⚔️ Total Damage",
+        value=f"{winner1} {format_number(p1_damage)} vs {format_number(p2_damage)} {winner2}",
+        inline=True
+    )
+
+    embed.set_footer(text=f"Data from followerbattlegrounds.com")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="monthly", description="Top 10 players for a specific month")
+async def monthly_command(interaction: discord.Interaction, year: int, month: int):
+    """Show top 10 players for a specific month"""
+
+    # Rate limiting
+    if not rate_limiter.check_user_limit(interaction.user.id):
+        await interaction.response.send_message(
+            "⏱️ You're using commands too quickly! Please wait a moment.",
+            ephemeral=True
+        )
+        return
+
+    if not rate_limiter.check_global_limit():
+        await interaction.response.send_message(
+            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            ephemeral=True
+        )
+        return
+
+    # Validate month
+    if month < 1 or month > 12:
+        await interaction.response.send_message(
+            "❌ Month must be between 1 and 12.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    await cache.ensure_fresh()
+
+    if not cache.index:
+        await interaction.followup.send(
+            "❌ Could not fetch game data. Please try again later.",
+            ephemeral=True
+        )
+        return
+
+    # Load all days and filter by month
+    player_stats = {}
+    available_days = cache.index.get('available_days', [])
+
+    for day_num in available_days:
+        day_data = await cache.get_day(day_num)
+        if not day_data or 'games' not in day_data:
+            continue
+
+        for game in day_data['games']:
+            # Check if game is in the specified month
+            timestamp = game.get('timestamp')
+            if not timestamp:
+                continue
+
+            from datetime import datetime
+            game_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+
+            if game_date.year != year or game_date.month != month:
+                continue
+
+            # Aggregate player stats
+            for result in game.get('results', []):
+                username = result.get('username')
+                if username:
+                    if username not in player_stats:
+                        player_stats[username] = {
+                            'points': 0,
+                            'games': 0,
+                            'wins': 0
+                        }
+
+                    player_stats[username]['points'] += result.get('points', 0)
+                    player_stats[username]['games'] += 1
+                    if result.get('placement', 999) == 1:
+                        player_stats[username]['wins'] += 1
+
+    if not player_stats:
+        month_name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
+        await interaction.followup.send(
+            f"❌ No games found for {month_name} {year}.",
+            ephemeral=True
+        )
+        return
+
+    # Get top 10
+    top_players = sorted(
+        [{'username': u, **stats} for u, stats in player_stats.items()],
+        key=lambda r: r['points'],
+        reverse=True
+    )[:10]
+
+    # Create embed
+    month_name = ['January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'][month-1]
+    embed = discord.Embed(
+        title=f"📅 Top 10 Players - {month_name} {year}",
+        description=f"Monthly leaderboard",
+        color=discord.Color.blue()
+    )
+
+    if top_players:
+        leaderboard_text = "\n".join([
+            f"{i+1}. **{p['username']}** - {format_number(p['points'])} pts ({p['games']} games)"
+            for i, p in enumerate(top_players)
+        ])
+        embed.add_field(
+            name="Leaderboard",
+            value=leaderboard_text,
+            inline=False
+        )
+
+    embed.set_footer(text=f"Data from followerbattlegrounds.com")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="alltime", description="Top 10 all-time players")
+async def alltime_command(interaction: discord.Interaction):
+    """Show top 10 all-time players"""
+
+    # Rate limiting
+    if not rate_limiter.check_user_limit(interaction.user.id):
+        await interaction.response.send_message(
+            "⏱️ You're using commands too quickly! Please wait a moment.",
+            ephemeral=True
+        )
+        return
+
+    if not rate_limiter.check_global_limit():
+        await interaction.response.send_message(
+            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    await cache.ensure_fresh()
+
+    if not cache.player_index:
+        await interaction.followup.send(
+            "❌ Could not fetch player data. Please try again later.",
+            ephemeral=True
+        )
+        return
+
+    # Get top 10 from player index (already sorted by points)
+    players = cache.player_index.get('players', [])[:10]
+
+    if not players:
+        await interaction.followup.send(
+            "❌ No player data available.",
+            ephemeral=True
+        )
+        return
+
+    # Create embed
+    embed = discord.Embed(
+        title=f"👑 Top 10 All-Time Players",
+        description=f"Total of {cache.player_index.get('total_players', 0):,} players",
+        color=discord.Color.gold()
+    )
+
+    leaderboard_text = "\n".join([
+        f"{i+1}. **{p['u']}** - {format_number(p['p'])} pts ({p['g']} games)"
+        for i, p in enumerate(players)
+    ])
+    embed.add_field(
+        name="Leaderboard",
+        value=leaderboard_text,
+        inline=False
+    )
+
+    embed.set_footer(text=f"Data from followerbattlegrounds.com")
+    await interaction.followup.send(embed=embed)
+
 @client.event
 async def on_ready():
     """Bot startup event"""
