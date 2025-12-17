@@ -39,8 +39,9 @@ ENV/
 # Instagram session cookies (IMPORTANT - contains login session!)
 instagram_session_cookies.pkl
 
-# Discord Bot (IMPORTANT - contains bot token!)
+# Discord Bot (IMPORTANT - contains bot token and user data!)
 discord_bot/.env
+discord_bot/discord_links.json  # User privacy - Discord to Instagram mappings
 
 # Temporary avatar files
 .temp_avatar_*/

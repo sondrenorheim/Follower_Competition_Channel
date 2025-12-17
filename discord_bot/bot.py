@@ -68,9 +68,33 @@ class DiscordLinks:
         self.links[discord_user_id] = {
             "instagram_username": instagram_username,
             "discord_display_name": discord_display_name,
-            "linked_at": datetime.now().isoformat()
+            "linked_at": datetime.now().isoformat(),
+            "last_changed": datetime.now().isoformat()
         }
         self.save()
+
+    def can_change_link(self, discord_user_id: str, cooldown_days: int = 30) -> tuple:
+        """Check if user can change their link (rate limit)
+
+        Returns: (can_change: bool, days_remaining: int)
+        """
+        if discord_user_id not in self.links:
+            return (True, 0)  # No existing link, can link freely
+
+        last_changed = self.links[discord_user_id].get("last_changed")
+        if not last_changed:
+            # Old link without timestamp, allow change once
+            return (True, 0)
+
+        last_changed_date = datetime.fromisoformat(last_changed)
+        time_since_change = datetime.now() - last_changed_date
+        days_since_change = time_since_change.days
+
+        if days_since_change >= cooldown_days:
+            return (True, 0)
+        else:
+            days_remaining = cooldown_days - days_since_change
+            return (False, days_remaining)
 
     def unlink_user(self, discord_user_id: str):
         """Remove a Discord user's link"""
@@ -373,6 +397,21 @@ async def link_command(interaction: discord.Interaction, instagram_username: str
     await interaction.response.defer(ephemeral=True)
     await cache.ensure_fresh()
 
+    discord_user_id = str(interaction.user.id)
+    discord_display_name = interaction.user.display_name
+
+    # Check if user can change their link (30-day cooldown)
+    can_change, days_remaining = discord_links.can_change_link(discord_user_id, cooldown_days=30)
+
+    if not can_change:
+        await interaction.followup.send(
+            f"❌ You can only change your linked username once per month.\n\n"
+            f"⏰ You can change again in **{days_remaining} days**.\n\n"
+            f"This prevents abuse and protects other users' privacy.",
+            ephemeral=True
+        )
+        return
+
     # Verify the Instagram username exists in player data
     instagram_username_resolved, _ = await resolve_username(instagram_username)
     stats = await get_player_stats(instagram_username_resolved)
@@ -386,17 +425,26 @@ async def link_command(interaction: discord.Interaction, instagram_username: str
         return
 
     # Link the user
-    discord_user_id = str(interaction.user.id)
-    discord_display_name = interaction.user.display_name
-
     discord_links.link_user(discord_user_id, discord_display_name, instagram_username)
 
-    await interaction.followup.send(
-        f"✅ Successfully linked your Discord account to Instagram username: **{instagram_username}**\n\n"
-        f"Now others can use `/player {discord_display_name}` to see your stats!\n"
-        f"Your stats will be displayed with your Discord username.",
-        ephemeral=True
-    )
+    # Check if this is a new link or an update
+    is_update = discord_user_id in discord_links.links and discord_links.links[discord_user_id].get("linked_at") != discord_links.links[discord_user_id].get("last_changed")
+
+    if is_update:
+        await interaction.followup.send(
+            f"✅ Successfully updated your linked Instagram username to: **{instagram_username}**\n\n"
+            f"Now others can use `/player {discord_display_name}` to see your stats!\n"
+            f"⚠️ You won't be able to change this again for 30 days.",
+            ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            f"✅ Successfully linked your Discord account to Instagram username: **{instagram_username}**\n\n"
+            f"Now others can use `/player {discord_display_name}` to see your stats!\n"
+            f"Your stats will be displayed with your Discord username.\n\n"
+            f"⚠️ You can only change this once per month to prevent abuse.",
+            ephemeral=True
+        )
 
 @tree.command(name="unlink", description="Unlink your Discord account from Instagram (private)")
 async def unlink_command(interaction: discord.Interaction):
