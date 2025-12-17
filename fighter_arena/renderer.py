@@ -209,12 +209,16 @@ class FighterRenderer:
 
         surface = pygame.Surface((render_size, render_size), pygame.SRCALPHA)
 
+        # Only render profile pictures when radius is large enough to see them
+        # This saves massive rendering overhead with 40k players at small sizes
+        show_profile_pic = config.FOLLOWER_RADIUS >= config.PROFILE_PICTURE_MIN_RADIUS
+
         # Draw avatar circle
-        if fighter.avatar_image:
+        if fighter.avatar_image and show_profile_pic:
             avatar_surface = self._pil_to_pygame(fighter.avatar_image, render_size)
             self._draw_circular_image(surface, avatar_surface, render_radius)
         else:
-            # Draw colored circle for placeholder
+            # Draw colored circle (placeholder or when too small to see profile pic)
             pygame.draw.circle(
                 surface,
                 fighter.color,

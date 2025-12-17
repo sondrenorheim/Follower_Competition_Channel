@@ -29,21 +29,21 @@ MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
 
-ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "platformer_race","team_battle"]
+ALL_GAME_MODES = ["fighter_arena"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "fighter_arena" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = True
+GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
+TEST_MODE = False
 EXPORT_VIDEO = True
-DAY_NUMBER = 23  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = False  # Set to True to download real profile pictures (if URLs available)
-LOAD_PROFILE_PICTURES = False  # Set to False to skip loading profile pictures entirely (faster testing)
+DAY_NUMBER = 27  # Increment this each time you record a new video
+DOWNLOAD_PROFILE_PICTURES = True  # Set to True to download real profile pictures (if URLs available)
+LOAD_PROFILE_PICTURES = True  # Set to False to skip loading profile pictures entirely (faster testing)
 HEADLESS_MODE = False
 SHOW_NAMETAGS = True
 
 # Minimal test players - when True, use generated test users instead of real followers
-TEST_MINIMAL_PLAYERS = True  # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 1000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
+TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
+TEST_MINIMAL_PLAYER_COUNT = 10000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
@@ -71,6 +71,11 @@ FOLLOWER_RADIUS = 14        # Radius of each follower circle (will be dynamicall
 FOLLOWER_BORDER_WIDTH = 2   # White border thickness
 FOLLOWER_NAME_FONT_SIZE = 12  # Nametag font size for follower usernames
 SHOW_FOLLOWER_NAMES = False  # Show usernames below profile pictures during battle
+
+# Profile picture rendering optimization
+# Only render profile pictures when radius is large enough to actually see them
+# When smaller, use colored circles instead (saves massive rendering overhead with 40k players)
+PROFILE_PICTURE_MIN_RADIUS = 8  # Pixels - only render profile pics when radius >= this value
 
 # ===== NAMETAG DISPLAY SETTINGS =====
 # Master toggle for nametag display across all games
@@ -164,7 +169,7 @@ VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
 
-FOLLOWER_IMPORT_FILE = "followers_safe_20251204.json"
+FOLLOWER_IMPORT_FILE = "Followers/all_followers_fresh.json"
 
 # TikTok followers import file (optional - will be combined with Instagram followers)
 TIKTOK_IMPORT_FILE = ""  # Disabled - only using Instagram followers
@@ -254,8 +259,8 @@ FIGHTER_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, 500)
 FIGHTER_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
     "speed": 5,        # Pixels moved every 2 frames
-    "attack": 7.5,        # HP damage dealt per hit (halved from 10)
-    "regeneration": 5,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
+    "attack": 20,        # HP damage dealt per hit (halved from 10)
+    "regeneration": 0,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
     "knockback": 3,    # Push distance = knockback / 3 pixels, stun = knockback * 1 frames
     "attack_speed": 30  # Attacks per second = value / 10 (default: 2 attacks/sec)
 }
@@ -286,7 +291,7 @@ TEAM_BATTLE_STAT_BOOSTS = {
 # ===== BATTLE ROYALE FOLLOWER STATS =====
 # Battle royale follower physics stats
 BATTLE_ROYALE_DEFAULT_STATS = {
-    "base_speed": 2.0,           # Movement speed (pixels per frame)
+    "base_speed": 4.0,           # Movement speed (pixels per frame)
     "friction": 0.75,            # Velocity decay multiplier (0-1)
     "push_force": 16.0,           # Force applied during collisions
     "bump_cooldown": 0.5,        # Cooldown between bumps (seconds)
