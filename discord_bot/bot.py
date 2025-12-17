@@ -10,6 +10,8 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import os
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 from collections import defaultdict
 import time
@@ -29,6 +31,78 @@ PLAYER_INDEX_URL = f"{BASE_URL}/api/players/index.json"
 # Rate limiting
 RATE_LIMIT_COMMANDS_PER_MINUTE = 5
 GLOBAL_RATE_LIMIT_PER_MINUTE = 100
+
+# Discord username links file
+DISCORD_LINKS_FILE = Path(__file__).parent / "discord_links.json"
+
+class DiscordLinks:
+    """Manages Discord username to Instagram username mappings"""
+
+    def __init__(self):
+        self.links = {}
+        self.load()
+
+    def load(self):
+        """Load links from JSON file"""
+        if DISCORD_LINKS_FILE.exists():
+            try:
+                with open(DISCORD_LINKS_FILE, 'r', encoding='utf-8') as f:
+                    self.links = json.load(f)
+                print(f"Loaded {len(self.links)} Discord username links")
+            except Exception as e:
+                print(f"Error loading Discord links: {e}")
+                self.links = {}
+        else:
+            self.links = {}
+
+    def save(self):
+        """Save links to JSON file"""
+        try:
+            with open(DISCORD_LINKS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.links, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving Discord links: {e}")
+
+    def link_user(self, discord_user_id: str, discord_display_name: str, instagram_username: str):
+        """Link a Discord user to their Instagram username"""
+        self.links[discord_user_id] = {
+            "instagram_username": instagram_username,
+            "discord_display_name": discord_display_name,
+            "linked_at": datetime.now().isoformat()
+        }
+        self.save()
+
+    def unlink_user(self, discord_user_id: str):
+        """Remove a Discord user's link"""
+        if discord_user_id in self.links:
+            del self.links[discord_user_id]
+            self.save()
+            return True
+        return False
+
+    def get_instagram_username(self, discord_user_id: str) -> Optional[str]:
+        """Get Instagram username for a Discord user ID"""
+        if discord_user_id in self.links:
+            return self.links[discord_user_id]["instagram_username"]
+        return None
+
+    def find_by_discord_name(self, discord_name: str) -> Optional[tuple]:
+        """Find Instagram username by Discord display name (case-insensitive)
+        Returns: (instagram_username, discord_display_name) or None"""
+        discord_name_lower = discord_name.lower()
+        for user_id, data in self.links.items():
+            if data["discord_display_name"].lower() == discord_name_lower:
+                return (data["instagram_username"], data["discord_display_name"])
+        return None
+
+    def find_by_instagram_name(self, instagram_name: str) -> Optional[str]:
+        """Find Discord display name by Instagram username (case-insensitive)
+        Returns: discord_display_name or None"""
+        instagram_name_lower = instagram_name.lower()
+        for user_id, data in self.links.items():
+            if data["instagram_username"].lower() == instagram_name_lower:
+                return data["discord_display_name"]
+        return None
 
 class StatsCache:
     """Cache for partitioned game history and player statistics"""
@@ -159,9 +233,10 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# Initialize cache and rate limiter
+# Initialize cache, rate limiter, and discord links
 cache = StatsCache()
 rate_limiter = RateLimiter()
+discord_links = DiscordLinks()
 
 async def get_games_for_day(day: int) -> List[dict]:
     """Get all games for a specific day"""
@@ -223,6 +298,28 @@ def expand_compact_stats(compact_stats: dict) -> dict:
 
     return expanded
 
+async def resolve_username(username: str) -> tuple:
+    """Resolve username to Instagram username and display name
+
+    Returns: (instagram_username, display_name) tuple
+    - Tries exact Instagram username match first
+    - Then tries Discord username lookup
+    - Returns original username if no link found
+    """
+    # First, try to find by Discord display name
+    discord_result = discord_links.find_by_discord_name(username)
+    if discord_result:
+        instagram_username, discord_display_name = discord_result
+        return (instagram_username, discord_display_name)
+
+    # Check if this Instagram username has a linked Discord name
+    discord_name = discord_links.find_by_instagram_name(username)
+    if discord_name:
+        return (username, discord_name)
+
+    # No link found, use original username for both
+    return (username, username)
+
 async def get_player_stats(username: str) -> Optional[dict]:
     """Get stats for a specific player"""
     if not cache.player_index:
@@ -268,6 +365,57 @@ def format_number(num: float) -> str:
         return f"{num/1_000:.1f}K"
     else:
         return f"{int(num)}"
+
+@tree.command(name="link", description="Link your Discord account to your Instagram username (private)")
+async def link_command(interaction: discord.Interaction, instagram_username: str):
+    """Link Discord account to Instagram username (ephemeral)"""
+
+    await interaction.response.defer(ephemeral=True)
+    await cache.ensure_fresh()
+
+    # Verify the Instagram username exists in player data
+    instagram_username_resolved, _ = await resolve_username(instagram_username)
+    stats = await get_player_stats(instagram_username_resolved)
+
+    if not stats:
+        await interaction.followup.send(
+            f"❌ Instagram username not found: **{instagram_username}**\n\n"
+            f"Make sure you've participated in at least one game first!",
+            ephemeral=True
+        )
+        return
+
+    # Link the user
+    discord_user_id = str(interaction.user.id)
+    discord_display_name = interaction.user.display_name
+
+    discord_links.link_user(discord_user_id, discord_display_name, instagram_username)
+
+    await interaction.followup.send(
+        f"✅ Successfully linked your Discord account to Instagram username: **{instagram_username}**\n\n"
+        f"Now others can use `/player {discord_display_name}` to see your stats!\n"
+        f"Your stats will be displayed with your Discord username.",
+        ephemeral=True
+    )
+
+@tree.command(name="unlink", description="Unlink your Discord account from Instagram (private)")
+async def unlink_command(interaction: discord.Interaction):
+    """Unlink Discord account from Instagram username (ephemeral)"""
+
+    discord_user_id = str(interaction.user.id)
+
+    if discord_links.unlink_user(discord_user_id):
+        await interaction.response.send_message(
+            f"✅ Successfully unlinked your Discord account.\n\n"
+            f"Your Instagram username is no longer connected to Discord.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ You don't have a linked Instagram account.\n\n"
+            f"Use `/link <instagram_username>` to link your account first.",
+            ephemeral=True
+        )
 
 @tree.command(name="day", description="Get stats for a specific day")
 async def day_command(interaction: discord.Interaction, day: int):
@@ -415,8 +563,11 @@ async def player_command(interaction: discord.Interaction, username: str):
         )
         return
 
-    # Get player stats
-    stats = await get_player_stats(username)
+    # Resolve username (Discord → Instagram if linked)
+    instagram_username, display_name = await resolve_username(username)
+
+    # Get player stats using Instagram username
+    stats = await get_player_stats(instagram_username)
 
     if not stats:
         await interaction.followup.send(
@@ -425,9 +576,9 @@ async def player_command(interaction: discord.Interaction, username: str):
         )
         return
 
-    # Create embed
+    # Create embed with display name (Discord username if linked)
     embed = discord.Embed(
-        title=f"📊 {stats['username']}",
+        title=f"📊 {display_name}",
         color=discord.Color.gold()
     )
 
@@ -791,9 +942,13 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     await interaction.response.defer()
     await cache.ensure_fresh()
 
-    # Get stats for both players
-    stats1 = await get_player_stats(player1)
-    stats2 = await get_player_stats(player2)
+    # Resolve usernames (Discord → Instagram if linked)
+    instagram_username1, display_name1 = await resolve_username(player1)
+    instagram_username2, display_name2 = await resolve_username(player2)
+
+    # Get stats for both players using Instagram usernames
+    stats1 = await get_player_stats(instagram_username1)
+    stats2 = await get_player_stats(instagram_username2)
 
     if not stats1:
         await interaction.followup.send(
@@ -809,10 +964,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
         )
         return
 
-    # Create comparison embed
+    # Create comparison embed with display names
     embed = discord.Embed(
         title=f"⚔️ Player Comparison",
-        description=f"**{stats1['username']}** vs **{stats2['username']}**",
+        description=f"**{display_name1}** vs **{display_name2}**",
         color=discord.Color.red()
     )
 
