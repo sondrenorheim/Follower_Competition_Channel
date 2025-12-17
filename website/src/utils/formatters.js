@@ -203,6 +203,11 @@ export function getGameTypeInfo(gameType) {
       name: 'Platformer Race',
       color: 'bg-yellow-600',
       textColor: 'text-yellow-600'
+    },
+    gorillas_vs_followers: {
+      name: 'Gorillas vs Followers',
+      color: 'bg-gray-800',
+      textColor: 'text-gray-800'
     }
   };
 
