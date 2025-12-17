@@ -433,3 +433,140 @@ class PlayerStatistics:
             "highest_scorer": highest_scorer[0],
             "highest_score": get_points(highest_scorer[1])
         }
+
+    def export_web_stats(self, output_path: str = "website/public/player_statistics_web.json"):
+        """
+        Export a compact web-friendly stats file for the website.
+        """
+        last_updated = self.metadata.get("last_updated") or datetime.now().isoformat()
+        total_games_recorded = self.metadata.get("total_games_recorded", 0)
+
+        short_map = {
+            "platformer_race": "pr",
+            "obstacle_course": "oc",
+            "battle_royale": "br",
+            "fighter_arena": "fa",
+            "snake_escape": "se",
+            "team_battle": "tb",
+            "gorillas_vs_followers": "gv",
+        }
+
+        compact_players = {}
+        for username, entry in self.stats.items():
+            if isinstance(entry, list):
+                stats_list = entry
+                gb_full = {}
+                recent = []
+            else:
+                stats_list = entry.get("stats", [])
+                gb_full = entry.get("game_breakdown", {}) or {}
+                recent = entry.get("recent_games", [])
+
+            gb = {short_map.get(k, k): v for k, v in gb_full.items()}
+            compact_entry = {"s": stats_list}
+            if gb:
+                compact_entry["gb"] = gb
+            if recent:
+                compact_entry["rg"] = recent
+            compact_players[username] = compact_entry
+
+        web_data = {"lu": last_updated, "tgr": total_games_recorded, "p": compact_players}
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(web_data, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"Exported web stats to {output_path}")
+
+    def export_partitioned_stats(self, base_dir: str = "website/public/api"):
+        """
+        Export player statistics partitioned by first letter for efficient loading.
+        Creates:
+        - api/players/a.json, api/players/b.json, etc. (one file per letter)
+        - api/players/index.json (list of all players with basic info)
+        """
+        from collections import defaultdict
+
+        short_map = {
+            "platformer_race": "pr",
+            "obstacle_course": "oc",
+            "battle_royale": "br",
+            "fighter_arena": "fa",
+            "snake_escape": "se",
+            "team_battle": "tb",
+            "gorillas_vs_followers": "gv",
+        }
+
+        # Group players by first letter
+        players_by_letter = defaultdict(dict)
+        player_index = []
+
+        for username, entry in self.stats.items():
+            # Get first letter (lowercase)
+            first_letter = username[0].lower() if username else 'z'
+            # Handle non-alphabetic characters
+            if not first_letter.isalpha():
+                first_letter = '0'
+
+            # Prepare compact entry
+            if isinstance(entry, list):
+                stats_list = entry
+                gb_full = {}
+                recent = []
+            else:
+                stats_list = entry.get("stats", [])
+                gb_full = entry.get("game_breakdown", {}) or {}
+                recent = entry.get("recent_games", [])
+
+            gb = {short_map.get(k, k): v for k, v in gb_full.items()}
+            compact_entry = {"s": stats_list}
+            if gb:
+                compact_entry["gb"] = gb
+            if recent:
+                compact_entry["rg"] = recent
+
+            players_by_letter[first_letter][username] = compact_entry
+
+            # Add to index (just basic info for quick lookups)
+            player_index.append({
+                "u": username,  # username
+                "p": stats_list[0] if stats_list else 0,  # total points
+                "g": stats_list[1] if len(stats_list) > 1 else 0,  # games played
+                "l": first_letter  # letter group
+            })
+
+        # Create players directory
+        players_dir = os.path.join(base_dir, "players")
+        os.makedirs(players_dir, exist_ok=True)
+
+        # Export each letter group to its own file
+        for letter in sorted(players_by_letter.keys()):
+            letter_file = os.path.join(players_dir, f"{letter}.json")
+            letter_data = {
+                "letter": letter,
+                "count": len(players_by_letter[letter]),
+                "players": players_by_letter[letter]
+            }
+
+            with open(letter_file, "w", encoding="utf-8") as f:
+                json.dump(letter_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        # Sort index by points descending
+        player_index.sort(key=lambda x: x["p"], reverse=True)
+
+        # Create index file
+        index_data = {
+            "lu": self.metadata.get("last_updated") or datetime.now().isoformat(),
+            "tgr": self.metadata.get("total_games_recorded", 0),
+            "total_players": len(player_index),
+            "letters": sorted(players_by_letter.keys()),
+            "players": player_index
+        }
+
+        index_file = os.path.join(players_dir, "index.json")
+        with open(index_file, "w", encoding="utf-8") as f:
+            json.dump(index_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        print(f"Exported partitioned player stats:")
+        print(f"   {len(players_by_letter)} letter files -> {players_dir}/")
+        print(f"   Index file -> {index_file}")
+        print(f"   Total players: {len(player_index)}")

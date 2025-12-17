@@ -13,135 +13,93 @@ import os
 from dotenv import load_dotenv
 from collections import defaultdict
 import time
-import ijson
-import io
-import gzip
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-GAME_HISTORY_URL = os.getenv('GAME_HISTORY_URL', 'https://www.followerbattlegrounds.com/game_history_web.json')
-PLAYER_STATS_URL = os.getenv('PLAYER_STATS_URL', 'https://www.followerbattlegrounds.com/player_statistics_web.json')
+BASE_URL = os.getenv('BASE_URL', 'https://www.followerbattlegrounds.com')
 CACHE_REFRESH_MINUTES = int(os.getenv('CACHE_REFRESH_MINUTES', '5'))
+
+# Use partitioned API instead of monolithic files
+INDEX_URL = f"{BASE_URL}/api/index.json"
+PLAYER_INDEX_URL = f"{BASE_URL}/api/players/index.json"
 
 # Rate limiting
 RATE_LIMIT_COMMANDS_PER_MINUTE = 5
 GLOBAL_RATE_LIMIT_PER_MINUTE = 100
 
 class StatsCache:
-    """Cache for game history and player statistics"""
+    """Cache for partitioned game history and player statistics"""
 
     def __init__(self):
-        self.game_history = None
-        self.player_stats = None
+        self.index = None  # Day metadata
+        self.player_index = None  # Player list
+        self.cached_days = {}  # Map of day_number -> day_data
         self.last_update = None
         self.update_lock = asyncio.Lock()
 
     async def fetch_json(self, url: str) -> Optional[dict]:
-        """Fetch JSON data from URL using streaming parser for memory efficiency"""
+        """Fetch JSON data from URL (simple version for small partitioned files)"""
         try:
-            print(f"📥 Fetching {url}...")
+            print(f"Fetching {url}...")
             loop = asyncio.get_event_loop()
 
-            # Download with streaming to avoid loading entire response in memory
             response = await loop.run_in_executor(
                 None,
-                lambda: requests.get(url, timeout=60, stream=True)
+                lambda: requests.get(url, timeout=30)
             )
             response.raise_for_status()
 
-            print(f"✓ Downloaded, streaming parse (memory-efficient)...")
-
-            # Use ijson to parse the JSON incrementally
-            # This builds the complete object while using minimal memory
-            data = await loop.run_in_executor(
-                None,
-                lambda: self._parse_json_stream(response.raw)
-            )
-
-            print(f"✓ Parsed successfully ({len(str(data))} chars)")
+            data = response.json()
+            print(f"OK - Loaded successfully")
             return data
 
         except requests.Timeout:
-            print(f"❌ Timeout fetching {url} (took longer than 60s)")
+            print(f"ERROR: Timeout fetching {url}")
             return None
         except requests.RequestException as e:
-            print(f"❌ Network error fetching {url}: {e}")
-            return None
-        except MemoryError as e:
-            print(f"❌ Out of memory parsing {url}: {e}")
+            print(f"ERROR: Network error fetching {url}: {e}")
             return None
         except Exception as e:
-            print(f"❌ Error parsing {url}: {type(e).__name__}: {e}")
+            print(f"ERROR: {type(e).__name__}: {e}")
             return None
-
-    def _parse_json_stream(self, stream) -> dict:
-        """Parse JSON from stream using ijson for memory efficiency"""
-        result = {}
-
-        try:
-            # Check if stream is gzip-compressed by reading first few bytes
-            initial_bytes = stream.read(3)
-
-            # Check for gzip magic number (1f 8b 08)
-            if initial_bytes[:2] == b'\x1f\x8b':
-                print(f"  Detected gzip, streaming decompress...")
-                # Put bytes back and wrap in streaming gzip decompressor
-                remaining = stream.read()
-                compressed_stream = io.BytesIO(initial_bytes + remaining)
-                # Use GzipFile for streaming decompression
-                stream = gzip.GzipFile(fileobj=compressed_stream)
-            else:
-                # Not gzipped, create BytesIO with what we read plus the rest
-                remaining = stream.read()
-                stream = io.BytesIO(initial_bytes + remaining)
-
-            print(f"  Parsing JSON with ijson...")
-
-            # Parse top-level key-value pairs using ijson
-            # This reads and parses incrementally
-            parser = ijson.kvitems(stream, '')
-            count = 0
-            for key, value in parser:
-                result[key] = value
-                count += 1
-                value_type = type(value).__name__
-                value_len = len(value) if isinstance(value, (list, dict)) else 'N/A'
-                print(f"  ✓ Key {count}: '{key}' ({value_type}, len={value_len})")
-
-            print(f"  ✓ Parsing complete, {count} top-level keys")
-
-        except Exception as e:
-            print(f"  ❌ Parsing error: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            result = {}
-
-        return result
 
     async def update(self):
-        """Update cached data from URLs"""
+        """Update cached index data (lightweight)"""
         async with self.update_lock:
-            print(f"🔄 Updating cache from URLs...")
+            print(f"Updating cache...")
 
-            # Fetch game history
-            game_history = await self.fetch_json(GAME_HISTORY_URL)
-            if game_history:
-                self.game_history = game_history
-                print(f"✅ Game history updated ({len(game_history.get('games', []))} games)")
+            # Fetch day index (small file with metadata)
+            index = await self.fetch_json(INDEX_URL)
+            if index:
+                self.index = index
+                print(f"OK - Day index: {len(index.get('available_days', []))} days available")
 
-            # Fetch player stats
-            player_stats = await self.fetch_json(PLAYER_STATS_URL)
-            if player_stats:
-                self.player_stats = player_stats
-                # Handle both full and compact format
-                players = player_stats.get('players', player_stats.get('p', {}))
-                print(f"✅ Player stats updated ({len(players)} players)")
+            # Fetch player index (list of players with basic info)
+            player_index = await self.fetch_json(PLAYER_INDEX_URL)
+            if player_index:
+                self.player_index = player_index
+                print(f"OK - Player index: {player_index.get('total_players', 0)} players")
 
             self.last_update = datetime.now()
-            print(f"✅ Cache updated at {self.last_update}")
+            print(f"Cache updated at {self.last_update.strftime('%H:%M:%S')}")
+
+    async def get_day(self, day_number: int) -> Optional[dict]:
+        """Fetch data for a specific day (cached)"""
+        # Check cache first
+        if day_number in self.cached_days:
+            return self.cached_days[day_number]
+
+        # Fetch from API
+        day_url = f"{BASE_URL}/api/days/{day_number}.json"
+        day_data = await self.fetch_json(day_url)
+
+        if day_data:
+            self.cached_days[day_number] = day_data
+
+        return day_data
 
     def should_refresh(self) -> bool:
         """Check if cache should be refreshed"""
@@ -205,24 +163,24 @@ tree = app_commands.CommandTree(client)
 cache = StatsCache()
 rate_limiter = RateLimiter()
 
-def get_games_for_day(day: int) -> List[dict]:
+async def get_games_for_day(day: int) -> List[dict]:
     """Get all games for a specific day"""
-    if not cache.game_history:
+    day_data = await cache.get_day(day)
+    if not day_data:
         return []
 
-    games = cache.game_history.get('games', [])
-    return [g for g in games if g.get('day_number') == day]
+    return day_data.get('games', [])
 
 def get_latest_day() -> Optional[int]:
     """Get the latest day number"""
-    if not cache.game_history:
+    if not cache.index:
         return None
 
-    games = cache.game_history.get('games', [])
-    if not games:
+    available_days = cache.index.get('available_days', [])
+    if not available_days:
         return None
 
-    return max(g.get('day_number', 0) for g in games)
+    return max(available_days)
 
 def expand_compact_stats(compact_stats: dict) -> dict:
     """
@@ -265,24 +223,42 @@ def expand_compact_stats(compact_stats: dict) -> dict:
 
     return expanded
 
-def get_player_stats(username: str) -> Optional[dict]:
+async def get_player_stats(username: str) -> Optional[dict]:
     """Get stats for a specific player"""
-    if not cache.player_stats:
+    if not cache.player_index:
         return None
 
-    # Handle both full and compact format ('players' or 'p')
-    players = cache.player_stats.get('players', cache.player_stats.get('p', {}))
+    # Find player in index
+    players = cache.player_index.get('players', [])
+    player_info = None
 
-    # Case-insensitive search
     username_lower = username.lower()
-    for player_name, stats in players.items():
-        if player_name.lower() == username_lower:
-            # Check if stats are in compact format
-            if isinstance(stats, dict) and 's' in stats:
-                stats = expand_compact_stats(stats)
-            return {'username': player_name, **stats}
+    for p in players:
+        if p.get('u', '').lower() == username_lower:
+            player_info = p
+            break
 
-    return None
+    if not player_info:
+        return None
+
+    # Fetch full stats for the player
+    letter = player_info.get('l', 'z')
+    player_url = f"{BASE_URL}/api/players/{letter}.json"
+    letter_data = await cache.fetch_json(player_url)
+
+    if not letter_data or 'players' not in letter_data:
+        return None
+
+    # Find the specific player in the letter group
+    actual_username = player_info.get('u')
+    player_data = letter_data['players'].get(actual_username)
+
+    if not player_data:
+        return None
+
+    # Expand compact format
+    stats = expand_compact_stats(player_data)
+    return {'username': actual_username, **stats}
 
 def format_number(num: float) -> str:
     """Format large numbers with K/M suffix"""
@@ -318,7 +294,7 @@ async def day_command(interaction: discord.Interaction, day: int):
     # Ensure cache is fresh
     await cache.ensure_fresh()
 
-    if not cache.game_history:
+    if not cache.index:
         await interaction.followup.send(
             "❌ Could not fetch game data. Please try again later.",
             ephemeral=True
@@ -326,7 +302,7 @@ async def day_command(interaction: discord.Interaction, day: int):
         return
 
     # Get games for the day
-    games = get_games_for_day(day)
+    games = await get_games_for_day(day)
 
     if not games:
         await interaction.followup.send(
@@ -427,7 +403,7 @@ async def player_command(interaction: discord.Interaction, username: str):
     # Ensure cache is fresh
     await cache.ensure_fresh()
 
-    if not cache.player_stats:
+    if not cache.player_index:
         await interaction.followup.send(
             "❌ Could not fetch player data. Please try again later.",
             ephemeral=True
@@ -435,7 +411,7 @@ async def player_command(interaction: discord.Interaction, username: str):
         return
 
     # Get player stats
-    stats = get_player_stats(username)
+    stats = await get_player_stats(username)
 
     if not stats:
         await interaction.followup.send(
@@ -531,7 +507,7 @@ async def latest_command(interaction: discord.Interaction):
     # Ensure cache is fresh
     await cache.ensure_fresh()
 
-    if not cache.game_history:
+    if not cache.index:
         await interaction.followup.send(
             "❌ Could not fetch game data. Please try again later.",
             ephemeral=True
@@ -549,7 +525,7 @@ async def latest_command(interaction: discord.Interaction):
         return
 
     # Get games for the latest day
-    games = get_games_for_day(latest_day)
+    games = await get_games_for_day(latest_day)
 
     # Calculate stats
     total_participants = set()
@@ -606,35 +582,34 @@ async def latest_command(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     """Bot startup event"""
-    print(f'✅ Logged in as {client.user}')
-    print(f'📊 Game History URL: {GAME_HISTORY_URL}')
-    print(f'👥 Player Stats URL: {PLAYER_STATS_URL}')
-    print(f'🔄 Cache refresh interval: {CACHE_REFRESH_MINUTES} minutes')
+    print(f'Logged in as {client.user}')
+    print(f'Base URL: {BASE_URL}')
+    print(f'Cache refresh interval: {CACHE_REFRESH_MINUTES} minutes')
 
     # Sync commands first (don't wait for data)
     try:
         synced = await tree.sync()
-        print(f'✅ Synced {len(synced)} command(s)')
+        print(f'Synced {len(synced)} command(s)')
     except Exception as e:
-        print(f'❌ Failed to sync commands: {e}')
+        print(f'Failed to sync commands: {e}')
 
     # Start background task for cache refresh
     # This runs continuously and handles errors gracefully
     client.loop.create_task(cache_refresh_task())
 
     # Trigger initial cache update in background (non-blocking)
-    print(f'🔄 Starting initial cache update in background...')
+    print(f'Starting initial cache update in background...')
     client.loop.create_task(initial_cache_update())
 
 async def initial_cache_update():
     """Initial cache update with error handling"""
     try:
         await cache.update()
-        print(f"✅ Initial cache loaded successfully")
+        print(f"Initial cache loaded successfully")
     except Exception as e:
-        print(f"⚠️ Initial cache update failed: {type(e).__name__}: {e}")
-        print(f"   Bot will retry in {CACHE_REFRESH_MINUTES} minutes")
-        print(f"   Commands will work once data is loaded")
+        print(f"WARNING: Initial cache update failed: {type(e).__name__}: {e}")
+        print(f"Bot will retry in {CACHE_REFRESH_MINUTES} minutes")
+        print(f"Commands will work once data is loaded")
 
 async def cache_refresh_task():
     """Background task to refresh cache periodically"""

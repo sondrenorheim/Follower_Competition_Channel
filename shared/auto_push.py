@@ -38,7 +38,8 @@ def push_stats_to_github(
             "player_statistics.json",
             "game_history.json",
             "website/public/player_statistics_web.json",
-            "website/public/game_history_web.json"
+            "website/public/game_history_web.json",
+            "website/public/api/"  # Add entire API directory (partitioned files)
         ]
 
         # Conditionally add video files based on config
@@ -79,16 +80,25 @@ def push_stats_to_github(
                     output_path="website/public/player_statistics_web.json"
                 )
                 print("   + Regenerated website/public/player_statistics_web.json")
+
+                # Export partitioned player stats
+                stats.export_partitioned_stats("website/public/api")
+                print("   + Regenerated partitioned player stats")
             except Exception as e:
-                print(f"   ! Failed to regenerate player_statistics_web.json: {e}")
+                print(f"   ! Failed to regenerate player stats: {e}")
+
             try:
                 gh = game_history.GameHistory("game_history.json")
                 gh.export_web_history(
                     output_path="website/public/game_history_web.json"
                 )
                 print("   + Regenerated website/public/game_history_web.json")
+
+                # Export partitioned game history
+                gh.export_partitioned_history("website/public/api")
+                print("   + Regenerated partitioned game history")
             except Exception as e:
-                print(f"   ! Failed to regenerate game_history.json (web): {e}")
+                print(f"   ! Failed to regenerate game history: {e}")
 
         # Check if we're in a git repository
         result = subprocess.run(

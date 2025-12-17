@@ -74,6 +74,80 @@ class GameHistory:
             json.dump(self.history, f, ensure_ascii=False, separators=(",", ":"))
         print(f"Exported web game history to {output_path}")
 
+    def export_partitioned_history(self, base_dir: str = "website/public/api"):
+        """
+        Export game history partitioned by day for efficient loading.
+        Creates:
+        - api/days/1.json, api/days/2.json, etc. (one file per day)
+        - api/index.json (metadata about available days)
+        """
+        from collections import defaultdict
+
+        # Group games by day
+        games_by_day = defaultdict(list)
+        all_days = set()
+
+        for game in self.history.get("games", []):
+            day = game.get("day_number")
+            if day is not None:
+                games_by_day[day].append(game)
+                all_days.add(day)
+
+        # Create days directory
+        days_dir = os.path.join(base_dir, "days")
+        os.makedirs(days_dir, exist_ok=True)
+
+        # Export each day to its own file
+        day_metadata = []
+        for day_num in sorted(all_days):
+            day_games = games_by_day[day_num]
+            day_file = os.path.join(days_dir, f"{day_num}.json")
+
+            # Get unique game types for this day
+            game_types = list(set(g.get("game_type") for g in day_games))
+            total_participants = len(set(
+                r.get("username")
+                for g in day_games
+                for r in g.get("results", [])
+            ))
+
+            day_data = {
+                "day_number": day_num,
+                "games": day_games,
+                "total_games": len(day_games),
+                "game_types": game_types,
+                "total_participants": total_participants
+            }
+
+            with open(day_file, "w", encoding="utf-8") as f:
+                json.dump(day_data, f, ensure_ascii=False, separators=(",", ":"))
+
+            # Add to metadata
+            day_metadata.append({
+                "day": day_num,
+                "games": len(day_games),
+                "types": game_types,
+                "participants": total_participants
+            })
+
+        # Create index file with metadata
+        index_data = {
+            "last_updated": datetime.now().isoformat(),
+            "total_days": len(all_days),
+            "total_games": len(self.history.get("games", [])),
+            "available_days": sorted(all_days),
+            "days_metadata": day_metadata
+        }
+
+        index_file = os.path.join(base_dir, "index.json")
+        with open(index_file, "w", encoding="utf-8") as f:
+            json.dump(index_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        print(f"Exported partitioned game history:")
+        print(f"   {len(all_days)} day files -> {days_dir}/")
+        print(f"   Index file -> {index_file}")
+        print(f"   Total games: {len(self.history.get('games', []))}")
+
     def record_game_session(
         self,
         game_type: str,

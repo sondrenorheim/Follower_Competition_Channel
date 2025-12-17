@@ -9,6 +9,12 @@ const DATA_BASE_PATH = '/'; // Serve from root (works in both dev and production
 let cachedPlayerStats = null;
 let cachedGameHistory = null;
 
+// Cache for partitioned data
+let cachedIndex = null;
+let cachedDays = new Map(); // Map of day_number -> day_data
+let cachedPlayerLetters = new Map(); // Map of letter -> player_data
+let cachedPlayerIndex = null;
+
 // Game code mapping for compact web stats
 const GAME_CODE_MAP = {
   pr: 'platformer_race',
@@ -197,6 +203,13 @@ export async function getGameById(gameId) {
  * @returns {Promise<Object|null>} Player stats or null if not found
  */
 export async function getPlayerStats(username) {
+  // Try partitioned data first
+  const partitionedStats = await getPlayerStatsPartitioned(username);
+  if (partitionedStats) {
+    return partitionedStats;
+  }
+
+  // Fallback to monolithic file
   const stats = await loadPlayerStats();
   return stats.players?.[username] || null;
 }
@@ -207,6 +220,28 @@ export async function getPlayerStats(username) {
  * @returns {Promise<Array>} Array of {username, stats} objects
  */
 export async function getAllTimeLeaderboard(limit = 10) {
+  // Try partitioned player index first (much faster)
+  const playerIndex = await loadPlayerIndex();
+  if (playerIndex && playerIndex.players) {
+    // Index already sorted by points
+    const topPlayers = playerIndex.players.slice(0, limit);
+
+    // Load full stats for top players
+    const promises = topPlayers.map(async (p) => {
+      const fullStats = await getPlayerStatsPartitioned(p.u);
+      return {
+        username: p.u,
+        totalPoints: p.p,
+        stats: fullStats?.stats || [],
+        gameBreakdown: fullStats?.game_breakdown || {},
+        recentGames: fullStats?.recent_games || []
+      };
+    });
+
+    return Promise.all(promises);
+  }
+
+  // Fallback to old monolithic file
   const stats = await loadPlayerStats();
 
   const players = Object.entries(stats.players || {}).map(([username, playerData]) => {
@@ -310,6 +345,135 @@ export async function getPlayerGameHistory(username, limit = 10) {
 export function clearCache() {
   cachedPlayerStats = null;
   cachedGameHistory = null;
+  cachedIndex = null;
+  cachedDays.clear();
+  cachedPlayerLetters.clear();
+  cachedPlayerIndex = null;
+}
+
+/**
+ * Load the partitioned index file
+ * @returns {Promise<Object>} Index data with available days
+ */
+export async function loadIndex() {
+  if (cachedIndex) {
+    return cachedIndex;
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/index.json`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    cachedIndex = data;
+    return data;
+  } catch (err) {
+    console.error('Error loading index:', err);
+    return null;
+  }
+}
+
+/**
+ * Load data for a specific day (partitioned)
+ * @param {number} dayNumber - Day number to load
+ * @returns {Promise<Object>} Day data with games
+ */
+export async function loadDay(dayNumber) {
+  // Check cache first
+  if (cachedDays.has(dayNumber)) {
+    return cachedDays.get(dayNumber);
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/days/${dayNumber}.json`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    cachedDays.set(dayNumber, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading day ${dayNumber}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Load player index (list of all players with basic info)
+ * @returns {Promise<Object>} Player index
+ */
+export async function loadPlayerIndex() {
+  if (cachedPlayerIndex) {
+    return cachedPlayerIndex;
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/players/index.json`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    cachedPlayerIndex = data;
+    return data;
+  } catch (err) {
+    console.error('Error loading player index:', err);
+    return null;
+  }
+}
+
+/**
+ * Load players for a specific letter group (partitioned)
+ * @param {string} letter - Letter to load (a-z, 0)
+ * @returns {Promise<Object>} Players data for that letter
+ */
+export async function loadPlayerLetter(letter) {
+  letter = letter.toLowerCase();
+
+  // Check cache first
+  if (cachedPlayerLetters.has(letter)) {
+    return cachedPlayerLetters.get(letter);
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/players/${letter}.json`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    cachedPlayerLetters.set(letter, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading players for letter ${letter}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Get player stats using partitioned data
+ * @param {string} username - Player username
+ * @returns {Promise<Object|null>} Player stats or null if not found
+ */
+export async function getPlayerStatsPartitioned(username) {
+  const firstLetter = username[0].toLowerCase();
+  const letter = firstLetter.match(/[a-z]/) ? firstLetter : '0';
+
+  const letterData = await loadPlayerLetter(letter);
+  if (!letterData || !letterData.players) {
+    return null;
+  }
+
+  const playerData = letterData.players[username];
+  if (!playerData) {
+    return null;
+  }
+
+  // Normalize compact format
+  const statsArr = playerData.s || [];
+  const breakdown = {};
+  const gb = playerData.gb || {};
+  Object.entries(gb).forEach(([code, count]) => {
+    const full = GAME_CODE_MAP[code] || code;
+    breakdown[full] = count;
+  });
+
+  return {
+    stats: statsArr,
+    game_breakdown: breakdown,
+    recent_games: playerData.rg || [],
+  };
 }
 
 /**
