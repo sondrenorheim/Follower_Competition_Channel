@@ -313,7 +313,7 @@ async def day_command(interaction: discord.Interaction, day: int):
 
     # Calculate stats
     total_participants = set()
-    all_results = []
+    player_points = {}  # Aggregate points per player
     game_types = set()
 
     for game in games:
@@ -323,11 +323,16 @@ async def day_command(interaction: discord.Interaction, day: int):
             username = result.get('username')
             if username:
                 total_participants.add(username)
-                all_results.append(result)
+                # Sum up points for each player across all games
+                points = result.get('points', 0)
+                if username in player_points:
+                    player_points[username] += points
+                else:
+                    player_points[username] = points
 
-    # Get top 3 players by points
+    # Get top 3 players by total points for the day
     top_players = sorted(
-        all_results,
+        [{'username': u, 'points': p} for u, p in player_points.items()],
         key=lambda r: r.get('points', 0),
         reverse=True
     )[:3]
