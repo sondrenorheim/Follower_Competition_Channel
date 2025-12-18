@@ -39,7 +39,16 @@
       "Bash(timeout 25 python:*)",
       "Bash(pip show:*)",
       "Bash(timeout 30 python:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(del instaloader_session)",
+      "Bash(powershell -Command \"(Get-ChildItem -Path avatar_cache -Filter *.jpg | Measure-Object).Count\")",
+      "Bash(powershell -Command \"$size = (Get-ChildItem -Path avatar_cache -Recurse | Measure-Object -Property Length -Sum).Sum; [math]::Round($size / 1MB, 1)\")",
+      "Bash(powershell -Command \"$size = (Get-ChildItem -Path avatar_cache -Recurse | Measure-Object -Property Length -Sum).Sum; Write-Output ([math]::Round($size / 1MB, 1))\")",
+      "Bash(powershell -Command \"(Get-ChildItem avatar_cache -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB\")",
+      "Bash(powershell -Command:*)",
+      "Bash(timeout 8 python:*)",
+      "Bash(timeout 12 python:*)",
+      "Bash(timeout 35 python:*)"
     ],
     "deny": [],
     "ask": []

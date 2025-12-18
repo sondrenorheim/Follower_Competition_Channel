@@ -20,13 +20,13 @@ except ImportError:
     BS4_AVAILABLE = False
 
 # Configuration
-INPUT_FILE = "followers_safe_20251213_merged.json"
+INPUT_FILE = "Followers/all_followers_fresh.json"
 OUTPUT_FILE = f"followers_with_pics_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
 
 # Rate limiting (VERY conservative to avoid blocks)
-MIN_DELAY = 3.0  # Minimum seconds between requests
-MAX_DELAY = 6.0  # Maximum seconds between requests
-BATCH_SIZE = 25  # Save progress every N profiles
+MIN_DELAY = 5.0  # Minimum seconds between requests (increased for safety)
+MAX_DELAY = 10.0  # Maximum seconds between requests (increased for safety)
+BATCH_SIZE = 50  # Save progress every N profiles (increased to save more frequently)
 MAX_RETRIES = 2  # Retry failed requests
 TIMEOUT = 10     # Request timeout in seconds
 
@@ -216,21 +216,26 @@ def fetch_all_profile_pictures(followers):
         if pic_url:
             follower['profile_pic_url'] = pic_url
             success_count += 1
+            consecutive_failures = 0  # Reset consecutive failure counter on success
             print(f"✅")
         else:
             fail_count += 1
+            consecutive_failures = consecutive_failures + 1 if 'consecutive_failures' in locals() else 1
             print(f"❌")
-            # Check if we're being rate limited too much
-            if fail_count > 5 and success_count == 0:
-                print("\n⚠️  WARNING: Multiple consecutive failures detected!")
-                print("   Instagram may be blocking requests. Consider:")
+
+            # Only warn if many consecutive failures AND we've had some successes before
+            # This filters out private profiles vs actual rate limiting
+            if consecutive_failures >= 20 and success_count > 10:
+                print("\n⚠️  WARNING: Many consecutive failures after successful fetches!")
+                print("   This may indicate rate limiting. Consider:")
                 print("   1. Increasing MIN_DELAY and MAX_DELAY")
                 print("   2. Using a VPN or different IP address")
-                print("   3. Running this script in smaller batches over multiple days")
+                print("   3. Waiting a few hours before resuming")
                 response = input("\nContinue anyway? (y/n): ")
                 if response.lower() != 'y':
                     rate_limited = True
                     break
+                consecutive_failures = 0  # Reset if user chooses to continue
 
         # Rate limiting (random delay to appear more human)
         if i < total:

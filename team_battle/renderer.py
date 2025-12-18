@@ -412,6 +412,7 @@ class TeamBattleRenderer:
         status_y = arena_bottom + 55
         status_font = pygame.font.Font(None, 24)
         hp_font = pygame.font.Font(None, 18)
+        letter_font = pygame.font.Font(None, 14)  # Smaller font for letters
 
         # Render all team texts first to calculate total width
         teams = [Team.RED, Team.BLUE, Team.GREEN, Team.YELLOW]
@@ -430,7 +431,7 @@ class TeamBattleRenderer:
 
         # Calculate team average HP (hide during free-for-all)
         show_hp = phase not in ("freeforall", "freeforall_announce", "freeforall_countdown")
-        box_height = 50 if show_hp else 28  # Taller box if showing HP
+        box_height = 68 if show_hp else 28  # Taller box if showing HP and letters
 
         # Draw background box for entire team status row
         padding = 15
@@ -449,6 +450,9 @@ class TeamBattleRenderer:
             text_rect = text_surface.get_rect(left=current_x, centery=status_y)
             self.screen.blit(text_surface, text_rect)
 
+            # Calculate center X position for this team's section (for centering HP and letters)
+            team_section_center_x = current_x + text_surface.get_width() // 2
+
             # Draw average HP below count (if not free-for-all)
             if show_hp:
                 # Calculate team average HP
@@ -461,8 +465,21 @@ class TeamBattleRenderer:
                     color = TEAM_COLORS[team] if team not in eliminated_teams else (100, 100, 100)
                     hp_text = f"{avg_hp_pct:.0f}%"
                     hp_surface = hp_font.render(hp_text, True, color)
-                    hp_rect = hp_surface.get_rect(left=current_x, centery=status_y + 18)
+                    hp_rect = hp_surface.get_rect(centerx=team_section_center_x, centery=status_y + 18)
                     self.screen.blit(hp_surface, hp_rect)
+
+                    # Draw team's fixed alphabetical letter assignments below percentage
+                    team_letter_assignments = {
+                        Team.RED: 'AEIMQUY',
+                        Team.BLUE: 'BFJNRVZ',
+                        Team.GREEN: 'CGKOSW0',
+                        Team.YELLOW: 'DHLPTX1'
+                    }
+                    letter_range = team_letter_assignments.get(team, '')
+                    if letter_range:
+                        letter_surface = letter_font.render(letter_range, True, color)
+                        letter_rect = letter_surface.get_rect(centerx=team_section_center_x, centery=status_y + 38)
+                        self.screen.blit(letter_surface, letter_rect)
 
             current_x += text_surface.get_width() + spacing
 

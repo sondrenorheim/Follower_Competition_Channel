@@ -28,22 +28,30 @@ SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO
 MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
-
-ALL_GAME_MODES = ["fighter_arena"]
+ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "platformer_race","gorillas_vs_followers", "team_battle"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
 TEST_MODE = False
 EXPORT_VIDEO = True
-DAY_NUMBER = 27  # Increment this each time you record a new video
-DOWNLOAD_PROFILE_PICTURES = True  # Set to True to download real profile pictures (if URLs available)
-LOAD_PROFILE_PICTURES = True  # Set to False to skip loading profile pictures entirely (faster testing)
+DAY_NUMBER = 29  # Increment this each time you record a new video
+
+# Profile picture settings:
+# - DOWNLOAD_PROFILE_PICTURES: Legacy flag for downloading during game run (slow, not recommended)
+# - LOAD_PROFILE_PICTURES: Load profile pictures from avatar_cache/ (fast, recommended)
+#
+# Recommended workflow:
+#   1. Run download_all_profile_pics.py once to cache all profile pictures
+#   2. Set LOAD_PROFILE_PICTURES = True to use cached images
+#   3. Games will load instantly from disk cache
+DOWNLOAD_PROFILE_PICTURES = True  # Deprecated - use download_all_profile_pics.py instead
+LOAD_PROFILE_PICTURES = True  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
 HEADLESS_MODE = False
 SHOW_NAMETAGS = True
 
 # Minimal test players - when True, use generated test users instead of real followers
 TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 10000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
+TEST_MINIMAL_PLAYER_COUNT = 100  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
