@@ -52,6 +52,14 @@ discord_bot/discord_links.json  # User privacy - Discord to Instagram mappings
 *.mov
 *.png
 *.jpg
+
+# Large monolithic stats files (we use partitioned API files instead)
+# These files are kept local only to avoid LFS budget issues
+player_statistics.json
+game_history.json
+website/public/player_statistics_web.json
+website/public/game_history_web.json
+
 # Config with real credentials (optional - uncomment if you want to prevent committing credentials)
 # config.py
 

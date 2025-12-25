@@ -1,3 +1,5 @@
-game_history.json filter=lfs diff=lfs merge=lfs -text
-player_statistics.json filter=lfs diff=lfs merge=lfs -text
-website/public/game_history_web.json filter=lfs diff=lfs merge=lfs -text
+# LFS removed - these files are now in .gitignore
+# We use partitioned API files in website/public/api/ instead
+# game_history.json filter=lfs diff=lfs merge=lfs -text
+# player_statistics.json filter=lfs diff=lfs merge=lfs -text
+# website/public/game_history_web.json filter=lfs diff=lfs merge=lfs -text

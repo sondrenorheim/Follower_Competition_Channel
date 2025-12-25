@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getGamesByType, getGameTypes } from '../utils/dataLoader';
+import { getGamesByType, getGameTypes, getGameWithResults } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 import GameFilter from '../components/GameFilter';
@@ -64,59 +64,77 @@ export default function DailyResults() {
 
   // Update selected game when day number or filtered games change
   useEffect(() => {
-    if (selectedDayNumber === null || games.length === 0) {
-      return;
-    }
-
-    // When "all" is selected, aggregate all games for that day into one summary entry
-    if (selectedGameType === 'all') {
-      const dayGames = games.filter(g => g.day_number === selectedDayNumber);
-      if (dayGames.length === 0) {
+    async function loadSelectedGame() {
+      if (selectedDayNumber === null || games.length === 0) {
         setSelectedGame(null);
         return;
       }
 
-      // Aggregate points (and kills/survival_time when available) per player across all games that day
-      const aggregated = new Map();
-      dayGames.forEach(game => {
-        game.results.forEach(result => {
-          if (!aggregated.has(result.username)) {
-            aggregated.set(result.username, {
-              username: result.username,
-              points: 0,
-              kills: 0,
-              survival_time: 0,
-              appearances: 0
-            });
-          }
-          const entry = aggregated.get(result.username);
-          entry.points += result.points || 0;
-          entry.kills += result.kills || 0;
-          entry.survival_time += result.survival_time || 0;
-          entry.appearances += 1;
+      // When "all" is selected, aggregate all games for that day into one summary entry
+      if (selectedGameType === 'all') {
+        const dayGames = games.filter(g => g.day_number === selectedDayNumber);
+        if (dayGames.length === 0) {
+          setSelectedGame(null);
+          return;
+        }
+
+        // Load full results for all games on this day
+        const fullGames = await Promise.all(
+          dayGames.map(g => getGameWithResults(g))
+        );
+
+        // Aggregate points (and kills/survival_time when available) per player across all games that day
+        const aggregated = new Map();
+        fullGames.forEach(game => {
+          if (!game || !game.results) return;
+          game.results.forEach(result => {
+            if (!aggregated.has(result.username)) {
+              aggregated.set(result.username, {
+                username: result.username,
+                points: 0,
+                kills: 0,
+                survival_time: 0,
+                appearances: 0
+              });
+            }
+            const entry = aggregated.get(result.username);
+            entry.points += result.points || 0;
+            entry.kills += result.kills || 0;
+            entry.survival_time += result.survival_time || 0;
+            entry.appearances += 1;
+          });
         });
-      });
 
-      const aggregatedResults = Array.from(aggregated.values());
-      const totalParticipants = aggregatedResults.length;
+        const aggregatedResults = Array.from(aggregated.values());
+        const totalParticipants = aggregatedResults.length;
 
-      const syntheticGame = {
-        game_id: `all_day_${selectedDayNumber}`,
-        game_type: 'all',
-        game_display_name: 'All Games',
-        day_number: selectedDayNumber,
-        timestamp: dayGames[0]?.timestamp || new Date().toISOString(),
-        total_participants: totalParticipants,
-        results: aggregatedResults
-      };
+        const syntheticGame = {
+          game_id: `all_day_${selectedDayNumber}`,
+          game_type: 'all',
+          game_display_name: 'All Games',
+          day_number: selectedDayNumber,
+          timestamp: fullGames[0]?.timestamp || new Date().toISOString(),
+          total_participants: totalParticipants,
+          results: aggregatedResults
+        };
 
-      setSelectedGame(syntheticGame);
-      return;
+        setSelectedGame(syntheticGame);
+        return;
+      }
+
+      // Otherwise, pick the game matching the day for the selected type
+      const matchingGame = games.find(g => g.day_number === selectedDayNumber);
+      if (!matchingGame) {
+        setSelectedGame(null);
+        return;
+      }
+
+      // Load full results if it's a summary
+      const fullGame = await getGameWithResults(matchingGame);
+      setSelectedGame(fullGame);
     }
 
-    // Otherwise, pick the game matching the day for the selected type
-    const matchingGame = games.find(g => g.day_number === selectedDayNumber);
-    setSelectedGame(matchingGame || null);
+    loadSelectedGame();
   }, [selectedDayNumber, games, selectedGameType]);
 
   // Sort all results and calculate ranks once per selection, then filter by search

@@ -33,13 +33,12 @@ def push_stats_to_github(
         return True
 
     # Default files to commit
+    # NOTE: We now ONLY push partitioned files in website/public/api/
+    # The monolithic player_statistics.json and game_history.json are kept local only
+    # to avoid LFS budget issues (game_history.json is 836MB!)
     if files is None:
         files = [
-            "player_statistics.json",
-            "game_history.json",
-            "website/public/player_statistics_web.json",
-            "website/public/game_history_web.json",
-            "website/public/api/"  # Add entire API directory (partitioned files)
+            "website/public/api/"  # Partitioned player stats and game history
         ]
 
         # Conditionally add video files based on config
@@ -71,30 +70,20 @@ def push_stats_to_github(
     print(f"   Message: {commit_message}")
 
     try:
-        # Before git add/commit, regenerate web bundles if not in TEST_MODE
+        # Before git add/commit, regenerate partitioned API files if not in TEST_MODE
+        # We no longer export the monolithic web.json files - only partitioned API
         if not config.TEST_MODE:
             try:
-                # Build website/public/player_statistics_web.json
-                stats = statistics.PlayerStatistics()
-                stats.export_web_stats(
-                    output_path="website/public/player_statistics_web.json"
-                )
-                print("   + Regenerated website/public/player_statistics_web.json")
-
                 # Export partitioned player stats
+                stats = statistics.PlayerStatistics()
                 stats.export_partitioned_stats("website/public/api")
                 print("   + Regenerated partitioned player stats")
             except Exception as e:
                 print(f"   ! Failed to regenerate player stats: {e}")
 
             try:
-                gh = game_history.GameHistory("game_history.json")
-                gh.export_web_history(
-                    output_path="website/public/game_history_web.json"
-                )
-                print("   + Regenerated website/public/game_history_web.json")
-
                 # Export partitioned game history
+                gh = game_history.GameHistory("game_history.json")
                 gh.export_partitioned_history("website/public/api")
                 print("   + Regenerated partitioned game history")
             except Exception as e:

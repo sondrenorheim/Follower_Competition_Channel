@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { loadGameHistory } from '../utils/dataLoader';
+import { loadIndex, loadDay, loadGame } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 
@@ -23,19 +23,32 @@ export default function MonthlyRankings() {
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
 
-  // Load available months from game history
+  // Load available months from partitioned API
   useEffect(() => {
     async function loadAvailableMonths() {
       try {
-        const history = await loadGameHistory();
-        setHistoryData(history);
-        const monthSet = new Set();
+        const index = await loadIndex();
+        if (!index) return;
 
-        (history.games || []).forEach(game => {
-          const gameDate = new Date(game.timestamp);
-          const key = `${gameDate.getFullYear()}-${gameDate.getMonth() + 1}`;
-          monthSet.add(key);
-        });
+        const monthSet = new Set();
+        const allGames = [];
+
+        // Load all days to get game timestamps
+        for (const dayNum of index.available_days || []) {
+          const dayData = await loadDay(dayNum);
+          if (!dayData || !dayData.games) continue;
+
+          for (const gameSummary of dayData.games) {
+            const gameDate = new Date(gameSummary.timestamp);
+            const key = `${gameDate.getFullYear()}-${gameDate.getMonth() + 1}`;
+            monthSet.add(key);
+            // Store summary for later
+            allGames.push(gameSummary);
+          }
+        }
+
+        // Store summaries as "history" for aggregation
+        setHistoryData({ games: allGames });
 
         const months = Array.from(monthSet).map(key => {
           const [year, month] = key.split('-').map(Number);
@@ -69,21 +82,26 @@ export default function MonthlyRankings() {
   }, []);
 
   // Helper to build leaderboard from history data with optional filters
-  const buildAggregatedLeaderboard = (history, { month = null, year = null, gameType = 'all' }) => {
+  const buildAggregatedLeaderboard = async (history, { month = null, year = null, gameType = 'all' }) => {
     const players = new Map();
-    const games = history?.games || [];
+    const gameSummaries = history?.games || [];
 
-    games.forEach((game) => {
-      // Game type filter
-      if (gameType !== 'all' && game.game_type !== gameType) return;
-
-      // Month/year filter
+    // Filter summaries first
+    const filteredSummaries = gameSummaries.filter((game) => {
+      if (gameType !== 'all' && game.game_type !== gameType) return false;
       if (month && year) {
         const d = new Date(game.timestamp);
-        if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return;
+        if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return false;
       }
+      return true;
+    });
 
-      (game.results || []).forEach((result) => {
+    // Load full game data for filtered summaries
+    for (const gameSummary of filteredSummaries) {
+      const game = await loadGame(gameSummary.game_id);
+      if (!game || !game.results) continue;
+
+      game.results.forEach((result) => {
         if (!players.has(result.username)) {
           players.set(result.username, {
             username: result.username,
@@ -114,7 +132,7 @@ export default function MonthlyRankings() {
           p.top10PctFinishes += 1;
         }
       });
-    });
+    }
 
     const leaderboard = Array.from(players.values()).map((p) => ({
       ...p,
@@ -133,7 +151,7 @@ export default function MonthlyRankings() {
       setLoading(true);
       try {
         if (viewMode === 'all-time' || viewMode === 'top-stats') {
-          const aggregated = buildAggregatedLeaderboard(historyData, { gameType: gameTypeFilter });
+          const aggregated = await buildAggregatedLeaderboard(historyData, { gameType: gameTypeFilter });
 
           // Sort based on selected category for top stats view
           if (viewMode === 'top-stats') {
@@ -161,7 +179,7 @@ export default function MonthlyRankings() {
 
           setLeaderboardData(aggregated);
         } else {
-          const monthly = buildAggregatedLeaderboard(historyData, {
+          const monthly = await buildAggregatedLeaderboard(historyData, {
             month: selectedMonth,
             year: selectedYear,
             gameType: gameTypeFilter
