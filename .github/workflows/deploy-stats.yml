@@ -4,8 +4,6 @@ on:
   push:
     branches: [main, master, claude/initialize-repo-01NEJaF3TxJTeFxd3rcPuzvt]
     paths:
-      - 'player_statistics.json'
-      - 'game_history.json'
       - 'website/**'
   workflow_dispatch:
 
@@ -27,7 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false  # LFS disabled - we use partitioned API files instead
           fetch-depth: 0
 
       - name: Setup Node
