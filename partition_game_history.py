@@ -56,13 +56,101 @@ class EnhancedGameHistoryPartitioner:
             print(f"⚠️  No existing game history file found: {self.history_file}")
             self.history = {"games": []}
 
+    def _generate_monthly_leaderboards(self, leaderboards_dir: Path) -> Dict[str, dict]:
+        """
+        Generate pre-computed monthly leaderboards.
+        Creates one file per month: leaderboards/2024-12.json, leaderboards/2025-01.json, etc.
+
+        Returns:
+            Dict mapping month keys (YYYY-MM) to metadata about that month's leaderboard
+        """
+        # Aggregate stats by month
+        monthly_data = defaultdict(lambda: defaultdict(lambda: {
+            "points": 0.0,
+            "games": 0,
+            "wins": 0,
+            "best_placement": float('inf'),
+            "total_kills": 0
+        }))
+
+        for game in self.history.get('games', []):
+            timestamp = game.get("timestamp", "")
+            if not timestamp or len(timestamp) < 7:
+                continue
+
+            # Extract YYYY-MM from timestamp
+            month_key = timestamp[:7]  # "2024-12" format
+
+            for result in game.get("results", []):
+                username = result.get("username")
+                if not username:
+                    continue
+
+                player = monthly_data[month_key][username]
+                player["points"] += result.get("points", 0)
+                player["games"] += 1
+                placement = result.get("placement", 9999)
+                if placement == 1:
+                    player["wins"] += 1
+                if placement < player["best_placement"]:
+                    player["best_placement"] = placement
+                player["total_kills"] += result.get("kills", 0)
+
+        # Write monthly leaderboard files
+        monthly_stats = {}
+
+        for month_key in sorted(monthly_data.keys()):
+            players = monthly_data[month_key]
+
+            # Build leaderboard sorted by points
+            leaderboard = []
+            for username, stats in players.items():
+                leaderboard.append({
+                    "u": username,
+                    "p": round(stats["points"], 1),
+                    "g": stats["games"],
+                    "w": stats["wins"],
+                    "b": stats["best_placement"] if stats["best_placement"] != float('inf') else 0,
+                    "k": stats["total_kills"]
+                })
+
+            # Sort by points descending
+            leaderboard.sort(key=lambda x: x["p"], reverse=True)
+
+            # Add rank
+            for i, entry in enumerate(leaderboard):
+                entry["r"] = i + 1
+
+            # Write to file
+            month_file = leaderboards_dir / f"{month_key}.json"
+            month_data = {
+                "month": month_key,
+                "total_players": len(leaderboard),
+                "total_games": sum(p["g"] for p in leaderboard) // max(1, len(set(
+                    g.get("game_id") for g in self.history.get('games', [])
+                    if g.get("timestamp", "").startswith(month_key)
+                ))),
+                "leaderboard": leaderboard
+            }
+
+            with open(month_file, 'w', encoding='utf-8') as f:
+                json.dump(month_data, f, ensure_ascii=False, separators=(',', ':'))
+
+            monthly_stats[month_key] = {
+                "players": len(leaderboard),
+                "games": len([g for g in self.history.get('games', []) if g.get("timestamp", "").startswith(month_key)])
+            }
+
+        return monthly_stats
+
     def partition_all(self, base_dir: str = "website/public/api"):
         """
         Create all partitioned files:
         1. Individual game files
         2. Day-aggregated files
         3. Game type indexes
-        4. Master index
+        4. Monthly leaderboards (pre-computed)
+        5. Master index
         """
         print("\n" + "="*60)
         print("PARTITIONING GAME HISTORY")
@@ -75,10 +163,12 @@ class EnhancedGameHistoryPartitioner:
         games_dir = base_path / "games"
         days_dir = base_path / "days"
         types_dir = base_path / "types"
+        leaderboards_dir = base_path / "leaderboards"
 
         games_dir.mkdir(exist_ok=True)
         days_dir.mkdir(exist_ok=True)
         types_dir.mkdir(exist_ok=True)
+        leaderboards_dir.mkdir(exist_ok=True)
 
         # Organize games
         games_by_day = defaultdict(list)
@@ -187,7 +277,11 @@ class EnhancedGameHistoryPartitioner:
 
         print(f"   ✅ Created {len(all_types)} game type indexes in {types_dir}/")
 
-        # Step 4: Create master index
+        # Step 4: Generate monthly leaderboards
+        monthly_stats = self._generate_monthly_leaderboards(leaderboards_dir)
+        print(f"   ✅ Created {len(monthly_stats)} monthly leaderboard files in {leaderboards_dir}/")
+
+        # Step 5: Create master index
         index_data = {
             "last_updated": datetime.now().isoformat(),
             "total_games": len(self.history['games']),
@@ -195,7 +289,8 @@ class EnhancedGameHistoryPartitioner:
             "available_days": sorted(all_days),
             "days_metadata": day_metadata,
             "game_types": sorted(all_types),
-            "types_metadata": type_metadata
+            "types_metadata": type_metadata,
+            "available_months": sorted(monthly_stats.keys())
         }
 
         index_file = base_path / "index.json"
@@ -212,14 +307,17 @@ class EnhancedGameHistoryPartitioner:
         print(f"   Individual games: {len(self.history['games'])} files in games/")
         print(f"   Day summaries:    {len(all_days)} files in days/")
         print(f"   Game type indexes: {len(all_types)} files in types/")
+        print(f"   Monthly leaderboards: {len(monthly_stats)} files in leaderboards/")
         print(f"   Master index:     index.json")
-        print(f"\n💾 Total files created: {len(self.history['games']) + len(all_days) + len(all_types) + 1}")
+        total_files = len(self.history['games']) + len(all_days) + len(all_types) + len(monthly_stats) + 1
+        print(f"\n💾 Total files created: {total_files}")
         print("="*60 + "\n")
 
         return {
             "total_games": len(self.history['games']),
             "total_days": len(all_days),
             "total_types": len(all_types),
+            "total_months": len(monthly_stats),
             "output_dir": str(base_path)
         }
 

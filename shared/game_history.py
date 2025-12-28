@@ -74,13 +74,102 @@ class GameHistory:
             json.dump(self.history, f, ensure_ascii=False, separators=(",", ":"))
         print(f"Exported web game history to {output_path}")
 
+    def _generate_monthly_leaderboards(self, leaderboards_dir) -> dict:
+        """
+        Generate pre-computed monthly leaderboards.
+        Creates one file per month: leaderboards/2024-12.json, leaderboards/2025-01.json, etc.
+
+        Args:
+            leaderboards_dir: Path object for the leaderboards directory
+
+        Returns:
+            Dict mapping month keys (YYYY-MM) to metadata about that month's leaderboard
+        """
+        from collections import defaultdict
+
+        # Aggregate stats by month
+        monthly_data = defaultdict(lambda: defaultdict(lambda: {
+            "points": 0.0,
+            "games": 0,
+            "wins": 0,
+            "best_placement": float('inf'),
+            "total_kills": 0
+        }))
+
+        for game in self.history.get('games', []):
+            timestamp = game.get("timestamp", "")
+            if not timestamp or len(timestamp) < 7:
+                continue
+
+            # Extract YYYY-MM from timestamp
+            month_key = timestamp[:7]  # "2024-12" format
+
+            for result in game.get("results", []):
+                username = result.get("username")
+                if not username:
+                    continue
+
+                player = monthly_data[month_key][username]
+                player["points"] += result.get("points", 0)
+                player["games"] += 1
+                placement = result.get("placement", 9999)
+                if placement == 1:
+                    player["wins"] += 1
+                if placement < player["best_placement"]:
+                    player["best_placement"] = placement
+                player["total_kills"] += result.get("kills", 0)
+
+        # Write monthly leaderboard files
+        monthly_stats = {}
+
+        for month_key in sorted(monthly_data.keys()):
+            players = monthly_data[month_key]
+
+            # Build leaderboard sorted by points
+            leaderboard = []
+            for username, stats in players.items():
+                leaderboard.append({
+                    "u": username,
+                    "p": round(stats["points"], 1),
+                    "g": stats["games"],
+                    "w": stats["wins"],
+                    "b": stats["best_placement"] if stats["best_placement"] != float('inf') else 0,
+                    "k": stats["total_kills"]
+                })
+
+            # Sort by points descending
+            leaderboard.sort(key=lambda x: x["p"], reverse=True)
+
+            # Add rank
+            for i, entry in enumerate(leaderboard):
+                entry["r"] = i + 1
+
+            # Write to file
+            month_file = leaderboards_dir / f"{month_key}.json"
+            month_data = {
+                "month": month_key,
+                "total_players": len(leaderboard),
+                "leaderboard": leaderboard
+            }
+
+            with open(month_file, 'w', encoding='utf-8') as f:
+                json.dump(month_data, f, ensure_ascii=False, separators=(',', ':'))
+
+            monthly_stats[month_key] = {
+                "players": len(leaderboard),
+                "games": len([g for g in self.history.get('games', []) if g.get("timestamp", "").startswith(month_key)])
+            }
+
+        return monthly_stats
+
     def export_partitioned_history(self, base_dir: str = "website/public/api"):
         """
         Export game history partitioned into:
         1. Individual game files: api/games/{game_id}.json
         2. Day summary files: api/days/{day_number}.json
         3. Game type indexes: api/types/{game_type}.json
-        4. Master index: api/index.json
+        4. Monthly leaderboards: api/leaderboards/{YYYY-MM}.json
+        5. Master index: api/index.json
 
         This creates many small files instead of one giant file,
         solving LFS budget issues and improving load performance.
@@ -95,10 +184,12 @@ class GameHistory:
         games_dir = base_path / "games"
         days_dir = base_path / "days"
         types_dir = base_path / "types"
+        leaderboards_dir = base_path / "leaderboards"
 
         games_dir.mkdir(exist_ok=True)
         days_dir.mkdir(exist_ok=True)
         types_dir.mkdir(exist_ok=True)
+        leaderboards_dir.mkdir(exist_ok=True)
 
         # Organize games
         games_by_day = defaultdict(list)
@@ -196,7 +287,10 @@ class GameHistory:
                 "games": len(type_games)
             })
 
-        # Step 4: Create master index
+        # Step 4: Generate monthly leaderboards
+        monthly_stats = self._generate_monthly_leaderboards(leaderboards_dir)
+
+        # Step 5: Create master index
         index_data = {
             "last_updated": datetime.now().isoformat(),
             "total_games": len(self.history.get("games", [])),
@@ -204,7 +298,8 @@ class GameHistory:
             "available_days": sorted(all_days),
             "days_metadata": day_metadata,
             "game_types": sorted(all_types),
-            "types_metadata": type_metadata
+            "types_metadata": type_metadata,
+            "available_months": sorted(monthly_stats.keys())
         }
 
         index_file = base_path / "index.json"
@@ -215,6 +310,7 @@ class GameHistory:
         print(f"   {len(self.history.get('games', []))} individual game files -> {games_dir}/")
         print(f"   {len(all_days)} day summaries -> {days_dir}/")
         print(f"   {len(all_types)} game type indexes -> {types_dir}/")
+        print(f"   {len(monthly_stats)} monthly leaderboards -> {leaderboards_dir}/")
         print(f"   Master index -> {index_file}")
 
     def record_game_session(

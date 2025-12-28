@@ -19,6 +19,7 @@ let cachedGames = new Map(); // Map of game_id -> game_data
 let cachedTypes = new Map(); // Map of game_type -> type_index
 let cachedPlayerLetters = new Map(); // Map of letter -> player_data
 let cachedPlayerIndex = null;
+let cachedMonthlyLeaderboards = new Map(); // Map of YYYY-MM -> leaderboard_data
 
 // Game code mapping for compact web stats
 const GAME_CODE_MAP = {
@@ -336,62 +337,63 @@ export async function getAllTimeLeaderboard(limit = 10) {
 }
 
 /**
- * Get monthly leaderboard for a specific month
+ * Load pre-computed monthly leaderboard
+ * @param {string} monthKey - Month key in YYYY-MM format
+ * @returns {Promise<Object>} Monthly leaderboard data
+ */
+async function loadMonthlyLeaderboard(monthKey) {
+  // Check cache first
+  if (cachedMonthlyLeaderboards.has(monthKey)) {
+    return cachedMonthlyLeaderboards.get(monthKey);
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/leaderboards/${monthKey}.json`);
+    if (!response.ok) {
+      console.warn(`Monthly leaderboard ${monthKey} not found`);
+      return null;
+    }
+    const data = await response.json();
+    cachedMonthlyLeaderboards.set(monthKey, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading monthly leaderboard ${monthKey}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Get monthly leaderboard for a specific month (uses pre-computed files)
  * @param {number} year - Year
  * @param {number} month - Month (1-12)
  * @param {number} limit - Number of top players to return
  * @returns {Promise<Array>} Array of player rankings for the month
  */
 export async function getMonthlyLeaderboard(year, month, limit = 1000) {
-  const index = await loadIndex();
-  if (!index) {
+  // Build month key (YYYY-MM format)
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+
+  // Load pre-computed monthly leaderboard (single request!)
+  const monthData = await loadMonthlyLeaderboard(monthKey);
+
+  if (!monthData || !monthData.leaderboard) {
+    console.warn(`No pre-computed leaderboard for ${monthKey}`);
     return [];
   }
 
-  // Aggregate player stats for the month
-  const monthlyStats = {};
+  // Convert compact format to expected format
+  const leaderboard = monthData.leaderboard.slice(0, limit).map(entry => ({
+    username: entry.u,
+    points: entry.p,
+    games: entry.g,
+    wins: entry.w,
+    bestPlacement: entry.b || Infinity,
+    totalKills: entry.k || 0,
+    rank: entry.r
+  }));
 
-  // Load all days and filter by month
-  for (const dayNum of index.available_days || []) {
-    const dayData = await loadDay(dayNum);
-    if (!dayData || !dayData.games) continue;
-
-    for (const gameSummary of dayData.games) {
-      const gameDate = new Date(gameSummary.timestamp);
-      if (gameDate.getFullYear() !== year || gameDate.getMonth() !== month - 1) {
-        continue;
-      }
-
-      // Load full game to get results
-      const game = await loadGame(gameSummary.game_id);
-      if (!game || !game.results) continue;
-
-      game.results.forEach(result => {
-        if (!monthlyStats[result.username]) {
-          monthlyStats[result.username] = {
-            username: result.username,
-            points: 0,
-            games: 0,
-            wins: 0,
-            bestPlacement: Infinity,
-            totalKills: 0
-          };
-        }
-
-        const player = monthlyStats[result.username];
-        player.points += result.points || 0;
-        player.games += 1;
-        if (result.placement === 1) player.wins += 1;
-        if (result.placement < player.bestPlacement) player.bestPlacement = result.placement;
-        player.totalKills += (result.kills || 0);
-      });
-    }
-  }
-
-  const leaderboard = Object.values(monthlyStats);
-  leaderboard.sort((a, b) => b.points - a.points);
-
-  return leaderboard.slice(0, limit);
+  console.log(`✅ Loaded monthly leaderboard ${monthKey}: ${leaderboard.length} players (1 request)`);
+  return leaderboard;
 }
 
 /**
@@ -515,5 +517,6 @@ export function clearCache() {
   cachedTypes.clear();
   cachedPlayerLetters.clear();
   cachedPlayerIndex = null;
+  cachedMonthlyLeaderboards.clear();
   console.log('🗑️ Cache cleared');
 }
