@@ -1,1 +1,1 @@
-{"day_number":10,"total_games":1,"games":[{"game_id":"20251130_001_obstacle_course","game_type":"obstacle_course","game_display_name":"Obstacle Course","timestamp":"2025-11-30T20:02:05.127111","total_participants":447}]}
+{"day_number":10,"total_games":1,"games":[{"game_id":"20251130_001_obstacle_course","game_type":"obstacle_course","game_display_name":"Obstacle Course","timestamp":"2025-11-30T20:02:05.127111","total_participants":447,"non_scoring":false}]}
