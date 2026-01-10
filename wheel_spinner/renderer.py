@@ -108,9 +108,15 @@ class WheelSpinnerRenderer(RendererTemplate):
         self.shadow_alpha = int(getattr(config, "WHEEL_SPINNER_SHADOW_ALPHA", 90))
         self.shadow_offset = int(getattr(config, "WHEEL_SPINNER_SHADOW_OFFSET", 18))
         self.shadow_scale = float(getattr(config, "WHEEL_SPINNER_SHADOW_SCALE", 0.65))
+        self.show_backdrop = bool(getattr(config, "WHEEL_SPINNER_SHOW_BACKDROP", True))
+        self.show_face_overlays = bool(getattr(config, "WHEEL_SPINNER_SHOW_FACE_OVERLAYS", True))
+        self.show_rim_highlights = bool(getattr(config, "WHEEL_SPINNER_SHOW_RIM_HIGHLIGHTS", True))
         self.label_color = getattr(config, "WHEEL_SPINNER_LABEL_COLOR", (20, 20, 20))
         self.label_shadow_alpha = int(getattr(config, "WHEEL_SPINNER_LABEL_SHADOW_ALPHA", 120))
         self.label_shadow_offset = int(getattr(config, "WHEEL_SPINNER_LABEL_SHADOW_OFFSET", 2))
+        self.label_radius_factor = float(getattr(config, "WHEEL_SPINNER_LABEL_RADIUS_FACTOR", 0.62))
+        self.label_outline_color = getattr(config, "WHEEL_SPINNER_LABEL_OUTLINE_COLOR", (245, 245, 245))
+        self.label_outline_width = int(getattr(config, "WHEEL_SPINNER_LABEL_OUTLINE_WIDTH", 0))
         self._overlay_radius = None
         self._overlay_surfaces = None
 
@@ -151,18 +157,16 @@ class WheelSpinnerRenderer(RendererTemplate):
         self._draw_selected_sequence(center, radius, selected_sequence, username_length_hint)
 
         panel_y = int(center[1] + radius + self.status_panel_offset)
-        panel_rect = pygame.Rect(0, panel_y, self.status_panel_width, 92)
+        show_elim = last_eliminated and round_phase == "resolve"
+        panel_height = 90 if show_elim else 72
+        panel_rect = pygame.Rect(0, panel_y, self.status_panel_width, panel_height)
         panel_rect.centerx = self.width // 2
         panel = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
         panel.fill((0, 0, 0, 110))
         self.screen.blit(panel, panel_rect.topleft)
 
-        round_text = self.font_stats.render(f"Round {round_number}", True, (255, 255, 255))
-        round_rect = round_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 18))
-        self.screen.blit(round_text, round_rect)
-
-        letter_text = self.font_stats.render(f"Letter {char_index + 1}", True, (255, 255, 255))
-        letter_rect = letter_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 42))
+        letter_text = self.font_stats.render(f"Character {char_index + 1}", True, (255, 255, 255))
+        letter_rect = letter_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 24))
         self.screen.blit(letter_text, letter_rect)
 
         alive_text = self.font_stats.render(
@@ -170,7 +174,7 @@ class WheelSpinnerRenderer(RendererTemplate):
             True,
             (255, 255, 255),
         )
-        alive_rect = alive_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 66))
+        alive_rect = alive_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 50))
         self.screen.blit(alive_text, alive_rect)
 
         status_text = ""
@@ -184,13 +188,13 @@ class WheelSpinnerRenderer(RendererTemplate):
             status_rect = status_surface.get_rect(center=(self.width // 2, int(self.game_top - 22)))
             self.screen.blit(status_surface, status_rect)
 
-        if last_eliminated and round_phase == "resolve":
+        if show_elim:
             elim_surface = self.font_small.render(
                 f"Eliminated: {last_eliminated}",
                 True,
                 (255, 200, 200),
             )
-            elim_rect = elim_surface.get_rect(center=(panel_rect.centerx, panel_rect.y + 86))
+            elim_rect = elim_surface.get_rect(center=(panel_rect.centerx, panel_rect.y + 74))
             self.screen.blit(elim_surface, elim_rect)
 
     def _get_wheel_center(self, arena) -> Tuple[int, int]:
@@ -366,8 +370,10 @@ class WheelSpinnerRenderer(RendererTemplate):
         slice_angle = (2 * math.pi) / count
         start_angle = wheel_angle - slice_angle / 2
 
-        self._draw_wheel_backdrop(center, radius)
-        self._draw_wheel_shadow(center, radius)
+        if self.show_backdrop:
+            self._draw_wheel_backdrop(center, radius)
+        if self.shadow_alpha > 0:
+            self._draw_wheel_shadow(center, radius)
         self._draw_wheel_rim(center, radius)
 
         segments = []
@@ -377,19 +383,20 @@ class WheelSpinnerRenderer(RendererTemplate):
             seg_end = seg_start + slice_angle
             base_color = self.segment_colors[index % len(self.segment_colors)]
             mid_angle = (seg_start + seg_end) / 2
-            light_factor = 0.86 + 0.18 * math.cos(mid_angle - self.light_angle)
+            light_factor = 0.94 + 0.2 * math.cos(mid_angle - self.light_angle)
             color = self._shade_color(base_color, light_factor)
             if highlight_index is not None and index == highlight_index:
-                color = self._shade_color(color, 1.08)
+                color = self._shade_color(color, 1.12)
 
-            outer_color = self._shade_color(color, 1.08)
-            inner_color = self._shade_color(color, 0.82)
+            outer_color = self._shade_color(color, 1.12)
+            inner_color = self._shade_color(color, 0.9)
             self._draw_wedge(center, face_radius, seg_start, seg_end, outer_color)
             self._draw_wedge(center, face_radius - bevel, seg_start, seg_end, color)
             self._draw_wedge(center, face_radius - bevel * 2, seg_start, seg_end, inner_color)
             segments.append((seg_start, seg_end, option))
 
-        self._draw_face_overlays(center, face_radius)
+        if self.show_face_overlays:
+            self._draw_face_overlays(center, face_radius)
 
         for seg_start, seg_end, option in segments:
             self._draw_wedge_outline(center, face_radius, seg_start)
@@ -397,7 +404,8 @@ class WheelSpinnerRenderer(RendererTemplate):
 
         pygame.draw.circle(self.screen, self.face_border_color, center, face_radius, 2)
         self._draw_face_inner_ring(center, face_radius)
-        self._draw_rim_highlights(center, radius)
+        if self.show_rim_highlights:
+            self._draw_rim_highlights(center, radius)
         self._draw_hub(center, face_radius)
 
     def _draw_wedge(self, center: Tuple[int, int], radius: int, start_angle: float, end_angle: float, color: tuple):
@@ -430,11 +438,13 @@ class WheelSpinnerRenderer(RendererTemplate):
 
         font = self._get_option_font(option_count, label)
         text_surface = font.render(label, True, self.label_color)
-        shadow_surface = font.render(label, True, (0, 0, 0))
-        shadow_surface.set_alpha(self.label_shadow_alpha)
+        shadow_surface = None
+        if self.label_shadow_alpha > 0:
+            shadow_surface = font.render(label, True, (0, 0, 0))
+            shadow_surface.set_alpha(self.label_shadow_alpha)
 
         angle = (start_angle + end_angle) / 2
-        distance = radius * 0.62
+        distance = radius * self.label_radius_factor
         x = center[0] + math.cos(angle) * distance
         y = center[1] + math.sin(angle) * distance
 
@@ -442,13 +452,29 @@ class WheelSpinnerRenderer(RendererTemplate):
         if 90 < rotation < 270:
             rotation += 180
 
-        text_surface = pygame.transform.rotozoom(text_surface, -rotation, 1.0)
-        shadow_surface = pygame.transform.rotozoom(shadow_surface, -rotation, 1.0)
+        outline_surface = None
+        if self.label_outline_width > 0:
+            outline_surface = font.render(label, True, self.label_outline_color)
 
-        shadow_rect = shadow_surface.get_rect(
-            center=(int(x + self.label_shadow_offset), int(y + self.label_shadow_offset))
-        )
-        self.screen.blit(shadow_surface, shadow_rect)
+        text_surface = pygame.transform.rotozoom(text_surface, -rotation, 1.0)
+        if shadow_surface is not None:
+            shadow_surface = pygame.transform.rotozoom(shadow_surface, -rotation, 1.0)
+        if outline_surface is not None:
+            outline_surface = pygame.transform.rotozoom(outline_surface, -rotation, 1.0)
+
+        if shadow_surface is not None:
+            shadow_rect = shadow_surface.get_rect(
+                center=(int(x + self.label_shadow_offset), int(y + self.label_shadow_offset))
+            )
+            self.screen.blit(shadow_surface, shadow_rect)
+
+        if outline_surface is not None:
+            outline_rect = outline_surface.get_rect(center=(int(x), int(y)))
+            for dx in range(-self.label_outline_width, self.label_outline_width + 1):
+                for dy in range(-self.label_outline_width, self.label_outline_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    self.screen.blit(outline_surface, outline_rect.move(dx, dy))
 
         text_rect = text_surface.get_rect(center=(int(x), int(y)))
         self.screen.blit(text_surface, text_rect)
@@ -461,7 +487,9 @@ class WheelSpinnerRenderer(RendererTemplate):
             size = max(12, size - (len(label) - 1))
 
         if size not in self._option_fonts:
-            self._option_fonts[size] = pygame.font.Font(None, size)
+            font = pygame.font.Font(None, size)
+            font.set_bold(True)
+            self._option_fonts[size] = font
         return self._option_fonts[size]
 
     def _draw_pointer(self, center: Tuple[int, int]):

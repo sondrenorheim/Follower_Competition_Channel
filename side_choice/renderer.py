@@ -49,6 +49,8 @@ class SideChoiceRenderer(RendererTemplate):
         self.coin_face_scale = float(getattr(config, "SIDE_CHOICE_COIN_FACE_SCALE", 0.9))
         self.show_names_max = int(getattr(config, "SIDE_CHOICE_SHOW_NAMES_MAX", 5000))
         self.name_offset = int(getattr(config, "SIDE_CHOICE_NAME_OFFSET", 18))
+        name_font_size = int(getattr(config, "SIDE_CHOICE_NAME_FONT_SIZE", 16))
+        self.font_name = pygame.font.Font(None, name_font_size)
 
     def render_frame(self, players, game_state: dict):
         self.screen.fill(config.COLOR_BACKGROUND)
@@ -150,6 +152,11 @@ class SideChoiceRenderer(RendererTemplate):
             self._draw_player_avatar(player, size=size)
             if show_names and player.alive:
                 self._draw_player_name(player, offset_y=self.name_offset)
+
+    def _draw_player_name(self, player, offset_y: int = 20):
+        name_surface = self.font_name.render(player.username, True, config.COLOR_TEXT)
+        name_rect = name_surface.get_rect(center=(int(player.x), int(player.y) + offset_y))
+        self.screen.blit(name_surface, name_rect)
 
     def _draw_day_counter(self, players, game_state: dict):
         total_count = len(players)

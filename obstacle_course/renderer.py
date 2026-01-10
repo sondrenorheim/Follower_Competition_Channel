@@ -388,7 +388,7 @@ class ObstacleCourseRenderer:
                 screen_pos = camera.world_to_screen((racer.x, racer.y))
 
                 # Scale down high-res surface for display
-                display_size = int(config.FOLLOWER_RADIUS * 2)
+                display_size = int(config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2)
                 if surface.get_width() != display_size:
                     display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
                 else:
@@ -402,7 +402,7 @@ class ObstacleCourseRenderer:
                 if config.SHOW_NAMETAGS:
                     username = racer.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
                     text_x = int(screen_pos[0])
-                    text_y = int(screen_pos[1] + config.FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)
+                    text_y = int(screen_pos[1] + config.OBSTACLE_COURSE_FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)
 
                     text_surface = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
                     text_rect = text_surface.get_rect(center=(text_x, text_y))

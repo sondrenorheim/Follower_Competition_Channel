@@ -143,7 +143,7 @@ class Racer(Follower):
 
         # Store old position for collision resolution
         old_x, old_y = self.x, self.y
-        radius = config.FOLLOWER_RADIUS
+        radius = config.OBSTACLE_COURSE_FOLLOWER_RADIUS
 
         # Calculate movement - primarily horizontal (right) with smooth vertical adjustments
         movement_speed = self.get_movement_speed()
@@ -217,7 +217,7 @@ class Racer(Follower):
             return
 
         bounds = obstacle.get_bounds()  # (left, top, right, bottom)
-        radius = config.FOLLOWER_RADIUS
+        radius = config.OBSTACLE_COURSE_FOLLOWER_RADIUS
 
         # Calculate how far into each side we are
         penetration_left = (bounds[0] - radius) - self.x   # negative if inside from left
@@ -275,7 +275,7 @@ class Racer(Follower):
         dx = px - closest_x
         dy = py - closest_y
         dist = math.hypot(dx, dy)
-        min_dist = config.FOLLOWER_RADIUS + (spinner.bar_width / 2) + 2.0
+        min_dist = config.OBSTACLE_COURSE_FOLLOWER_RADIUS + (spinner.bar_width / 2) + 2.0
 
         if dist == 0:
             # Use bar normal if we land exactly on the bar line
@@ -304,7 +304,7 @@ class Racer(Follower):
         track_top, track_bottom = course.get_track_bounds_at_x(self.x)
 
         # Pick any position within the full track height
-        margin = config.FOLLOWER_RADIUS + 6
+        margin = config.OBSTACLE_COURSE_FOLLOWER_RADIUS + 6
         track_height = track_bottom - track_top - 2 * margin
         if track_height <= 0:
             return

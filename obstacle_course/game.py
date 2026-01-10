@@ -228,8 +228,8 @@ class ObstacleCourseGame:
 
         # Track boundaries - racers must fit within track width
         track_half_width = config.OBSTACLE_COURSE_WIDTH / 2
-        track_top = start_y - track_half_width + config.FOLLOWER_RADIUS
-        track_bottom = start_y + track_half_width - config.FOLLOWER_RADIUS
+        track_top = start_y - track_half_width + config.OBSTACLE_COURSE_FOLLOWER_RADIUS
+        track_bottom = start_y + track_half_width - config.OBSTACLE_COURSE_FOLLOWER_RADIUS
 
         # Calculate available space
         available_height = track_bottom - track_top
@@ -238,7 +238,7 @@ class ObstacleCourseGame:
         num_racers = len(follower_data)
 
         # Small horizontal offset to ensure all racers start behind the starting line
-        start_offset = config.FOLLOWER_RADIUS * 2  # Push back from start line
+        start_offset = config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2  # Push back from start line
 
         # Use the same layout as intro animation - 50 players per vertical line
         max_racers_per_vertical_line = 50
@@ -283,7 +283,7 @@ class ObstacleCourseGame:
                 continue
 
             for obstacle in self.course.obstacles:
-                if obstacle.check_collision((racer.x, racer.y), config.FOLLOWER_RADIUS):
+                if obstacle.check_collision((racer.x, racer.y), config.OBSTACLE_COURSE_FOLLOWER_RADIUS):
                     obstacle.apply_collision_effect(racer)
 
         # Track first finisher
@@ -495,8 +495,8 @@ class ObstacleCourseGame:
         # Get track boundaries to keep intro rows within finish line area
         start_y = self.course.start_line[1]
         track_half_width = config.OBSTACLE_COURSE_WIDTH / 2
-        track_top = start_y - track_half_width + config.FOLLOWER_RADIUS
-        track_bottom = start_y + track_half_width - config.FOLLOWER_RADIUS
+        track_top = start_y - track_half_width + config.OBSTACLE_COURSE_FOLLOWER_RADIUS
+        track_bottom = start_y + track_half_width - config.OBSTACLE_COURSE_FOLLOWER_RADIUS
         available_height = track_bottom - track_top
 
         # Store original positions and arrange racers in vertical lines
@@ -515,7 +515,7 @@ class ObstacleCourseGame:
         # Need to travel from -300 - (num_vertical_lines * spacing) to start line
         max_intro_duration = 10.0
         furthest_starting_x = -300 - ((num_vertical_lines - 1) * horizontal_line_spacing)
-        distance_to_travel = self.course.start_line[0] - config.FOLLOWER_RADIUS * 2 - furthest_starting_x
+        distance_to_travel = self.course.start_line[0] - config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2 - furthest_starting_x
         constant_speed = distance_to_travel / max_intro_duration  # pixels per second to complete in 10s
 
         for i, racer in enumerate(self.racers):

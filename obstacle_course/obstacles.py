@@ -108,13 +108,13 @@ class StaticWall(Obstacle):
 
         # Push racer away from closest edge
         if closest_edge == 'left':
-            racer.x = bounds[0] - config.FOLLOWER_RADIUS
+            racer.x = bounds[0] - config.OBSTACLE_COURSE_FOLLOWER_RADIUS
         elif closest_edge == 'right':
-            racer.x = bounds[2] + config.FOLLOWER_RADIUS
+            racer.x = bounds[2] + config.OBSTACLE_COURSE_FOLLOWER_RADIUS
         elif closest_edge == 'top':
-            racer.y = bounds[1] - config.FOLLOWER_RADIUS
+            racer.y = bounds[1] - config.OBSTACLE_COURSE_FOLLOWER_RADIUS
         elif closest_edge == 'bottom':
-            racer.y = bounds[3] + config.FOLLOWER_RADIUS
+            racer.y = bounds[3] + config.OBSTACLE_COURSE_FOLLOWER_RADIUS
 
 
 class MovingWall(Obstacle):
@@ -424,7 +424,7 @@ class Bumper(Obstacle):
             norm_dy = dy / distance
 
             # Push racer outside the bumper immediately to prevent sticking
-            min_distance = self.radius + config.FOLLOWER_RADIUS + 2
+            min_distance = self.radius + config.OBSTACLE_COURSE_FOLLOWER_RADIUS + 2
             if distance < min_distance:
                 racer.x = self.center_x + norm_dx * min_distance
                 racer.y = self.center_y + norm_dy * min_distance
@@ -499,7 +499,7 @@ class Crusher(Obstacle):
         racer.current_velocity = 0.0
 
         # Push racer to the left of the crusher (behind it)
-        racer.x = self.x - config.FOLLOWER_RADIUS - 5
+        racer.x = self.x - config.OBSTACLE_COURSE_FOLLOWER_RADIUS - 5
 
         # Apply strong push back velocity
         racer.push_vx = -20.0

@@ -40,6 +40,7 @@ class WheelSpinnerGame(GameTemplate):
         self.last_eliminated = 0
         self.selected_sequence = []
         self.username_length_hint = 0
+        self.option_weights = []
 
         self.windup_duration = float(getattr(config, "WHEEL_SPINNER_WINDUP_DURATION", 0.6))
         self.spin_duration = float(getattr(config, "WHEEL_SPINNER_SPIN_DURATION", 3.0))
@@ -180,21 +181,21 @@ class WheelSpinnerGame(GameTemplate):
         self.round_index += 1
         self.last_eliminated = 0
 
-        self.winning_option = random.choice(self.options)
+        self.winning_option = random.choices(self.options, weights=self.option_weights, k=1)[0]
         self.winning_index = self.options.index(self.winning_option)
 
         self._start_windup()
 
     def _build_options(self, alive_players: List[WheelSpinnerPlayer]) -> List[str]:
-        seen = set()
-        options = []
+        counts = {}
         for player in alive_players:
             option = player.get_char_at(self.char_index)
-            if option not in seen:
-                seen.add(option)
-                options.append(option)
-        random.shuffle(options)
-        return options
+            counts[option] = counts.get(option, 0) + 1
+
+        items = list(counts.items())
+        random.shuffle(items)
+        self.option_weights = [count for _, count in items]
+        return [option for option, _ in items]
 
     def _start_windup(self):
         self.round_phase = "windup"

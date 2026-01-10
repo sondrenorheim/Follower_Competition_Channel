@@ -5,6 +5,7 @@ Automatically commits and pushes stats files to GitHub after each game
 
 import subprocess
 import os
+import time
 from datetime import datetime
 from typing import List, Optional
 
@@ -130,15 +131,31 @@ def push_stats_to_github(
         )
         print("   + Committed changes")
 
-        # Push to remote
-        push_result = subprocess.run(
-            ['git', 'push'],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30  # 30 second timeout
-        )
-        print("   + Pushed to GitHub")
+        # Push to remote (with retry + longer timeout)
+        push_timeout = getattr(config, "GIT_PUSH_TIMEOUT_SECONDS", 300)
+        push_retries = getattr(config, "GIT_PUSH_RETRIES", 2)
+        last_timeout = None
+
+        for attempt in range(1, push_retries + 1):
+            try:
+                subprocess.run(
+                    ['git', 'push'],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=push_timeout
+                )
+                print("   + Pushed to GitHub")
+                last_timeout = None
+                break
+            except subprocess.TimeoutExpired as e:
+                last_timeout = e
+                print(f"ERROR: Git push timed out after {push_timeout}s (attempt {attempt}/{push_retries})")
+                if attempt < push_retries:
+                    time.sleep(5)
+
+        if last_timeout is not None:
+            raise last_timeout
 
         print("SUCCESS: Stats successfully pushed to GitHub!")
         print("   -> Website will auto-update via GitHub Actions\n")

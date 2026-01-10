@@ -387,10 +387,26 @@ class GameHistory:
             json.dump(history_index, f, ensure_ascii=False, separators=(',', ':'))
 
         # Step 6: Create master index
+        # Load follower count from all_followers_fresh.json
+        total_followers = 0
+        try:
+            from pathlib import Path
+            followers_file = Path(config.FOLLOWER_IMPORT_FILE)
+            if followers_file.exists():
+                with open(followers_file, 'r', encoding='utf-8') as f:
+                    followers_data = json.load(f)
+                    if isinstance(followers_data, list):
+                        total_followers = len(followers_data)
+                    elif isinstance(followers_data, dict) and 'followers' in followers_data:
+                        total_followers = len(followers_data['followers'])
+        except Exception:
+            pass
+
         index_data = {
             "last_updated": datetime.now().isoformat(),
             "total_games": len(self.history.get("games", [])),
             "total_days": len(all_days),
+            "total_followers": total_followers,
             "available_days": sorted(all_days),
             "days_metadata": day_metadata,
             "game_types": sorted(all_types),
