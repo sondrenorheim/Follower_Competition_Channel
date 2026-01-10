@@ -231,7 +231,7 @@ export default function MediaKit() {
             What is Follower Battlegrounds?
           </h2>
           <p className="text-lg md:text-xl text-text-secondary leading-relaxed mb-6">
-            A unique social media entertainment platform where <span className="text-primary-bright font-semibold">Instagram followers compete as characters</span> in daily gaming events. Each follower becomes a player in various game modes, creating engaging content that builds community and drives participation.
+            A daily Instagram gaming series where <span className="text-primary-bright font-semibold">followers compete as in-game characters</span>. We create video content featuring our audience in various game modes - from Battle Royales to obstacle courses - building community and driving engagement through competition.
           </p>
           <p className="text-lg text-accent-bright font-medium">
             Every follower is a potential winner.
@@ -260,6 +260,210 @@ export default function MediaKit() {
             <div className="inline-flex items-center gap-3 bg-success/10 border border-success/30 rounded-full px-6 py-3">
               <span className="text-2xl">📈</span>
               <span className="text-success font-bold text-lg">9,600% Engagement Growth</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Engagement & Reach Section */}
+      <section className="py-16 md:py-24 bg-dark-bg-secondary/30">
+        <div className="max-w-6xl mx-auto px-6">
+          <h2 className="text-3xl md:text-4xl font-bold text-text-primary text-center mb-4">
+            Engagement & Reach
+          </h2>
+          <p className="text-text-muted text-center mb-12 max-w-2xl mx-auto">
+            Last 30 days performance metrics from Instagram Insights
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-8">
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
+              <div className="text-3xl md:text-4xl font-bold text-primary-bright mb-1">
+                <AnimatedCounter end={4.4} suffix="M" />
+              </div>
+              <div className="text-text-muted text-sm">Total Views</div>
+            </div>
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
+              <div className="text-3xl md:text-4xl font-bold text-accent-bright mb-1">
+                <AnimatedCounter end={2} suffix="M+" />
+              </div>
+              <div className="text-text-muted text-sm">Accounts Reached</div>
+            </div>
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
+              <div className="text-3xl md:text-4xl font-bold text-success mb-1">
+                <AnimatedCounter end={216} suffix="K" />
+              </div>
+              <div className="text-text-muted text-sm">Interactions</div>
+            </div>
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
+              <div className="text-3xl md:text-4xl font-bold text-warning mb-1">
+                <AnimatedCounter end={165} suffix="K" />
+              </div>
+              <div className="text-text-muted text-sm">Accounts Engaged</div>
+            </div>
+          </div>
+
+          {/* Key insights */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-dark-bg-tertiary rounded-xl p-5 border border-dark-surface">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-2xl">🎯</span>
+                <span className="text-text-primary font-semibold">Viral Reach</span>
+              </div>
+              <p className="text-text-secondary text-sm">
+                <span className="text-primary-bright font-bold">79.3%</span> of views come from non-followers, showing strong discovery and viral potential
+              </p>
+            </div>
+            <div className="bg-dark-bg-tertiary rounded-xl p-5 border border-dark-surface">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-2xl">👆</span>
+                <span className="text-text-primary font-semibold">Profile Activity</span>
+              </div>
+              <p className="text-text-secondary text-sm">
+                <span className="text-accent-bright font-bold">115K</span> profile visits and <span className="text-accent-bright font-bold">10.9K</span> external link taps in 30 days
+              </p>
+            </div>
+            <div className="bg-dark-bg-tertiary rounded-xl p-5 border border-dark-surface">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-2xl">🔥</span>
+                <span className="text-text-primary font-semibold">Top Performers</span>
+              </div>
+              <p className="text-text-secondary text-sm">
+                Best reels reach <span className="text-success font-bold">179K</span>, <span className="text-success font-bold">78K</span>, <span className="text-success font-bold">47K</span> views individually
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Audience Demographics Section */}
+      <section className="py-16 md:py-24">
+        <div className="max-w-6xl mx-auto px-6">
+          <h2 className="text-3xl md:text-4xl font-bold text-text-primary text-center mb-4">
+            Audience Demographics
+          </h2>
+          <p className="text-text-muted text-center mb-12 max-w-2xl mx-auto">
+            Who's watching - data from Instagram Insights
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Age Distribution */}
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-6">
+              <h3 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+                <span>📊</span> Age Distribution
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-muted">13-17</span>
+                    <span className="text-warning font-medium">25.5%</span>
+                  </div>
+                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                    <div className="h-full bg-warning rounded-full" style={{width: '25.5%'}}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-muted">18-24</span>
+                    <span className="text-primary-bright font-medium">34.1%</span>
+                  </div>
+                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                    <div className="h-full bg-primary-bright rounded-full" style={{width: '34.1%'}}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-muted">25-34</span>
+                    <span className="text-primary font-medium">29.7%</span>
+                  </div>
+                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                    <div className="h-full bg-primary rounded-full" style={{width: '29.7%'}}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-muted">35-44</span>
+                    <span className="text-accent font-medium">6.4%</span>
+                  </div>
+                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                    <div className="h-full bg-accent rounded-full" style={{width: '6.4%'}}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-muted">45+</span>
+                    <span className="text-text-muted font-medium">4.3%</span>
+                  </div>
+                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                    <div className="h-full bg-dark-bg-tertiary rounded-full" style={{width: '4.3%'}}></div>
+                  </div>
+                </div>
+              </div>
+              <p className="text-accent-bright text-sm mt-4 font-medium">89% under 35 years old</p>
+            </div>
+
+            {/* Gender Split */}
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-6">
+              <h3 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+                <span>👤</span> Gender Split
+              </h3>
+              <div className="flex items-center justify-center gap-6 py-4">
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-primary-bright">81%</div>
+                  <div className="text-text-muted text-sm mt-1">Male</div>
+                </div>
+                <div className="w-px h-16 bg-dark-surface"></div>
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-accent">19%</div>
+                  <div className="text-text-muted text-sm mt-1">Female</div>
+                </div>
+              </div>
+              <p className="text-text-secondary text-sm mt-4 text-center">
+                Male-skewed gaming audience
+              </p>
+            </div>
+
+            {/* Top Countries */}
+            <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-6">
+              <h3 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+                <span>🌍</span> Top Countries
+              </h3>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">United States</span>
+                  <span className="text-primary-bright font-medium">32.5%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">United Kingdom</span>
+                  <span className="text-primary font-medium">4.6%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">Indonesia</span>
+                  <span className="text-accent font-medium">4.2%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">France</span>
+                  <span className="text-accent font-medium">3.9%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">Italy</span>
+                  <span className="text-text-muted font-medium">3.7%</span>
+                </div>
+              </div>
+              <p className="text-text-secondary text-sm mt-4">
+                Global reach, 50+ countries
+              </p>
+            </div>
+          </div>
+
+          {/* Interests tag */}
+          <div className="mt-8 text-center">
+            <p className="text-text-muted text-sm mb-3">Audience Interests</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {['Gaming', 'Tech', 'Entertainment', 'Memes', 'Esports', 'Social Media'].map((interest, i) => (
+                <span key={i} className="bg-dark-bg-secondary border border-dark-surface px-4 py-2 rounded-full text-sm text-text-secondary">
+                  {interest}
+                </span>
+              ))}
             </div>
           </div>
         </div>
