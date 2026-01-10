@@ -16,21 +16,33 @@ export default function PlayerProfile() {
   const [gameTypes, setGameTypes] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('Starting');
 
   useEffect(() => {
     async function loadPlayerData() {
       setLoading(true);
+      setLoadingProgress(10);
+      setLoadingMessage('Loading player stats');
       try {
         const data = await getPlayerStats(username);
+        setLoadingProgress(45);
+        setLoadingMessage('Loading game history');
         const history = await getPlayerGameHistory(username, null);
+        setLoadingProgress(80);
+        setLoadingMessage('Loading game types');
         const types = await getGameTypes();
 
         setPlayerData(data);
         setAllGameHistory(history);
         setGameHistory(history);
         setGameTypes(types);
+        setLoadingProgress(100);
+        setLoadingMessage('Done');
       } catch (error) {
         console.error('Error loading player data:', error);
+        setLoadingProgress(100);
+        setLoadingMessage('Loading failed');
       } finally {
         setLoading(false);
       }
@@ -103,7 +115,20 @@ export default function PlayerProfile() {
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
-        <div className="text-xl text-gray-600">Loading...</div>
+        <div className="flex flex-col items-center">
+          <div className="text-xl text-gray-600">Loading...</div>
+          <div className="mt-4 w-64 max-w-xs">
+            <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-300"
+                style={{ width: `${loadingProgress}%` }}
+              ></div>
+            </div>
+            <div className="mt-2 text-sm text-gray-500">
+              {loadingMessage} {loadingProgress}%
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

@@ -12,6 +12,8 @@ export default function MonthlyRankings() {
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('Starting');
   const [currentPage, setCurrentPage] = useState(1);
   const [availableMonths, setAvailableMonths] = useState([]);
   const [selectedStatCategory, setSelectedStatCategory] = useState('points');
@@ -59,6 +61,8 @@ export default function MonthlyRankings() {
     async function loadIndexData() {
       let shouldStopLoading = true;
       setLoading(true);
+      setLoadingProgress(5);
+      setLoadingMessage('Loading index');
       try {
         const index = await loadIndex();
         if (!index || !isMounted) return;
@@ -81,6 +85,8 @@ export default function MonthlyRankings() {
         });
 
         setAvailableMonths(months);
+        setLoadingProgress(30);
+        setLoadingMessage('Preparing filters');
 
         if (months.length > 0) {
           setSelectedMonth(months[0].month);
@@ -94,6 +100,8 @@ export default function MonthlyRankings() {
         }));
         setGameTypes(types);
         setIndexReady(true);
+        setLoadingProgress(40);
+        setLoadingMessage('Index ready');
         shouldStopLoading = false;
 
         getAllPlayerStats()
@@ -127,24 +135,34 @@ export default function MonthlyRankings() {
 
     async function loadData() {
       setLoading(true);
+      setLoadingProgress(50);
+      setLoadingMessage('Loading leaderboard');
       try {
         if (viewMode === 'monthly') {
           if (!selectedMonth || !selectedYear) {
             setLeaderboardData([]);
             return;
           }
+          setLoadingProgress(70);
+          setLoadingMessage('Loading monthly results');
           const monthly = await getMonthlyLeaderboard(selectedYear, selectedMonth, null, gameTypeFilter);
           if (!isMounted) return;
           setLeaderboardData(monthly);
+          setLoadingProgress(100);
+          setLoadingMessage('Done');
         } else {
           let base = allTimeCache;
           if (!base) {
+            setLoadingProgress(70);
+            setLoadingMessage('Loading all-time stats');
             const players = await getAllPlayerStats();
             base = buildAllTimeCache(players);
             if (!isMounted) return;
             setAllTimeCache(base);
           }
 
+          setLoadingProgress(90);
+          setLoadingMessage('Sorting results');
           const data = [...base];
           if (viewMode === 'top-stats') {
             data.sort((a, b) => {
@@ -171,9 +189,13 @@ export default function MonthlyRankings() {
 
           if (!isMounted) return;
           setLeaderboardData(data);
+          setLoadingProgress(100);
+          setLoadingMessage('Done');
         }
       } catch (error) {
         console.error('Error loading leaderboard:', error);
+        setLoadingProgress(100);
+        setLoadingMessage('Loading failed');
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -223,6 +245,17 @@ export default function MonthlyRankings() {
           <div className="w-3 h-3 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
           <div className="w-3 h-3 bg-secondary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
           <div className="w-3 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+        </div>
+        <div className="mt-6 w-64 max-w-xs">
+          <div className="h-2 rounded-full bg-dark-bg-tertiary overflow-hidden border border-slate-600">
+            <div
+              className="h-full bg-gradient-to-r from-primary via-secondary to-accent transition-all duration-300"
+              style={{ width: `${loadingProgress}%` }}
+            ></div>
+          </div>
+          <div className="mt-3 text-sm text-text-muted">
+            {loadingMessage} {loadingProgress}%
+          </div>
         </div>
       </div>
     );

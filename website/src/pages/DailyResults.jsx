@@ -17,6 +17,8 @@ export default function DailyResults() {
   const [selectedGame, setSelectedGame] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('Starting');
   const [currentPage, setCurrentPage] = useState(1);
   const prefetchAllStartedRef = useRef(false);
 
@@ -24,8 +26,12 @@ export default function DailyResults() {
   useEffect(() => {
     async function loadData() {
       setLoading(true);
+      setLoadingProgress(5);
+      setLoadingMessage('Loading index');
       try {
         const index = await loadIndex();
+        setLoadingProgress(35);
+        setLoadingMessage('Loading latest day');
         const types = (index?.types_metadata || []).map((t) => ({
           type: t.type,
           displayName: t.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
@@ -37,11 +43,15 @@ export default function DailyResults() {
         if (availableDays.length === 0) {
           setGames([]);
           setSelectedDayNumber(null);
+          setLoadingProgress(100);
+          setLoadingMessage('No days available');
           return;
         }
 
         const maxDay = Math.max(...availableDays);
         const dayData = await loadDay(maxDay);
+        setLoadingProgress(75);
+        setLoadingMessage('Preparing results');
         if (dayData && dayData.games) {
           const dayGames = dayData.games.map((gameSummary) => ({
             game_id: gameSummary.game_id,
@@ -57,8 +67,12 @@ export default function DailyResults() {
           setGames([]);
         }
         setSelectedDayNumber(maxDay);
+        setLoadingProgress(100);
+        setLoadingMessage('Done');
       } catch (error) {
         console.error('Error loading games:', error);
+        setLoadingProgress(100);
+        setLoadingMessage('Loading failed');
       } finally {
         setLoading(false);
       }
@@ -233,6 +247,17 @@ export default function DailyResults() {
           <div className="w-3 h-3 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
           <div className="w-3 h-3 bg-secondary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
           <div className="w-3 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+        </div>
+        <div className="mt-6 w-64 max-w-xs">
+          <div className="h-2 rounded-full bg-dark-bg-tertiary overflow-hidden border border-slate-600">
+            <div
+              className="h-full bg-gradient-to-r from-primary via-secondary to-accent transition-all duration-300"
+              style={{ width: `${loadingProgress}%` }}
+            ></div>
+          </div>
+          <div className="mt-3 text-sm text-text-muted">
+            {loadingMessage} {loadingProgress}%
+          </div>
         </div>
       </div>
     );
