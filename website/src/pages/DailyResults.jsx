@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { getGamesByType, getGameTypes, getGameWithResults } from '../utils/dataLoader';
+import React, { useState, useEffect, useRef } from 'react';
+import { getGamesByType, getGameWithResults, loadDay, loadIndex } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 import GameFilter from '../components/GameFilter';
@@ -13,39 +13,90 @@ export default function DailyResults() {
   const [gameTypes, setGameTypes] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
   const [selectedDayNumber, setSelectedDayNumber] = useState(null);
+  const [allGamesCache, setAllGamesCache] = useState(null);
   const [selectedGame, setSelectedGame] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
+  const prefetchAllStartedRef = useRef(false);
 
   // Load game types on mount
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
-        const types = await getGameTypes();
+        const index = await loadIndex();
+        const types = (index?.types_metadata || []).map((t) => ({
+          type: t.type,
+          displayName: t.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          count: t.games
+        }));
         setGameTypes(types);
 
-        const loadedGames = await getGamesByType('all');
-        setGames(loadedGames);
-
-        // Find highest day number
-        if (loadedGames.length > 0) {
-          const maxDay = Math.max(...loadedGames.map(g => g.day_number));
-          setSelectedDayNumber(maxDay);
+        const availableDays = index?.available_days || [];
+        if (availableDays.length === 0) {
+          setGames([]);
+          setSelectedDayNumber(null);
+          return;
         }
+
+        const maxDay = Math.max(...availableDays);
+        const dayData = await loadDay(maxDay);
+        if (dayData && dayData.games) {
+          const dayGames = dayData.games.map((gameSummary) => ({
+            game_id: gameSummary.game_id,
+            game_type: gameSummary.game_type,
+            game_display_name: gameSummary.game_display_name,
+            day_number: dayData.day_number,
+            timestamp: gameSummary.timestamp,
+            total_participants: gameSummary.total_participants,
+            _isSummary: true,
+          }));
+          setGames(dayGames);
+        } else {
+          setGames([]);
+        }
+        setSelectedDayNumber(maxDay);
       } catch (error) {
         console.error('Error loading games:', error);
       } finally {
         setLoading(false);
       }
     }
-    loadData();
+    let isMounted = true;
+    loadData().then(() => {
+      if (!isMounted || prefetchAllStartedRef.current) {
+        return;
+      }
+      prefetchAllStartedRef.current = true;
+      (async () => {
+        const loadedGames = await getGamesByType('all');
+        if (!isMounted) return;
+        setAllGamesCache(loadedGames);
+      })();
+    });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Filter games when game type changes
   useEffect(() => {
     async function filterGames() {
+      if (selectedGameType === 'all') {
+        if (!allGamesCache || allGamesCache.length === 0) {
+          return;
+        }
+        setGames(allGamesCache);
+
+        const availableDays = allGamesCache.map(g => g.day_number);
+        const maxDay = Math.max(...availableDays);
+        if (selectedDayNumber === null || !availableDays.includes(selectedDayNumber)) {
+          setSelectedDayNumber(maxDay);
+        }
+        return;
+      }
+
       const filtered = await getGamesByType(selectedGameType);
       setGames(filtered);
 
@@ -60,7 +111,7 @@ export default function DailyResults() {
       }
     }
     filterGames();
-  }, [selectedGameType, selectedDayNumber]);
+  }, [selectedGameType, selectedDayNumber, allGamesCache]);
 
   // Update selected game when day number or filtered games change
   useEffect(() => {
