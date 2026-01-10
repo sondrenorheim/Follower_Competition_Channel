@@ -22,7 +22,7 @@ export default function PlayerProfile() {
       setLoading(true);
       try {
         const data = await getPlayerStats(username);
-        const history = await getPlayerGameHistory(username, 1000);
+        const history = await getPlayerGameHistory(username, null);
         const types = await getGameTypes();
 
         setPlayerData(data);
@@ -220,7 +220,7 @@ export default function PlayerProfile() {
 
         {/* Recent Game History */}
         <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Recent Games</h2>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Game History</h2>
 
         {gameHistory.length > 0 ? (
           <div className="overflow-x-auto">

@@ -8,6 +8,7 @@
  * - api/games/{game_id}.json - Individual game files
  * - api/types/{game_type}.json - Game type indexes
  * - api/players/{letter}.json - Player stats by first letter
+ * - api/player_history/{letter}.json - Player game history by first letter
  */
 
 const DATA_BASE_PATH = '/'; // Serve from root (works in both dev and production)
@@ -20,6 +21,8 @@ let cachedTypes = new Map(); // Map of game_type -> type_index
 let cachedPlayerLetters = new Map(); // Map of letter -> player_data
 let cachedPlayerIndex = null;
 let cachedMonthlyLeaderboards = new Map(); // Map of YYYY-MM -> leaderboard_data
+let cachedPlayerHistoryIndex = null;
+let cachedPlayerHistoryLetters = new Map(); // Map of letter -> player history data
 
 // Game code mapping for compact web stats
 const GAME_CODE_MAP = {
@@ -163,6 +166,30 @@ export async function loadPlayerIndex() {
 }
 
 /**
+ * Load player history index (compact per-player game history).
+ * @returns {Promise<Object>} Player history index data
+ */
+export async function loadPlayerHistoryIndex() {
+  if (cachedPlayerHistoryIndex) {
+    return cachedPlayerHistoryIndex;
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/player_history/index.json`);
+    if (!response.ok) {
+      console.warn('Player history index not found');
+      return null;
+    }
+    const data = await response.json();
+    cachedPlayerHistoryIndex = data;
+    return data;
+  } catch (err) {
+    console.error('Error loading player history index:', err);
+    return null;
+  }
+}
+
+/**
  * Load players for a specific letter group (partitioned)
  * @param {string} letter - Letter to load (a-z, 0)
  * @returns {Promise<Object>} Players data for that letter
@@ -186,6 +213,33 @@ export async function loadPlayerLetter(letter) {
     return data;
   } catch (err) {
     console.error(`Error loading players for letter ${letter}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Load player history for a specific letter group (partitioned)
+ * @param {string} letter - Letter to load (a-z, 0)
+ * @returns {Promise<Object>} Player history data for that letter
+ */
+export async function loadPlayerHistoryLetter(letter) {
+  letter = letter.toLowerCase();
+
+  if (cachedPlayerHistoryLetters.has(letter)) {
+    return cachedPlayerHistoryLetters.get(letter);
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/player_history/${letter}.json`);
+    if (!response.ok) {
+      console.warn(`Player history letter ${letter} not found`);
+      return null;
+    }
+    const data = await response.json();
+    cachedPlayerHistoryLetters.set(letter, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading player history for letter ${letter}:`, err);
     return null;
   }
 }
@@ -337,6 +391,34 @@ export async function getAllTimeLeaderboard(limit = 10) {
 }
 
 /**
+ * Get all players with full stats (all-time)
+ * @returns {Promise<Array>} Array of {username, stats} objects
+ */
+export async function getAllPlayerStats() {
+  const playerIndex = await loadPlayerIndex();
+  if (!playerIndex || !playerIndex.letters) {
+    return [];
+  }
+
+  const letterData = await Promise.all(
+    playerIndex.letters.map((letter) => loadPlayerLetter(letter))
+  );
+
+  const players = [];
+  letterData.forEach((data) => {
+    if (!data || !data.players) return;
+    Object.entries(data.players).forEach(([username, entry]) => {
+      players.push({
+        username,
+        stats: entry.s || []
+      });
+    });
+  });
+
+  return players;
+}
+
+/**
  * Load pre-computed monthly leaderboard
  * @param {string} monthKey - Month key in YYYY-MM format
  * @returns {Promise<Object>} Monthly leaderboard data
@@ -367,34 +449,44 @@ async function loadMonthlyLeaderboard(monthKey) {
  * @param {number} year - Year
  * @param {number} month - Month (1-12)
  * @param {number} limit - Number of top players to return
+ * @param {string} gameType - Game type identifier or "all"
  * @returns {Promise<Array>} Array of player rankings for the month
  */
-export async function getMonthlyLeaderboard(year, month, limit = 1000) {
+export async function getMonthlyLeaderboard(year, month, limit = null, gameType = 'all') {
   // Build month key (YYYY-MM format)
   const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const leaderboardKey = gameType === 'all' ? monthKey : `${monthKey}_${gameType}`;
 
   // Load pre-computed monthly leaderboard (single request!)
-  const monthData = await loadMonthlyLeaderboard(monthKey);
+  const monthData = await loadMonthlyLeaderboard(leaderboardKey);
 
   if (!monthData || !monthData.leaderboard) {
-    console.warn(`No pre-computed leaderboard for ${monthKey}`);
+    console.warn(`No pre-computed leaderboard for ${leaderboardKey}`);
     return [];
   }
 
   // Convert compact format to expected format
-  const leaderboard = monthData.leaderboard.slice(0, limit).map(entry => ({
-    username: entry.u,
-    points: entry.p,
-    games: entry.g,
-    wins: entry.w,
-    bestPlacement: entry.b || Infinity,
-    totalKills: entry.k || 0,
-    rank: entry.r
-  }));
+  const leaderboard = monthData.leaderboard.map(entry => {
+    const totalPlacement = entry.t || 0;
+    return {
+      username: entry.u,
+      points: entry.p,
+      games: entry.g,
+      wins: entry.w,
+      bestPlacement: entry.b || Infinity,
+      totalKills: entry.k || 0,
+      totalPlacement,
+      avgPlacement: entry.g ? (totalPlacement / entry.g).toFixed(1) : '0.0',
+      rank: entry.r
+    };
+  });
 
-  console.log(`✅ Loaded monthly leaderboard ${monthKey}: ${leaderboard.length} players (1 request)`);
-  return leaderboard;
+  const trimmed = limit === null || limit === undefined ? leaderboard : leaderboard.slice(0, limit);
+
+  console.log(`?. Loaded monthly leaderboard ${leaderboardKey}: ${trimmed.length} players (1 request)`);
+  return trimmed;
 }
+
 
 /**
  * Get game history for a specific player
@@ -403,14 +495,58 @@ export async function getMonthlyLeaderboard(year, month, limit = 1000) {
  * @returns {Promise<Array>} Array of game records where player participated
  */
 export async function getPlayerGameHistory(username, limit = 10) {
-  // First get player's recent game IDs from their stats
-  const playerStats = await getPlayerStats(username);
-  if (!playerStats || !playerStats.recent_games || playerStats.recent_games.length === 0) {
-    // Fallback: search all games (slower)
-    return await getPlayerGameHistoryFull(username, limit);
+  const resolvedLimit = limit === null || limit === undefined ? null : limit;
+
+  // Try compact player history index first (fast path)
+  const historyIndex = await loadPlayerHistoryIndex();
+  if (historyIndex && Array.isArray(historyIndex.games)) {
+    const firstLetter = username[0].toLowerCase();
+    const letter = firstLetter.match(/[a-z]/) ? firstLetter : '0';
+    const letterData = await loadPlayerHistoryLetter(letter);
+    const entries = letterData?.players?.[username];
+
+    if (Array.isArray(entries) && entries.length > 0) {
+      const gamesMeta = historyIndex.games;
+      const pointsScale = historyIndex.points_scale || 1;
+      const count = resolvedLimit ? Math.min(resolvedLimit, entries.length) : entries.length;
+      const playerGames = [];
+
+      for (let i = 0; i < count; i += 1) {
+        const entry = entries[i];
+        const gameMeta = gamesMeta[entry[0]];
+        if (!gameMeta) continue;
+
+        const placement = entry[1] || 0;
+        const points = (entry[2] || 0) / pointsScale;
+        const kills = entry[3] || 0;
+
+        playerGames.push({
+          gameId: gameMeta[0],
+          gameType: gameMeta[1],
+          dayNumber: gameMeta[2],
+          timestamp: gameMeta[3],
+          placement,
+          rank: placement,
+          points,
+          kills,
+          damage: 0,
+          survival_time: 0,
+        });
+      }
+
+      return playerGames;
+    }
   }
 
-  const recentGameIds = playerStats.recent_games.slice(0, limit);
+  // Fallback: use recent games list (fast) or scan all games (slow)
+  const playerStats = await getPlayerStats(username);
+  if (!playerStats || !playerStats.recent_games || playerStats.recent_games.length === 0) {
+    const fallbackLimit = resolvedLimit === null ? 1000 : resolvedLimit;
+    return await getPlayerGameHistoryFull(username, fallbackLimit);
+  }
+
+  const recentLimit = resolvedLimit === null ? playerStats.recent_games.length : resolvedLimit;
+  const recentGameIds = playerStats.recent_games.slice(0, recentLimit);
   const playerGames = [];
 
   // Load each game and extract player's result
@@ -438,6 +574,7 @@ export async function getPlayerGameHistory(username, limit = 10) {
 
   return playerGames;
 }
+
 
 /**
  * Get full game history for a player (fallback method - searches all games)
@@ -518,5 +655,7 @@ export function clearCache() {
   cachedPlayerLetters.clear();
   cachedPlayerIndex = null;
   cachedMonthlyLeaderboards.clear();
-  console.log('🗑️ Cache cleared');
+  cachedPlayerHistoryIndex = null;
+  cachedPlayerHistoryLetters.clear();
+  console.log('dY-`?,? Cache cleared');
 }

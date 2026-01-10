@@ -5,7 +5,13 @@ import { getGameTypeInfo } from '../utils/formatters';
  * GameFilter Component
  * Dropdown filter for selecting game type
  */
-export default function GameFilter({ value, onChange, gameTypes = [] }) {
+export default function GameFilter({
+  value,
+  onChange,
+  gameTypes = [],
+  disabled = false,
+  helperText = ''
+}) {
   const allGameTypes = [
     { type: 'all', displayName: 'All Games', count: gameTypes.reduce((sum, g) => sum + g.count, 0) },
     ...gameTypes
@@ -22,7 +28,8 @@ export default function GameFilter({ value, onChange, gameTypes = [] }) {
           id="game-filter"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
+          disabled={disabled}
+          className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {allGameTypes.map((gameType) => {
             return (
@@ -42,6 +49,9 @@ export default function GameFilter({ value, onChange, gameTypes = [] }) {
           </svg>
         </div>
       </div>
+      {helperText ? (
+        <p className="mt-2 text-xs text-text-muted">{helperText}</p>
+      ) : null}
     </div>
   );
 }

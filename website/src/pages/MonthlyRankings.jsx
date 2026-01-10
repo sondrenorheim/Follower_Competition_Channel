@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { loadIndex, loadDay, loadGame } from '../utils/dataLoader';
+import { loadIndex, getMonthlyLeaderboard, getAllPlayerStats } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 
@@ -15,51 +15,66 @@ export default function MonthlyRankings() {
   const [currentPage, setCurrentPage] = useState(1);
   const [availableMonths, setAvailableMonths] = useState([]);
   const [selectedStatCategory, setSelectedStatCategory] = useState('points');
-  const [historyData, setHistoryData] = useState(null);
   const [gameTypeFilter, setGameTypeFilter] = useState('all'); // 'all' or specific game_type
+  const [gameTypes, setGameTypes] = useState([]);
+  const [allTimeCache, setAllTimeCache] = useState(null);
+  const [indexReady, setIndexReady] = useState(false);
 
   // Current month/year
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
 
-  // Load available months from partitioned API
+  const buildAllTimeCache = (players) => {
+    const leaderboard = players.map(({ username, stats }) => {
+      const points = stats[0] || 0;
+      const games = stats[1] || 0;
+      const totalPlacement = stats[3] || 0;
+      const wins = stats[4] || 0;
+      const top3 = stats[5] || 0;
+      const top10 = stats[6] || 0;
+      const totalKills = stats[11] || 0;
+      const avgPlacement = games > 0 ? (totalPlacement / games).toFixed(1) : '0.0';
+
+      return {
+        username,
+        points,
+        games,
+        wins,
+        avgPlacement,
+        totalKills,
+        top3Finishes: top3,
+        top10PctFinishes: top10
+      };
+    });
+
+    leaderboard.sort((a, b) => b.points - a.points);
+    return leaderboard;
+  };
+
+  // Load available months and game types from the index
   useEffect(() => {
-    async function loadAvailableMonths() {
+    let isMounted = true;
+
+    async function loadIndexData() {
+      let shouldStopLoading = true;
+      setLoading(true);
       try {
         const index = await loadIndex();
-        if (!index) return;
+        if (!index || !isMounted) return;
 
-        const monthSet = new Set();
-        const allGames = [];
-
-        // Load all days to get game timestamps
-        for (const dayNum of index.available_days || []) {
-          const dayData = await loadDay(dayNum);
-          if (!dayData || !dayData.games) continue;
-
-          for (const gameSummary of dayData.games) {
-            const gameDate = new Date(gameSummary.timestamp);
-            const key = `${gameDate.getFullYear()}-${gameDate.getMonth() + 1}`;
-            monthSet.add(key);
-            // Store summary for later
-            allGames.push(gameSummary);
-          }
-        }
-
-        // Store summaries as "history" for aggregation
-        setHistoryData({ games: allGames });
-
-        const months = Array.from(monthSet).map(key => {
+        const months = (index.available_months || []).map((key) => {
           const [year, month] = key.split('-').map(Number);
           return {
             month,
             year,
-            label: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+            label: new Date(year, month - 1, 1).toLocaleDateString('en-US', {
+              month: 'long',
+              year: 'numeric'
+            })
           };
         });
 
-        // Sort by year and month descending (most recent first)
         months.sort((a, b) => {
           if (a.year !== b.year) return b.year - a.year;
           return b.month - a.month;
@@ -67,96 +82,72 @@ export default function MonthlyRankings() {
 
         setAvailableMonths(months);
 
-        // Set selected month to most recent available
         if (months.length > 0) {
           setSelectedMonth(months[0].month);
           setSelectedYear(months[0].year);
         }
-      } catch (error) {
-        console.error('Error loading available months:', error);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadAvailableMonths();
-  }, []);
 
-  // Helper to build leaderboard from history data with optional filters
-  const buildAggregatedLeaderboard = async (history, { month = null, year = null, gameType = 'all' }) => {
-    const players = new Map();
-    const gameSummaries = history?.games || [];
+        const types = (index.types_metadata || []).map((t) => ({
+          type: t.type,
+          displayName: t.type.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+          count: t.games
+        }));
+        setGameTypes(types);
+        setIndexReady(true);
+        shouldStopLoading = false;
 
-    // Filter summaries first
-    const filteredSummaries = gameSummaries.filter((game) => {
-      if (gameType !== 'all' && game.game_type !== gameType) return false;
-      if (month && year) {
-        const d = new Date(game.timestamp);
-        if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return false;
-      }
-      return true;
-    });
-
-    // Load full game data for filtered summaries
-    for (const gameSummary of filteredSummaries) {
-      const game = await loadGame(gameSummary.game_id);
-      if (!game || !game.results) continue;
-      if (gameType === 'all' && game.non_scoring) continue;
-
-      game.results.forEach((result) => {
-        if (!players.has(result.username)) {
-          players.set(result.username, {
-            username: result.username,
-            points: 0,
-            games: 0,
-            wins: 0,
-            totalPlacement: 0,
-            totalKills: 0,
-            top3Finishes: 0,
-            top10PctFinishes: 0
+        getAllPlayerStats()
+          .then((players) => {
+            if (!isMounted || !players.length) return;
+            setAllTimeCache(buildAllTimeCache(players));
+          })
+          .catch((error) => {
+            console.error('Error loading all-time stats:', error);
           });
+      } catch (error) {
+        console.error('Error loading index:', error);
+      } finally {
+        if (isMounted && shouldStopLoading) {
+          setLoading(false);
         }
-        const p = players.get(result.username);
-        const points = result.points || 0;
-        const placement = result.placement || game.total_participants || 0;
-        const kills = result.kills || 0;
-
-        p.points += points;
-        p.games += 1;
-        p.wins += placement === 1 ? 1 : 0;
-        p.totalPlacement += placement;
-        p.totalKills += kills;
-
-        // Top 3 and Top 10%
-        if (placement <= 3) p.top3Finishes += 1;
-        const top10Threshold = Math.max(1, Math.floor((game.total_participants || 0) * 0.1));
-        if (top10Threshold > 0 && placement <= top10Threshold) {
-          p.top10PctFinishes += 1;
-        }
-      });
+      }
     }
 
-    const leaderboard = Array.from(players.values()).map((p) => ({
-      ...p,
-      avgPlacement: p.games > 0 ? (p.totalPlacement / p.games).toFixed(1) : '0.0'
-    }));
-
-    // Default sort by points desc
-    leaderboard.sort((a, b) => b.points - a.points);
-    return leaderboard;
-  };
+    loadIndexData();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Load leaderboard data
   useEffect(() => {
+    if (!indexReady) return;
+
+    let isMounted = true;
+
     async function loadData() {
-      if (!historyData) return;
       setLoading(true);
       try {
-        if (viewMode === 'all-time' || viewMode === 'top-stats') {
-          const aggregated = await buildAggregatedLeaderboard(historyData, { gameType: gameTypeFilter });
+        if (viewMode === 'monthly') {
+          if (!selectedMonth || !selectedYear) {
+            setLeaderboardData([]);
+            return;
+          }
+          const monthly = await getMonthlyLeaderboard(selectedYear, selectedMonth, null, gameTypeFilter);
+          if (!isMounted) return;
+          setLeaderboardData(monthly);
+        } else {
+          let base = allTimeCache;
+          if (!base) {
+            const players = await getAllPlayerStats();
+            base = buildAllTimeCache(players);
+            if (!isMounted) return;
+            setAllTimeCache(base);
+          }
 
-          // Sort based on selected category for top stats view
+          const data = [...base];
           if (viewMode === 'top-stats') {
-            aggregated.sort((a, b) => {
+            data.sort((a, b) => {
               switch (selectedStatCategory) {
                 case 'points':
                   return b.points - a.points;
@@ -169,7 +160,7 @@ export default function MonthlyRankings() {
                 case 'top10pct':
                   return b.top10PctFinishes - a.top10PctFinishes;
                 case 'avgPlacement':
-                  return parseFloat(a.avgPlacement) - parseFloat(b.avgPlacement); // Lower is better
+                  return parseFloat(a.avgPlacement) - parseFloat(b.avgPlacement);
                 case 'games':
                   return b.games - a.games;
                 default:
@@ -178,23 +169,32 @@ export default function MonthlyRankings() {
             });
           }
 
-          setLeaderboardData(aggregated);
-        } else {
-          const monthly = await buildAggregatedLeaderboard(historyData, {
-            month: selectedMonth,
-            year: selectedYear,
-            gameType: gameTypeFilter
-          });
-          setLeaderboardData(monthly);
+          if (!isMounted) return;
+          setLeaderboardData(data);
         }
       } catch (error) {
         console.error('Error loading leaderboard:', error);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
+
     loadData();
-  }, [viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, historyData]);
+    return () => {
+      isMounted = false;
+    };
+  }, [indexReady, viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, allTimeCache]);
+
+  // Keep game type filter limited to monthly view
+  useEffect(() => {
+    if (viewMode !== 'monthly' && gameTypeFilter !== 'all') {
+      setGameTypeFilter('all');
+    }
+  }, [viewMode, gameTypeFilter]);
+
+
 
   // Filter by search query but keep original ranks from the full sorted set
   const filteredData = React.useMemo(() => {
@@ -209,12 +209,10 @@ export default function MonthlyRankings() {
 
   // Use available months only
   const monthOptions = availableMonths;
-
-  // Derive available game types from history (for filter)
-  const gameTypes =
-    historyData?.games
-      ? ['all', ...Array.from(new Set(historyData.games.map((g) => g.game_type)))]
-      : ['all'];
+  const gameTypeOptions = [
+    { type: 'all', displayName: 'All Games' },
+    ...gameTypes
+  ];
 
   if (loading) {
     return (
@@ -332,11 +330,12 @@ export default function MonthlyRankings() {
                     setGameTypeFilter(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
+                  disabled={viewMode !== 'monthly'}
+                  className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {gameTypes.map((type) => (
-                    <option key={type} value={type} className="bg-dark-bg-secondary text-text-primary">
-                      {type === 'all' ? 'All Games' : type.replace(/_/g, ' ')}
+                  {gameTypeOptions.map((gameType) => (
+                    <option key={gameType.type} value={gameType.type} className="bg-dark-bg-secondary text-text-primary">
+                      {gameType.displayName}
                     </option>
                   ))}
                 </select>
@@ -346,6 +345,9 @@ export default function MonthlyRankings() {
                   </svg>
                 </div>
               </div>
+              {viewMode !== 'monthly' && (
+                <p className="mt-2 text-xs text-text-muted">Game type filter is available in monthly view.</p>
+              )}
             </div>
 
             {/* Category Selector (only for top stats view) */}

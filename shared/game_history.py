@@ -78,6 +78,7 @@ class GameHistory:
         """
         Generate pre-computed monthly leaderboards.
         Creates one file per month: leaderboards/2024-12.json, leaderboards/2025-01.json, etc.
+        Also creates per-game-type leaderboards: leaderboards/2024-12_battle_royale.json, etc.
 
         Args:
             leaderboards_dir: Path object for the leaderboards directory
@@ -87,14 +88,19 @@ class GameHistory:
         """
         from collections import defaultdict
 
-        # Aggregate stats by month
-        monthly_data = defaultdict(lambda: defaultdict(lambda: {
-            "points": 0.0,
-            "games": 0,
-            "wins": 0,
-            "best_placement": float('inf'),
-            "total_kills": 0
-        }))
+        # Aggregate stats by month (all games) and by game type
+        def stats_bucket():
+            return {
+                "points": 0.0,
+                "games": 0,
+                "wins": 0,
+                "best_placement": float('inf'),
+                "total_kills": 0,
+                "total_placement": 0
+            }
+
+        monthly_data = defaultdict(lambda: defaultdict(stats_bucket))
+        monthly_data_by_type = defaultdict(lambda: defaultdict(lambda: defaultdict(stats_bucket)))
 
         non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
 
@@ -107,6 +113,8 @@ class GameHistory:
 
             # Extract YYYY-MM from timestamp
             month_key = timestamp[:7]  # "2024-12" format
+
+            game_type = game.get("game_type") or ""
 
             for result in game.get("results", []):
                 username = result.get("username")
@@ -122,14 +130,20 @@ class GameHistory:
                 if placement < player["best_placement"]:
                     player["best_placement"] = placement
                 player["total_kills"] += result.get("kills", 0)
+                player["total_placement"] += placement
 
-        # Write monthly leaderboard files
-        monthly_stats = {}
+                if game_type:
+                    typed_player = monthly_data_by_type[month_key][game_type][username]
+                    typed_player["points"] += result.get("points", 0)
+                    typed_player["games"] += 1
+                    if placement == 1:
+                        typed_player["wins"] += 1
+                    if placement < typed_player["best_placement"]:
+                        typed_player["best_placement"] = placement
+                    typed_player["total_kills"] += result.get("kills", 0)
+                    typed_player["total_placement"] += placement
 
-        for month_key in sorted(monthly_data.keys()):
-            players = monthly_data[month_key]
-
-            # Build leaderboard sorted by points
+        def write_leaderboard_file(month_key, players, game_type=None):
             leaderboard = []
             for username, stats in players.items():
                 leaderboard.append({
@@ -138,29 +152,37 @@ class GameHistory:
                     "g": stats["games"],
                     "w": stats["wins"],
                     "b": stats["best_placement"] if stats["best_placement"] != float('inf') else 0,
-                    "k": stats["total_kills"]
+                    "k": stats["total_kills"],
+                    "t": stats["total_placement"]
                 })
 
-            # Sort by points descending
             leaderboard.sort(key=lambda x: x["p"], reverse=True)
-
-            # Add rank
             for i, entry in enumerate(leaderboard):
                 entry["r"] = i + 1
 
-            # Write to file
-            month_file = leaderboards_dir / f"{month_key}.json"
+            filename = f"{month_key}.json" if not game_type else f"{month_key}_{game_type}.json"
             month_data = {
                 "month": month_key,
+                "game_type": game_type or "all",
                 "total_players": len(leaderboard),
                 "leaderboard": leaderboard
             }
 
-            with open(month_file, 'w', encoding='utf-8') as f:
+            with open(leaderboards_dir / filename, 'w', encoding='utf-8') as f:
                 json.dump(month_data, f, ensure_ascii=False, separators=(',', ':'))
 
+        # Write monthly leaderboard files
+        monthly_stats = {}
+
+        for month_key in sorted(monthly_data.keys()):
+            players = monthly_data[month_key]
+            write_leaderboard_file(month_key, players)
+
+            for game_type, typed_players in sorted(monthly_data_by_type[month_key].items()):
+                write_leaderboard_file(month_key, typed_players, game_type)
+
             monthly_stats[month_key] = {
-                "players": len(leaderboard),
+                "players": len(players),
                 "games": len([g for g in self.history.get('games', []) if g.get("timestamp", "").startswith(month_key)])
             }
 
@@ -172,8 +194,9 @@ class GameHistory:
         1. Individual game files: api/games/{game_id}.json
         2. Day summary files: api/days/{day_number}.json
         3. Game type indexes: api/types/{game_type}.json
-        4. Monthly leaderboards: api/leaderboards/{YYYY-MM}.json
-        5. Master index: api/index.json
+        4. Monthly leaderboards: api/leaderboards/{YYYY-MM}.json (plus per-game-type files)
+        5. Player history index: api/player_history/{letter}.json + index.json
+        6. Master index: api/index.json
 
         This creates many small files instead of one giant file,
         solving LFS budget issues and improving load performance.
@@ -295,7 +318,75 @@ class GameHistory:
         # Step 4: Generate monthly leaderboards
         monthly_stats = self._generate_monthly_leaderboards(leaderboards_dir)
 
-        # Step 5: Create master index
+        # Step 5: Export player history index (compact, per-letter)
+        player_history_dir = base_path / "player_history"
+        player_history_dir.mkdir(exist_ok=True)
+
+        points_scale = 10
+        player_histories = defaultdict(lambda: defaultdict(list))
+        game_meta = []
+
+        games_sorted = sorted(
+            self.history.get("games", []),
+            key=lambda x: x.get("timestamp", ""),
+            reverse=True
+        )
+
+        for game in games_sorted:
+            game_id = game.get("game_id")
+            if not game_id:
+                continue
+
+            game_index = len(game_meta)
+            game_meta.append([
+                game_id,
+                game.get("game_type"),
+                game.get("day_number"),
+                game.get("timestamp")
+            ])
+
+            for result in game.get("results", []):
+                username = result.get("username")
+                if not username:
+                    continue
+
+                first_char = username[0].lower()
+                letter = first_char if first_char.isalpha() else "0"
+
+                placement = result.get("placement", 0) or 0
+                points = result.get("points", 0) or 0
+                kills = result.get("kills", 0) or 0
+                points_scaled = int(round(points * points_scale))
+
+                player_histories[letter][username].append([
+                    game_index,
+                    placement,
+                    points_scaled,
+                    kills
+                ])
+
+        for letter in sorted(player_histories.keys()):
+            letter_players = player_histories[letter]
+            letter_data = {
+                "letter": letter,
+                "count": len(letter_players),
+                "players": letter_players
+            }
+            letter_file = player_history_dir / f"{letter}.json"
+            with open(letter_file, 'w', encoding='utf-8') as f:
+                json.dump(letter_data, f, ensure_ascii=False, separators=(',', ':'))
+
+        history_index = {
+            "lu": datetime.now().isoformat(),
+            "points_scale": points_scale,
+            "game_count": len(game_meta),
+            "games": game_meta
+        }
+        history_index_file = player_history_dir / "index.json"
+        with open(history_index_file, 'w', encoding='utf-8') as f:
+            json.dump(history_index, f, ensure_ascii=False, separators=(',', ':'))
+
+        # Step 6: Create master index
         index_data = {
             "last_updated": datetime.now().isoformat(),
             "total_games": len(self.history.get("games", [])),
@@ -316,6 +407,8 @@ class GameHistory:
         print(f"   {len(all_days)} day summaries -> {days_dir}/")
         print(f"   {len(all_types)} game type indexes -> {types_dir}/")
         print(f"   {len(monthly_stats)} monthly leaderboards -> {leaderboards_dir}/")
+        print(f"   {len(player_histories)} player history letter files -> {player_history_dir}/")
+        print(f"   Player history index -> {history_index_file}")
         print(f"   Master index -> {index_file}")
 
     def record_game_session(
