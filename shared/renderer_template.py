@@ -275,6 +275,8 @@ class RendererTemplate:
         """
         if size is None:
             size = config.FOLLOWER_RADIUS * 2
+        # Ensure size is a valid integer for surface creation and PIL resize.
+        size = max(1, int(round(size)))
 
         # Get or create avatar surface
         avatar_surface = self._get_avatar_surface(player, size)
@@ -299,7 +301,8 @@ class RendererTemplate:
         Returns:
             Pygame surface with circular avatar
         """
-        # Check cache
+        # Normalize size and check cache
+        size = max(1, int(round(size)))
         cache_key = (player.username, size)
         if cache_key in self.avatar_cache:
             return self.avatar_cache[cache_key]

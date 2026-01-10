@@ -10,6 +10,8 @@ Handles all visual output for the anime fighting game:
 Adapted for 540x960 vertical screen layout.
 """
 
+from datetime import datetime
+import os
 from typing import List, Tuple, Optional
 import pygame
 
@@ -45,6 +47,14 @@ class AnimeFightingRenderer:
         self.font_medium = pygame.font.Font(None, 36)
         self.font_small = pygame.font.Font(None, 24)
         self.font_tiny = pygame.font.Font(None, 18)
+        self.font_promo = pygame.font.Font(None, 24)
+
+        # Promo overlay
+        self.promo_text_left = "Join Discord, link in bio"
+        self.promo_text_right = "Check your results in bio"
+        self.discord_logo = None
+        self.trophy_logo = None
+        self._load_promo_assets()
 
         # Colors
         self.bg_color = (14, 14, 18)
@@ -188,29 +198,62 @@ class AnimeFightingRenderer:
         Draw match info and timer at top of screen
 
         Args:
-            match_state: Dict with round_name, match_num, total_matches, timer
+            match_state: Dict with round_name, match_num, total_matches, timer,
+                        is_finals, finals_wins, finals_game
         """
         y_pos = 20
 
-        # Round name (e.g., "Finals", "Semifinals")
-        round_name = match_state.get("round_name", "Match")
-        text = self.font_medium.render(round_name, True, (200, 200, 210))
-        text_rect = text.get_rect(center=(self.width // 2, y_pos + 15))
-        self.screen.blit(text, text_rect)
+        # Check if this is the Best-of-3 Finals
+        is_finals = match_state.get("is_finals", False)
+        finals_wins = match_state.get("finals_wins")
+        finals_game = match_state.get("finals_game")
 
-        # Match number (e.g., "Match 1/8")
-        if "match_num" in match_state and "total_matches" in match_state:
-            match_text = f"Match {match_state['match_num']}/{match_state['total_matches']}"
-            text = self.font_small.render(match_text, True, (160, 160, 170))
-            text_rect = text.get_rect(center=(self.width // 2, y_pos + 50))
+        if is_finals and finals_wins:
+            # GRAND FINALS header
+            title_text = "GRAND FINALS"
+            text = self.font_medium.render(title_text, True, (255, 215, 0))  # Gold
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 15))
             self.screen.blit(text, text_rect)
 
-        # Timer
-        timer = match_state.get("timer", 0.0)
-        timer_text = f"{int(timer)}"
-        text = self.font_large.render(timer_text, True, (255, 255, 255))
-        text_rect = text.get_rect(center=(self.width // 2, y_pos + 85))
-        self.screen.blit(text, text_rect)
+            # Best of 3 - Game X
+            game_text = f"Best of 3 - Game {finals_game}"
+            text = self.font_small.render(game_text, True, (200, 200, 210))
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 42))
+            self.screen.blit(text, text_rect)
+
+            # Score display: [Fighter1 Wins] - [Fighter2 Wins]
+            score_text = f"[ {finals_wins.get(1, 0)} ] - [ {finals_wins.get(2, 0)} ]"
+            text = self.font_medium.render(score_text, True, (255, 255, 255))
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 68))
+            self.screen.blit(text, text_rect)
+
+            # Timer (positioned lower for finals)
+            timer = match_state.get("timer", 0.0)
+            timer_text = f"{int(timer)}"
+            text = self.font_large.render(timer_text, True, (255, 255, 255))
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 105))
+            self.screen.blit(text, text_rect)
+        else:
+            # Standard match header
+            # Round name (e.g., "Finals", "Semifinals")
+            round_name = match_state.get("round_name", "Match")
+            text = self.font_medium.render(round_name, True, (200, 200, 210))
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 15))
+            self.screen.blit(text, text_rect)
+
+            # Match number (e.g., "Match 1/8")
+            if "match_num" in match_state and "total_matches" in match_state:
+                match_text = f"Match {match_state['match_num']}/{match_state['total_matches']}"
+                text = self.font_small.render(match_text, True, (160, 160, 170))
+                text_rect = text.get_rect(center=(self.width // 2, y_pos + 50))
+                self.screen.blit(text, text_rect)
+
+            # Timer
+            timer = match_state.get("timer", 0.0)
+            timer_text = f"{int(timer)}"
+            text = self.font_large.render(timer_text, True, (255, 255, 255))
+            text_rect = text.get_rect(center=(self.width // 2, y_pos + 85))
+            self.screen.blit(text, text_rect)
 
     def _draw_fighter_bars(self, fighter1, fighter2):
         """
@@ -416,24 +459,72 @@ class AnimeFightingRenderer:
         rect = rendered.get_rect(center=(self.width // 2, self.height // 2))
         self.screen.blit(rendered, rect)
 
-    def render_winner_announcement(self, winner):
+    def render_winner_announcement(self, winner, finals_info: dict = None):
         """
         Render winner announcement overlay
 
         Args:
             winner: Winning fighter
+            finals_info: Optional dict with 'wins' ({1: int, 2: int}), 'game' (int),
+                        'is_series_over' (bool), 'fighter1_name', 'fighter2_name'
         """
-        # Winner name
-        text = self.font_title.render(f"{winner.username} WINS!", True, (255, 215, 0))
-        rect = text.get_rect(center=(self.width // 2, self.height // 2 - 50))
-        self.screen.blit(text, rect)
+        # Check if this is a finals game win
+        if finals_info:
+            wins = finals_info.get('wins', {1: 0, 2: 0})
+            game_num = finals_info.get('game', 1)
+            is_series_over = finals_info.get('is_series_over', False)
+            f1_name = finals_info.get('fighter1_name', 'Fighter 1')
+            f2_name = finals_info.get('fighter2_name', 'Fighter 2')
 
-        # Draw winner avatar (large)
-        if hasattr(winner, 'avatar_surface') and winner.avatar_surface:
-            avatar_size = 120
-            scaled_avatar = pygame.transform.smoothscale(winner.avatar_surface, (avatar_size, avatar_size))
-            avatar_rect = scaled_avatar.get_rect(center=(self.width // 2, self.height // 2 + 60))
-            self.screen.blit(scaled_avatar, avatar_rect)
+            if is_series_over:
+                # Series winner announcement
+                text = self.font_title.render(f"{winner.username}", True, (255, 215, 0))
+                rect = text.get_rect(center=(self.width // 2, self.height // 2 - 80))
+                self.screen.blit(text, rect)
+
+                champ_text = self.font_medium.render("CHAMPION!", True, (255, 255, 255))
+                champ_rect = champ_text.get_rect(center=(self.width // 2, self.height // 2 - 40))
+                self.screen.blit(champ_text, champ_rect)
+
+                # Final score
+                score_text = f"{wins.get(1, 0)} - {wins.get(2, 0)}"
+                score_surf = self.font_large.render(score_text, True, (255, 215, 0))
+                score_rect = score_surf.get_rect(center=(self.width // 2, self.height // 2 + 10))
+                self.screen.blit(score_surf, score_rect)
+            else:
+                # Game win (series continues)
+                text = self.font_title.render(f"{winner.username}", True, (255, 215, 0))
+                rect = text.get_rect(center=(self.width // 2, self.height // 2 - 60))
+                self.screen.blit(text, rect)
+
+                wins_text = self.font_medium.render(f"WINS GAME {game_num}!", True, (255, 255, 255))
+                wins_rect = wins_text.get_rect(center=(self.width // 2, self.height // 2 - 20))
+                self.screen.blit(wins_text, wins_rect)
+
+                # Current score
+                score_text = f"[ {wins.get(1, 0)} ] - [ {wins.get(2, 0)} ]"
+                score_surf = self.font_medium.render(score_text, True, (200, 200, 210))
+                score_rect = score_surf.get_rect(center=(self.width // 2, self.height // 2 + 20))
+                self.screen.blit(score_surf, score_rect)
+
+            # Draw winner avatar (large)
+            if hasattr(winner, 'avatar_surface') and winner.avatar_surface:
+                avatar_size = 100
+                scaled_avatar = pygame.transform.smoothscale(winner.avatar_surface, (avatar_size, avatar_size))
+                avatar_rect = scaled_avatar.get_rect(center=(self.width // 2, self.height // 2 + 90))
+                self.screen.blit(scaled_avatar, avatar_rect)
+        else:
+            # Standard winner announcement
+            text = self.font_title.render(f"{winner.username} WINS!", True, (255, 215, 0))
+            rect = text.get_rect(center=(self.width // 2, self.height // 2 - 50))
+            self.screen.blit(text, rect)
+
+            # Draw winner avatar (large)
+            if hasattr(winner, 'avatar_surface') and winner.avatar_surface:
+                avatar_size = 120
+                scaled_avatar = pygame.transform.smoothscale(winner.avatar_surface, (avatar_size, avatar_size))
+                avatar_rect = scaled_avatar.get_rect(center=(self.width // 2, self.height // 2 + 60))
+                self.screen.blit(scaled_avatar, avatar_rect)
 
     def render_bracket_transition(self, current_round: str, matches_remaining: int):
         """
@@ -457,6 +548,255 @@ class AnimeFightingRenderer:
         rect = text.get_rect(center=(self.width // 2, self.height // 2 + 20))
         self.screen.blit(text, rect)
 
+    def render_round_intro(self, header_text: str, round_label: str):
+        """
+        Render a round intro screen before the bracket overview
+
+        Args:
+            header_text: Top line (e.g., "March Leaderboard")
+            round_label: Round label (e.g., "Top 16", "Quarterfinals")
+        """
+        # Clear screen
+        self.screen.fill(self.bg_color)
+
+        # Header line
+        header = self.font_medium.render(header_text, True, (255, 215, 0))
+        header_rect = header.get_rect(center=(self.width // 2, self.height // 2 - 30))
+        self.screen.blit(header, header_rect)
+
+        # Round label
+        label = self.font_title.render(round_label, True, (255, 255, 255))
+        label_rect = label.get_rect(center=(self.width // 2, self.height // 2 + 20))
+        self.screen.blit(label, label_rect)
+
+    def render_top16_overview(self, header_text: str, entries: List[Tuple]):
+        """
+        Render a grid of top 16 qualifiers with avatars and monthly points.
+
+        Args:
+            header_text: Header line (e.g., "March Leaderboard")
+            entries: List of (fighter, points) tuples
+        """
+        # Clear screen
+        self.screen.fill(self.bg_color)
+
+        # Header
+        header = self.font_medium.render(header_text, True, (255, 215, 0))
+        header_rect = header.get_rect(center=(self.width // 2, 30))
+        self.screen.blit(header, header_rect)
+
+        subheader = self.font_small.render("Top 16 Qualifiers", True, (180, 180, 190))
+        subheader_rect = subheader.get_rect(center=(self.width // 2, 60))
+        self.screen.blit(subheader, subheader_rect)
+
+        if not entries:
+            return
+
+        columns = 4
+        card_width = 120
+        card_height = 130
+        spacing_x = 10
+        spacing_y = 12
+
+        rows = (len(entries) + columns - 1) // columns
+        total_width = columns * card_width + (columns - 1) * spacing_x
+        total_height = rows * card_height + (rows - 1) * spacing_y
+
+        start_x = (self.width - total_width) // 2
+        start_y = max(110, (self.height - total_height) // 2)
+
+        for idx, (fighter, points) in enumerate(entries):
+            row = idx // columns
+            col = idx % columns
+            x = start_x + col * (card_width + spacing_x)
+            y = start_y + row * (card_height + spacing_y)
+            self._draw_top16_overview_card(fighter, points, x, y, card_width, card_height)
+
+    def _draw_top16_overview_card(self, fighter, points, x: int, y: int, width: int, height: int):
+        """Draw a single qualifier card with avatar, name, and points."""
+        bg_color = (40, 40, 45)
+        border_color = (90, 90, 100)
+        text_color = (255, 255, 255)
+        points_color = (200, 200, 210)
+
+        pygame.draw.rect(self.screen, bg_color, (x, y, width, height), border_radius=6)
+        pygame.draw.rect(self.screen, border_color, (x, y, width, height), 1, border_radius=6)
+
+        avatar_size = 64
+        avatar_x = x + (width - avatar_size) // 2
+        avatar_y = y + 8
+
+        if hasattr(fighter, 'avatar_surface') and fighter.avatar_surface:
+            try:
+                scaled_avatar = pygame.transform.smoothscale(fighter.avatar_surface, (avatar_size, avatar_size))
+                self.screen.blit(scaled_avatar, (avatar_x, avatar_y))
+            except Exception:
+                pygame.draw.circle(
+                    self.screen,
+                    fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
+                    (x + width // 2, avatar_y + avatar_size // 2),
+                    avatar_size // 2
+                )
+        else:
+            pygame.draw.circle(
+                self.screen,
+                fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
+                (x + width // 2, avatar_y + avatar_size // 2),
+                avatar_size // 2
+            )
+
+        name = fighter.username[:10] if hasattr(fighter, 'username') else "Unknown"
+        name_surf = self.font_tiny.render(name, True, text_color)
+        name_rect = name_surf.get_rect(center=(x + width // 2, avatar_y + avatar_size + 14))
+        self.screen.blit(name_surf, name_rect)
+
+        points_text = f"{self._format_points(points)} pts"
+        points_surf = self.font_tiny.render(points_text, True, points_color)
+        points_rect = points_surf.get_rect(center=(x + width // 2, avatar_y + avatar_size + 32))
+        self.screen.blit(points_surf, points_rect)
+
+    def _format_points(self, points) -> str:
+        """Format points for display."""
+        try:
+            value = float(points)
+        except (TypeError, ValueError):
+            return "0"
+
+        if abs(value - int(value)) < 0.01:
+            return str(int(value))
+        return f"{value:.1f}"
+
+    def render_promo_overlay(self):
+        """Render promo pills at the bottom of the screen."""
+        self._draw_promo_overlay()
+
+    def _get_pill_size(self, text: str, logo_surface: Optional[pygame.Surface]) -> Tuple[int, int]:
+        """Compute size for a pill with text and optional icon."""
+        padding_x = 12
+        padding_y = 6
+        gap = 8
+
+        text_surface = self.font_promo.render(text, True, (255, 255, 255))
+        text_width, text_height = text_surface.get_size()
+
+        logo_width = logo_surface.get_width() if logo_surface else 0
+        logo_height = logo_surface.get_height() if logo_surface else 0
+
+        pill_height = max(text_height, logo_height) + padding_y * 2
+        pill_width = text_width + padding_x * 2 + (logo_width + gap if logo_surface else 0)
+
+        return pill_width, pill_height
+
+    def _draw_pill(self, text: str, logo_surface: Optional[pygame.Surface], center: Tuple[int, int]):
+        """Draw a single promo pill with optional icon."""
+        text_surface = self.font_promo.render(text, True, (255, 255, 255))
+        text_width, text_height = text_surface.get_size()
+        logo_width = logo_surface.get_width() if logo_surface else 0
+        logo_height = logo_surface.get_height() if logo_surface else 0
+        padding_x = 12
+        padding_y = 6
+        gap = 8
+
+        pill_width = text_width + padding_x * 2 + (logo_width + gap if logo_surface else 0)
+        pill_height = max(text_height, logo_height) + padding_y * 2
+
+        pill_rect = pygame.Rect(0, 0, pill_width, pill_height)
+        pill_rect.center = center
+
+        # Background and border
+        pygame.draw.rect(self.screen, (30, 30, 36), pill_rect, border_radius=16)
+        pygame.draw.rect(self.screen, (90, 90, 105), pill_rect, 1, border_radius=16)
+
+        # Content (icon + text)
+        content_x = pill_rect.x + padding_x
+        if logo_surface:
+            logo_y = pill_rect.y + (pill_height - logo_height) // 2
+            self.screen.blit(logo_surface, (content_x, logo_y))
+            content_x += logo_width + gap
+
+        text_center_y = pill_rect.y + pill_height // 2
+        shadow_text = self.font_promo.render(text, True, (0, 0, 0))
+        shadow_rect = shadow_text.get_rect(midleft=(content_x, text_center_y))
+        self.screen.blit(shadow_text, shadow_rect.move(1, 1))
+
+        text_rect = text_surface.get_rect(midleft=(content_x, text_center_y))
+        self.screen.blit(text_surface, text_rect)
+
+    def _draw_promo_overlay(self):
+        """Draw promo pills in the bottom banner area."""
+        base_y = self.height - 28
+        gap_between = 12
+        margin_x = 24
+
+        left_width, left_height = self._get_pill_size(self.promo_text_left, self.discord_logo)
+        right_width, right_height = self._get_pill_size(self.promo_text_right, self.trophy_logo)
+
+        left_center = (margin_x + left_width // 2, base_y)
+        right_center = (self.width - margin_x - right_width // 2, base_y)
+
+        left_rect = pygame.Rect(0, 0, left_width, left_height)
+        left_rect.center = left_center
+        right_rect = pygame.Rect(0, 0, right_width, right_height)
+        right_rect.center = right_center
+
+        if left_rect.right + gap_between > right_rect.left:
+            total_width = left_width + right_width + gap_between
+            start_x = (self.width - total_width) // 2
+            left_center = (start_x + left_width // 2, base_y)
+            right_center = (start_x + left_width + gap_between + right_width // 2, base_y)
+
+        self._draw_pill(self.promo_text_left, self.discord_logo, left_center)
+        self._draw_pill(self.promo_text_right, self.trophy_logo, right_center)
+
+    def _load_promo_assets(self):
+        """Load and scale promo logos for the overlay pills."""
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        discord_path = os.path.join(base_dir, "discord_logo.png")
+        self.discord_logo = self._load_logo([discord_path])
+
+        trophy_paths = [
+            os.path.join(base_dir, "trophy.png"),
+            os.path.join(base_dir, "trophy_icon.png"),
+            os.path.join(base_dir, "assets", "trophy.png"),
+            os.path.join(base_dir, "website", "src", "assets", "trophy.png"),
+            os.path.join(base_dir, "website", "public", "trophy.png"),
+            os.path.join(base_dir, "website", "dist", "trophy.png"),
+        ]
+        self.trophy_logo = self._load_logo(trophy_paths)
+        if self.trophy_logo is None:
+            self.trophy_logo = self._render_emoji_icon("\U0001F3C6")
+
+    def _load_logo(self, paths: List[str]) -> Optional[pygame.Surface]:
+        """Load and scale a logo from the first existing path."""
+        target_height = max(16, int(self.font_promo.get_height() * 1.2))
+        for logo_path in paths:
+            if not os.path.exists(logo_path):
+                continue
+
+            try:
+                logo = pygame.image.load(logo_path).convert_alpha()
+                if logo.get_height() <= 0:
+                    return None
+                scale = target_height / logo.get_height()
+                target_width = max(1, int(logo.get_width() * scale))
+                return pygame.transform.smoothscale(logo, (target_width, target_height))
+            except Exception:
+                return None
+
+        return None
+
+    def _render_emoji_icon(self, emoji_text: str) -> Optional[pygame.Surface]:
+        """Render a small emoji icon as a surface fallback."""
+        target_height = max(16, int(self.font_promo.get_height() * 1.2))
+        try:
+            emoji_font = pygame.font.SysFont("Segoe UI Emoji", target_height)
+            emoji_surface = emoji_font.render(emoji_text, True, (255, 255, 255))
+            if emoji_surface is None:
+                return None
+            return emoji_surface.convert_alpha()
+        except Exception:
+            return None
+
     def render_podium(self, winner, runner_up, semifinalists: List):
         """
         Render professional tournament results screen with top 4 finishers
@@ -467,30 +807,49 @@ class AnimeFightingRenderer:
             semifinalists: List of 3rd/4th place fighters
         """
         # Clear screen with gradient effect
-        self.screen.fill(self.bg_color)
+        for y in range(self.height):
+            blend = y / self.height
+            color = (
+                int(12 + 24 * blend),
+                int(12 + 20 * blend),
+                int(18 + 30 * blend)
+            )
+            pygame.draw.line(self.screen, color, (0, y), (self.width, y))
 
         # Dark overlay for dramatic effect
-        overlay = pygame.Surface((self.width, self.height))
-        overlay.fill((0, 0, 0))
-        overlay.set_alpha(40)
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 35))
         self.screen.blit(overlay, (0, 0))
 
         # Championship banner
-        banner_height = 100
-        pygame.draw.rect(self.screen, (30, 30, 35), (0, 0, self.width, banner_height))
-        pygame.draw.line(self.screen, (255, 215, 0), (0, banner_height), (self.width, banner_height), 3)
+        banner_height = 110
+        pygame.draw.rect(self.screen, (28, 28, 34), (0, 0, self.width, banner_height))
+        pygame.draw.line(self.screen, (255, 215, 0), (0, banner_height - 2), (self.width, banner_height - 2), 2)
+        pygame.draw.line(self.screen, (120, 90, 30), (0, banner_height - 6), (self.width, banner_height - 6), 1)
+
+        # Gold glow behind header
+        glow = pygame.Surface((self.width, banner_height), pygame.SRCALPHA)
+        pygame.draw.circle(glow, (255, 215, 0, 60), (self.width // 2, banner_height), 240)
+        self.screen.blit(glow, (0, 0))
 
         # Title
-        title = self.font_title.render("TOURNAMENT COMPLETE", True, (255, 215, 0))
-        title_rect = title.get_rect(center=(self.width // 2, 35))
+        month_name = datetime.now().strftime("%B")
+        title_text = f"{month_name} Champion"
+        title = self.font_title.render(title_text, True, (255, 215, 0))
+        title_rect = title.get_rect(center=(self.width // 2, 36))
         self.screen.blit(title, title_rect)
 
-        subtitle = self.font_small.render("Final Results", True, (180, 180, 190))
-        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 70))
+        subtitle = self.font_small.render("Monthly Tournament Winner", True, (190, 190, 200))
+        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 72))
         self.screen.blit(subtitle, subtitle_rect)
 
         # Results list with clean card design
         y_offset = 130
+
+        # Champion spotlight
+        spotlight = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        pygame.draw.circle(spotlight, (255, 215, 120, 35), (self.width // 2, y_offset + 10), 220)
+        self.screen.blit(spotlight, (0, 0))
 
         # 1st Place - Champion (large, centered, gold)
         self._draw_result_card(winner, self.width // 2, y_offset, 1, is_champion=True)
@@ -524,7 +883,7 @@ class AnimeFightingRenderer:
             3: (205, 127, 50),   # Bronze
             4: (150, 120, 90),   # Dark Bronze
         }
-        medal_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🏅"}
+        placement_label = {1: "1ST", 2: "2ND", 3: "3RD", 4: "4TH"}
 
         color = colors.get(placement, (150, 150, 150))
 
@@ -558,11 +917,11 @@ class AnimeFightingRenderer:
         # Left section: Placement
         placement_x = card_x + 50
 
-        # Placement number with medal emoji
+        # Placement label (ASCII)
         if not compact:
-            medal_text = self.font_medium.render(medal_emoji.get(placement, ""), True, color)
-            medal_rect = medal_text.get_rect(center=(placement_x, y - 15))
-            self.screen.blit(medal_text, medal_rect)
+            label_text = self.font_small.render(placement_label.get(placement, ""), True, color)
+            label_rect = label_text.get_rect(center=(placement_x, y - 18))
+            self.screen.blit(label_text, label_rect)
 
         place_text = self.font_title.render(f"{placement}", True, color) if is_champion else self.font_large.render(f"{placement}", True, color)
         place_rect = place_text.get_rect(center=(placement_x, y + 15 if not compact else y))
@@ -595,7 +954,7 @@ class AnimeFightingRenderer:
 
         # Champion title for 1st place
         if is_champion:
-            crown_text = self.font_medium.render("👑 CHAMPION 👑", True, color)
+            crown_text = self.font_medium.render("CHAMPION", True, color)
             crown_rect = crown_text.get_rect(left=name_x, centery=y - 25)
             self.screen.blit(crown_text, crown_rect)
 
@@ -731,7 +1090,7 @@ class AnimeFightingRenderer:
                            (x_merge, y1 + item_height // 2),
                            (x_merge, y2 + item_height // 2), 2)
 
-        # Draw Quarterfinals (8 winners → 4 matches)
+        # Draw Quarterfinals (8 winners -> 4 matches)
         if len(bracket) > 1 and len(bracket[1]) > 0:
             for qf_idx in range(min(8, len(bracket[1]))):
                 # Position QF fighters centered between their R16 matchup positions
@@ -754,7 +1113,7 @@ class AnimeFightingRenderer:
                                    (col_qf + item_width, y_qf + item_height // 2),
                                    (col_qf + item_width + connector_len, y_qf + item_height // 2), 2)
 
-        # Draw Semifinals (4 winners → 2 matches)
+        # Draw Semifinals (4 winners -> 2 matches)
         # SF fighter 0 = winner of QF 0vs1, SF fighter 1 = winner of QF 2vs3
         # SF fighter 2 = winner of QF 4vs5, SF fighter 3 = winner of QF 6vs7
         # SF Match 1: SF fighters 0 vs 1 (top half)
@@ -810,6 +1169,8 @@ class AnimeFightingRenderer:
                                (col_sf, y_sf + item_height // 2), 2)
 
         # Connect SF pairs to Finals
+        y_sf1_center = None
+        y_sf2_center = None
         if len(bracket) > 3 and len(sf_positions) >= 2:
             x_sf_merge = col_sf + item_width + connector_len
 
@@ -848,28 +1209,50 @@ class AnimeFightingRenderer:
                                (col_final, y_sf1_center),
                                (col_final, y_sf2_center), 2)
 
-        # Draw Finals (champion)
-        if len(bracket) > 3 and len(bracket[3]) >= 1 and len(sf_positions) >= 4:
-            y_sf_m1_top = sf_positions[0] + item_height // 2
-            y_sf_m1_bot = sf_positions[1] + item_height // 2
-            y_sf1_center = (y_sf_m1_top + y_sf_m1_bot) // 2
+        # Draw Finals (finalists or champion)
+        if len(bracket) > 3 and len(sf_positions) >= 2:
+            finals_fighters = bracket[3]
+            champion = None
+            if len(bracket) > 4 and len(bracket[4]) >= 1:
+                champion = bracket[4][0]
 
-            y_sf_m2_top = sf_positions[2] + item_height // 2
-            y_sf_m2_bot = sf_positions[3] + item_height // 2
-            y_sf2_center = (y_sf_m2_top + y_sf_m2_bot) // 2
-
-            y_final = (y_sf1_center + y_sf2_center) // 2 - item_height // 2
-
-            champion = bracket[3][0]
-            champ_highlight = highlight_matchup and champion in highlight_matchup
-
-            self._draw_bracket_fighter_compact(
-                champion, col_final, y_final, item_width, item_height,
-                is_highlighted=champ_highlight,
-                is_eliminated=False,
-                rank=None,
-                is_champion=True
-            )
+            if champion is None:
+                if y_sf1_center is not None and len(finals_fighters) >= 1:
+                    finalist = finals_fighters[0]
+                    finalist_highlight = highlight_matchup and finalist in highlight_matchup
+                    self._draw_bracket_fighter_compact(
+                        finalist,
+                        col_final,
+                        y_sf1_center - item_height // 2,
+                        item_width,
+                        item_height,
+                        is_highlighted=finalist_highlight,
+                        is_eliminated=False,
+                        rank=None
+                    )
+                if y_sf2_center is not None and len(finals_fighters) >= 2:
+                    finalist = finals_fighters[1]
+                    finalist_highlight = highlight_matchup and finalist in highlight_matchup
+                    self._draw_bracket_fighter_compact(
+                        finalist,
+                        col_final,
+                        y_sf2_center - item_height // 2,
+                        item_width,
+                        item_height,
+                        is_highlighted=finalist_highlight,
+                        is_eliminated=False,
+                        rank=None
+                    )
+            elif y_sf1_center is not None and y_sf2_center is not None:
+                y_final = (y_sf1_center + y_sf2_center) // 2 - item_height // 2
+                champ_highlight = highlight_matchup and champion in highlight_matchup
+                self._draw_bracket_fighter_compact(
+                    champion, col_final, y_final, item_width, item_height,
+                    is_highlighted=champ_highlight,
+                    is_eliminated=False,
+                    rank=None,
+                    is_champion=True
+                )
 
         # Footer - Next match info
         if highlight_matchup and len(highlight_matchup) == 2:
@@ -963,10 +1346,10 @@ class AnimeFightingRenderer:
         border_width = 2 if is_highlighted else 1
         pygame.draw.rect(self.screen, border_color, (x, y, width, height), border_width, border_radius=3)
 
-        # Champion star
+        # Champion marker
         if is_champion:
-            star = self.font_small.render("★", True, gold)
-            self.screen.blit(star, (x - 12, y + 2))
+            marker = self.font_small.render("C", True, gold)
+            self.screen.blit(marker, (x - 12, y + 2))
 
         # Text content
         text_x = x + 3
@@ -1013,10 +1396,10 @@ class AnimeFightingRenderer:
         border_width = 2 if is_highlighted else 1
         pygame.draw.rect(self.screen, border_color, (x, y, item_width, item_height), border_width, border_radius=3)
 
-        # Champion crown
+        # Champion marker
         if is_champion:
-            crown_text = self.font_small.render("★", True, gold)
-            self.screen.blit(crown_text, (x - 15, y + 2))
+            marker = self.font_small.render("C", True, gold)
+            self.screen.blit(marker, (x - 15, y + 2))
 
         # Rank number (if provided)
         if rank is not None:

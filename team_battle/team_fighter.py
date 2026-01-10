@@ -276,10 +276,50 @@ class TeamFighter(Fighter):
             self.attack(self.target_follower, current_time, combat_enabled, alive_count=len(all_fighters))
 
     def attack(self, target: 'TeamFighter', current_time: float, combat_enabled: bool = True, alive_count: int = 0) -> bool:
-        """Override to prevent friendly fire and use team attack range."""
+        """
+        Override attack to prevent friendly fire and use team battle damage logic.
+        Team battle: One-hit kill regardless of player count.
+        """
         if not self.target_follower or not self.targeting_enabled:
             return False
         # In free-for-all mode we can attack anyone; otherwise block friendly fire
         if isinstance(target, TeamFighter) and target.team == self.team and not self.freeforall_mode:
             return False
-        return super().attack(target, current_time, combat_enabled, alive_count)
+
+        # Check if can attack (cooldown, combat enabled, etc.)
+        if not self.can_attack(current_time, combat_enabled):
+            return False
+
+        if not target.alive:
+            return False
+
+        # Calculate distance to target
+        dx = target.x - self.x
+        dy = target.y - self.y
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        # Check if in attack range
+        if distance > config.FIGHTER_ATTACK_RANGE:
+            return False
+
+        # Land the attack!
+        self.last_attack_time = current_time
+        self.is_attacking = True
+        self.attack_animation_frames = 10
+
+        # Team Battle damage: always enough to eliminate the target in one hit.
+        damage = target.current_hp
+
+        killed = target.take_damage(damage, self)
+        self.damage_dealt += damage
+
+        if killed:
+            self.kills += 1
+
+        # Apply knockback to target
+        if distance > 0:
+            knockback_dx = dx / distance
+            knockback_dy = dy / distance
+            target.apply_knockback(knockback_dx, knockback_dy, self.knockback_stat)
+
+        return True

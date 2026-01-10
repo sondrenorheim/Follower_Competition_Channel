@@ -54,6 +54,8 @@ class Racer(Follower):
         # Simple racing direction - primarily moves right with random Y adjustments
         self.target_y = self.y  # Target Y position for smooth vertical movement
         self.direction_change_time = 0  # When to pick new target Y
+        self.vertical_velocity = 0.0
+        self.vertical_accel = random.uniform(120.0, 180.0)  # Pixels per second^2
 
         # Speed modifier effects from obstacles
         self.speed_boost = 1.0  # Multiplier from speed boost zones
@@ -154,9 +156,16 @@ class Racer(Follower):
         start_line_x = course.start_line[0]
         if self.x < start_line_x + 100:
             move_y = 0  # No vertical movement in starting zone
+            self.vertical_velocity = 0.0
         else:
             y_diff = self.target_y - self.y
-            move_y = y_diff * 0.05  # Smooth interpolation factor (5% per frame)
+            max_vertical_speed = movement_speed * 0.75 * 60
+            target_velocity = max(-max_vertical_speed, min(max_vertical_speed, y_diff * 1.5))
+            if self.vertical_velocity < target_velocity:
+                self.vertical_velocity = min(target_velocity, self.vertical_velocity + self.vertical_accel * dt)
+            else:
+                self.vertical_velocity = max(target_velocity, self.vertical_velocity - self.vertical_accel * dt)
+            move_y = self.vertical_velocity * dt
 
         # Apply movement
         self.x += move_x
@@ -166,10 +175,10 @@ class Racer(Follower):
         track_top, track_bottom = course.get_track_bounds_at_x(self.x)
         if self.y - radius < track_top:
             self.y = track_top + radius
-            self.target_y = self.y + random.uniform(20, 80)  # Pick new target away from wall
+            self._pick_new_target_y(course, current_time)
         elif self.y + radius > track_bottom:
             self.y = track_bottom - radius
-            self.target_y = self.y - random.uniform(20, 80)  # Pick new target away from wall
+            self._pick_new_target_y(course, current_time)
 
         # Check obstacle collisions AFTER movement
         from .obstacles import SpeedBoost, SlowZone
@@ -202,6 +211,11 @@ class Racer(Follower):
             obstacle: The obstacle we collided with
             old_x, old_y: Position before movement
         """
+        from .obstacles import Spinner
+        if isinstance(obstacle, Spinner):
+            self._push_out_of_spinner(obstacle)
+            return
+
         bounds = obstacle.get_bounds()  # (left, top, right, bottom)
         radius = config.FOLLOWER_RADIUS
 
@@ -239,6 +253,45 @@ class Racer(Follower):
         elif escape_dir == 'bottom':
             self.y = bounds[3] + radius
 
+    def _push_out_of_spinner(self, spinner):
+        import math
+
+        end1, end2 = spinner.get_bar_endpoints()
+        ax, ay = end1
+        bx, by = end2
+        px, py = self.x, self.y
+
+        abx = bx - ax
+        aby = by - ay
+        ab_sq = abx * abx + aby * aby
+        if ab_sq == 0:
+            return
+
+        t = ((px - ax) * abx + (py - ay) * aby) / ab_sq
+        t = max(0.0, min(1.0, t))
+        closest_x = ax + t * abx
+        closest_y = ay + t * aby
+
+        dx = px - closest_x
+        dy = py - closest_y
+        dist = math.hypot(dx, dy)
+        min_dist = config.FOLLOWER_RADIUS + (spinner.bar_width / 2) + 2.0
+
+        if dist == 0:
+            # Use bar normal if we land exactly on the bar line
+            nx = -aby
+            ny = abx
+            norm = math.hypot(nx, ny)
+            if norm > 0:
+                dx = nx / norm
+                dy = ny / norm
+                dist = 1.0
+            else:
+                dx, dy, dist = 1.0, 0.0, 1.0
+
+        self.x = closest_x + (dx / dist) * min_dist
+        self.y = closest_y + (dy / dist) * min_dist
+
     def _pick_new_target_y(self, course, current_time: float):
         """
         Pick a new target Y position for vertical movement (lane changes)
@@ -249,37 +302,23 @@ class Racer(Follower):
         """
         # Get track bounds at current position
         track_top, track_bottom = course.get_track_bounds_at_x(self.x)
-        track_center = (track_top + track_bottom) / 2
 
-        # Intelligence affects how centered the racer tries to stay
-        # Higher intelligence = more likely to stay near center (better racing line)
-        intelligence_factor = self.intelligence_stat / 20.0  # 0.0 to 1.0
+        # Pick any position within the full track height
+        margin = config.FOLLOWER_RADIUS + 6
+        track_height = track_bottom - track_top - 2 * margin
+        if track_height <= 0:
+            return
 
-        # Calculate bias toward center based on current position
-        distance_from_center = abs(self.y - track_center)
-        track_radius = config.OBSTACLE_COURSE_WIDTH / 2
+        new_target = track_top + margin + random.uniform(0, track_height)
+        if abs(new_target - self.y) < track_height * 0.15:
+            if new_target < self.y:
+                new_target = max(track_top + margin, new_target - track_height * 0.25)
+            else:
+                new_target = min(track_bottom - margin, new_target + track_height * 0.25)
+        self.target_y = new_target
 
-        # More intelligent racers bias toward center
-        if distance_from_center > track_radius * 0.6:
-            # Far from center - bias strongly toward center
-            center_bias = intelligence_factor * 0.7
-        else:
-            # Near center - allow more freedom
-            center_bias = intelligence_factor * 0.3
-
-        # Pick random target Y within track bounds
-        # Bias toward center based on intelligence
-        if random.random() < center_bias:
-            # Pick target closer to center
-            variation = track_radius * 0.3  # Stay within 30% of center
-            self.target_y = track_center + random.uniform(-variation, variation)
-        else:
-            # Pick any position within track
-            margin = config.FOLLOWER_RADIUS + 10
-            self.target_y = random.uniform(track_top + margin, track_bottom - margin)
-
-        # Set time for next direction change (2-5 seconds)
-        self.direction_change_time = current_time + random.uniform(2.0, 5.0)
+        # Set time for next direction change
+        self.direction_change_time = current_time + random.uniform(2.5, 4.5)
 
     def get_stats_summary(self) -> dict:
         """Get summary of racer's stats"""

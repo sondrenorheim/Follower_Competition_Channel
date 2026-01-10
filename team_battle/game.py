@@ -29,17 +29,26 @@ from .renderer import TeamBattleRenderer
 
 class TeamBattleGame:
     """
-    Team Battle Arena game mode.
+    Team Battle Arena game mode - Sequential Tournament Format.
 
     Phases:
-    1. intro - Show day announcement, teams in quadrants
-    2. countdown - 3-2-1 countdown
-    3. semifinals - Red vs Blue (top), Green vs Yellow (bottom)
-    4. semifinal_transition - Revive winning teams
-    5. finals - Two remaining teams fight
-    6. final_transition - Revive winning team
-    7. freeforall - Winning team fights each other
-    8. finished - Winner display
+    1. intro - Show day announcement, all teams
+    2. match1_announce - Announce first match
+    3. match1_countdown - 3-2-1 countdown
+    4. match1 - Team 1 vs Team 2 fight
+    5. match1_transition - Revive Match 1 winner
+    6. match2_announce - Announce second match
+    7. match2_countdown - 3-2-1 countdown
+    8. match2 - Team 3 vs Team 4 fight
+    9. match2_transition - Revive Match 2 winner
+    10. finals_announce - Announce finals
+    11. finals_countdown - 3-2-1 countdown
+    12. finals - Two winning teams fight
+    13. final_transition - Revive winning team
+    14. freeforall_announce - Announce last man standing
+    15. freeforall_countdown - 3-2-1 countdown
+    16. freeforall - Winning team fights each other
+    17. finished - Winner display
 
     Scoring:
     - 4th place team: 25 base points
@@ -118,7 +127,8 @@ class TeamBattleGame:
         self.game_start_time = time.time()
 
         # Phase management
-        # Phases: intro, matchup_announce, countdown, semifinals, semifinal_transition,
+        # Phases: intro, match1_announce, match1_countdown, match1, match1_transition,
+        #         match2_announce, match2_countdown, match2, match2_transition,
         #         finals_announce, finals_countdown, finals, final_transition,
         #         freeforall_announce, freeforall_countdown, freeforall, finished
         self.phase = "intro"
@@ -133,14 +143,17 @@ class TeamBattleGame:
         self.eliminated_teams: List[Team] = []  # Order of elimination
         self.team_placements: Dict[Team, int] = {}  # Team -> placement (1-4)
 
-        # Semifinal matchups - VERTICAL fights (top teams fight, bottom teams fight)
-        # Red (top-left) vs Blue (top-right)
-        # Green (bottom-left) vs Yellow (bottom-right)
-        self.semifinal_matchups = [
-            (Team.RED, Team.BLUE),      # Top row - fight horizontally
-            (Team.GREEN, Team.YELLOW),  # Bottom row - fight horizontally
-        ]
-        self.semifinal_winners: List[Team] = []
+        # Sequential tournament matches
+        # Randomize bracket each game
+        teams = list(Team)
+        random.shuffle(teams)
+        self.match1_teams = (teams[0], teams[1])
+        self.match2_teams = (teams[2], teams[3])
+
+        # Track match results
+        self.match1_winner: Optional[Team] = None
+        self.match2_winner: Optional[Team] = None
+        self.semifinal_winners: List[Team] = []  # Populated after match2 for finals
 
         # Speed multiplier for team battle (slower movement)
         self.speed_multiplier = 0.7
@@ -179,41 +192,62 @@ class TeamBattleGame:
             follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
 
         print(f"Setting up {len(follower_data)} fighters in 4 teams...")
-        random.shuffle(follower_data)
 
-        # Split into 4 equal groups
+        # Sort followers alphabetically by username
+        follower_data.sort(key=lambda f: f["username"].lower())
+
+        # Split into 4 teams based on letter/number pattern (every 4th letter)
+        # A,E,I,M,Q,U,Y = RED
+        # B,F,J,N,R,V,Z = BLUE
+        # C,G,K,O,S,W,0 = GREEN
+        # D,H,L,P,T,X,1 = YELLOW
         team_list = list(Team)
-        fighters_per_team = len(follower_data) // 4
 
         for i, data in enumerate(follower_data):
-            # Assign to team based on index
-            team_index = min(i // fighters_per_team, 3)
-            team = team_list[team_index]
+            # Assign to team based on first character of username (modulo 4 pattern)
+            first_char = data["username"][0].upper() if data["username"] else 'A'
 
-            # Get spawn position in team's quadrant
-            position = self.arena.get_random_position_in_quadrant(team)
+            # Handle numbers
+            if first_char == '0':
+                team = Team.GREEN
+            elif first_char == '1':
+                team = Team.YELLOW
+            elif first_char.isalpha():
+                # Convert letter to number (A=0, B=1, C=2, ...)
+                letter_index = ord(first_char) - ord('A')
+
+                # Assign to team based on letter_index % 4
+                team_index = letter_index % 4
+                if team_index == 0:  # A,E,I,M,Q,U,Y
+                    team = Team.RED
+                elif team_index == 1:  # B,F,J,N,R,V,Z
+                    team = Team.BLUE
+                elif team_index == 2:  # C,G,K,O,S,W
+                    team = Team.GREEN
+                else:  # D,H,L,P,T,X (team_index == 3)
+                    team = Team.YELLOW
+            else:
+                # Default for other characters
+                team = Team.RED
+
+            # Initial spawn position (off-screen, will be properly positioned in match countdowns)
+            position = (-1000, -1000)
 
             # Create fighter
             fighter = TeamFighter(data, position, team)
             fighter.set_spawn_position(position[0], position[1])
             fighter.speed_multiplier = self.speed_multiplier  # Slower movement for team battle
+            fighter.alive = False  # Start off-screen, will be spawned during match
+            fighter.visible = False
+            # Set death position to initial position (needed for respawn logic)
+            fighter.death_x = position[0]
+            fighter.death_y = position[1]
 
             self.fighters.append(fighter)
             self.teams[team].append(fighter)
 
         # Randomize update order for fair combat
         random.shuffle(self.fighters)
-
-        # Force all fighters to be strictly within their quadrants after initial placement
-        # This handles any edge cases from random positioning
-        for fighter in self.fighters:
-            fighter.x, fighter.y = self.arena.clamp_to_quadrant(
-                fighter.x, fighter.y, config.FOLLOWER_RADIUS + 5, fighter.team
-            )
-            # Update spawn position to clamped position
-            fighter.set_spawn_position(fighter.x, fighter.y)
-            fighter.death_x = fighter.x
-            fighter.death_y = fighter.y
 
         # Store initial values for dynamic scaling
         self.initial_total_players = len(self.fighters)
@@ -253,36 +287,35 @@ class TeamBattleGame:
         counts = self.get_alive_count_by_team()
         return [team for team, count in counts.items() if count > 0]
 
-    def check_semifinal_results(self) -> Optional[List[Team]]:
+    def check_match_result(self, team_a: Team, team_b: Team) -> Optional[Team]:
         """
-        Check if semifinals are complete.
-        Returns list of winning teams if both matchups decided, None otherwise.
+        Check if match between two teams is complete.
+
+        Args:
+            team_a: First team in match
+            team_b: Second team in match
+
+        Returns:
+            Winning team if match complete, None otherwise
         """
-        winners = []
+        alive_a = sum(1 for f in self.teams[team_a] if f.alive)
+        alive_b = sum(1 for f in self.teams[team_b] if f.alive)
 
-        for team_a, team_b in self.semifinal_matchups:
-            alive_a = sum(1 for f in self.teams[team_a] if f.alive)
-            alive_b = sum(1 for f in self.teams[team_b] if f.alive)
+        if alive_a > 0 and alive_b == 0:
+            if team_b not in self.eliminated_teams:
+                self.eliminated_teams.append(team_b)
+            return team_a
+        elif alive_b > 0 and alive_a == 0:
+            if team_a not in self.eliminated_teams:
+                self.eliminated_teams.append(team_a)
+            return team_b
+        elif alive_a == 0 and alive_b == 0:
+            # Both eliminated (shouldn't happen) - arbitrary winner
+            if team_b not in self.eliminated_teams:
+                self.eliminated_teams.append(team_b)
+            return team_a
 
-            if alive_a > 0 and alive_b == 0:
-                winners.append(team_a)
-                if team_b not in self.eliminated_teams:
-                    self.eliminated_teams.append(team_b)
-            elif alive_b > 0 and alive_a == 0:
-                winners.append(team_b)
-                if team_a not in self.eliminated_teams:
-                    self.eliminated_teams.append(team_a)
-            elif alive_a == 0 and alive_b == 0:
-                # Both eliminated - this shouldn't happen, but handle it
-                # Pick the one with more recent eliminations as winner
-                winners.append(team_a)  # Arbitrary
-                if team_b not in self.eliminated_teams:
-                    self.eliminated_teams.append(team_b)
-            else:
-                # Match still ongoing
-                return None
-
-        return winners if len(winners) == 2 else None
+        return None  # Match ongoing
 
     def revive_team(self, team: Team, at_death_position: bool = True):
         """
@@ -290,7 +323,7 @@ class TeamBattleGame:
 
         Args:
             team: Team to revive
-            at_death_position: If True, respawn at death location. If False, random position.
+            at_death_position: If True, respawn at death location. If False, random position in arena.
         """
         print(f"Reviving Team {team.value.upper()}...")
         revived_count = 0
@@ -300,8 +333,12 @@ class TeamBattleGame:
                     # Respawn at death position
                     position = (fighter.death_x, fighter.death_y)
                 else:
-                    # Get random position in team's original quadrant
-                    position = self.arena.get_random_position_in_quadrant(team)
+                    # Get random position in arena
+                    margin = 50
+                    position = (
+                        random.uniform(self.arena.x + margin, self.arena.x + self.arena.width - margin),
+                        random.uniform(self.arena.y + margin, self.arena.y + self.arena.height - margin)
+                    )
                 fighter.respawn(position)
                 revived_count += 1
 
@@ -426,20 +463,17 @@ class TeamBattleGame:
         current_time = time.time()
         arena_rect = self.arena.get_rect()
 
-        # Update arena (for wall animations)
-        self.arena.update(dt)
-
-        # Handle matchup announcement phase
-        if self.phase == "matchup_announce":
+        # Handle match1 announcement phase
+        if self.phase == "match1_announce":
             elapsed = self.game_time - self.phase_start_time
-            if elapsed >= 2.0:  # Show matchup for 2 seconds
-                self.phase = "countdown"
+            if elapsed >= 1.0:  # Show matchup for 1 second
+                self.phase = "match1_countdown"
                 self.phase_start_time = self.game_time
                 self.renderer.start_countdown_video()
                 self.sound.play_countdown_audio()
 
-        # Handle countdown phase
-        elif self.phase == "countdown":
+        # Handle match1 countdown phase
+        elif self.phase == "match1_countdown":
             elapsed = self.game_time - self.phase_start_time
             countdown_duration = self.sound.countdown_audio_duration
 
@@ -448,33 +482,82 @@ class TeamBattleGame:
                 countdown_duration *= config.EXPORT_TIME_SCALE
 
             if elapsed >= countdown_duration:
-                print("FIGHT!")
-                self.phase = "semifinals"
-                # Open VERTICAL wall for horizontal fights (Red vs Blue, Green vs Yellow)
-                self.arena.vertical_wall_closed = False  # Start animation
+                print("MATCH 1 FIGHT!")
+                self.phase = "match1"
                 self.sound.set_music_volume_high()
 
-                # Set opponent teams for targeting: Red vs Blue, Green vs Yellow
-                for fighter in self.teams[Team.RED]:
-                    fighter.current_opponent_team = Team.BLUE
-                for fighter in self.teams[Team.BLUE]:
-                    fighter.current_opponent_team = Team.RED
-                for fighter in self.teams[Team.GREEN]:
-                    fighter.current_opponent_team = Team.YELLOW
-                for fighter in self.teams[Team.YELLOW]:
-                    fighter.current_opponent_team = Team.GREEN
+                # Spawn only Match 1 teams
+                for team in self.match1_teams:
+                    for fighter in self.teams[team]:
+                        pos = self.arena.get_spawn_position_for_team(team, self.match1_teams)
+                        fighter.respawn(pos)
+                        fighter.visible = True
+                        opponent_team = self.match1_teams[1] if team == self.match1_teams[0] else self.match1_teams[0]
+                        fighter.current_opponent_team = opponent_team
+                        fighter.targeting_enabled = True
 
-                # Enable targeting for all fighters
-                self.set_targeting_enabled(True)
+                # Despawn Match 2 teams (off-screen)
+                for team in self.match2_teams:
+                    for fighter in self.teams[team]:
+                        fighter.alive = False
+                        fighter.visible = False
+                        fighter.x = -1000
+                        fighter.y = -1000
+                        fighter.targeting_enabled = False
 
-                print("\nSEMIFINALS: Red vs Blue, Green vs Yellow!\n")
+                print(f"\nMATCH 1: {self.match1_teams[0].value.upper()} vs {self.match1_teams[1].value.upper()}!\n")
+            else:
+                self.countdown_number = max(0, 3 - int(elapsed))
+
+        # Handle match2 announcement phase
+        elif self.phase == "match2_announce":
+            elapsed = self.game_time - self.phase_start_time
+            if elapsed >= 1.0:
+                self.phase = "match2_countdown"
+                self.phase_start_time = self.game_time
+                self.renderer.start_countdown_video()
+                self.sound.play_countdown_audio()
+
+        # Handle match2 countdown phase
+        elif self.phase == "match2_countdown":
+            elapsed = self.game_time - self.phase_start_time
+            countdown_duration = self.sound.countdown_audio_duration
+
+            if config.EXPORT_VIDEO:
+                countdown_duration *= config.EXPORT_TIME_SCALE
+
+            if elapsed >= countdown_duration:
+                print("MATCH 2 FIGHT!")
+                self.phase = "match2"
+                self.sound.set_music_volume_high()
+
+                # Spawn only Match 2 teams
+                for team in self.match2_teams:
+                    for fighter in self.teams[team]:
+                        pos = self.arena.get_spawn_position_for_team(team, self.match2_teams)
+                        fighter.respawn(pos)
+                        fighter.visible = True
+                        opponent_team = self.match2_teams[1] if team == self.match2_teams[0] else self.match2_teams[0]
+                        fighter.current_opponent_team = opponent_team
+                        fighter.targeting_enabled = True
+
+                # Despawn Match 1 winner during Match 2 (they'll respawn for finals)
+                if self.match1_winner:
+                    for fighter in self.teams[self.match1_winner]:
+                        fighter.targeting_enabled = False
+                        fighter.alive = False  # Critical: make them not count as alive
+                        # Move far off-screen so they can't be targeted
+                        fighter.x = -5000
+                        fighter.y = -5000
+
+                print(f"\nMATCH 2: {self.match2_teams[0].value.upper()} vs {self.match2_teams[1].value.upper()}!\n")
             else:
                 self.countdown_number = max(0, 3 - int(elapsed))
 
         # Handle finals announcement phase
         elif self.phase == "finals_announce":
             elapsed = self.game_time - self.phase_start_time
-            if elapsed >= 2.0:
+            if elapsed >= 1.0:
                 self.phase = "finals_countdown"
                 self.phase_start_time = self.game_time
                 self.renderer.start_countdown_video()
@@ -492,11 +575,21 @@ class TeamBattleGame:
                 countdown_duration *= config.EXPORT_TIME_SCALE
 
             if elapsed >= countdown_duration:
-                print("FIGHT!")
+                print("FINALS FIGHT!")
                 self.phase = "finals"
-                # Open HORIZONTAL wall for vertical fights
-                self.arena.horizontal_wall_closed = False  # Start animation
                 self.sound.set_music_volume_high()
+
+                # Respawn both finalist teams on opposite sides
+                for team in self.semifinal_winners:
+                    for fighter in self.teams[team]:
+                        # Get fresh spawn position on opposite sides
+                        pos = self.arena.get_spawn_position_for_team(team, tuple(self.semifinal_winners))
+                        fighter.respawn(pos)
+                        fighter.visible = True
+                        # Set opponent team
+                        opponent = self.semifinal_winners[1] if team == self.semifinal_winners[0] else self.semifinal_winners[0]
+                        fighter.current_opponent_team = opponent
+
                 # Reset HP for alive fighters and enable targeting
                 self.reset_hp_for_alive_fighters(self.semifinal_winners)
                 self.set_targeting_enabled(True, self.semifinal_winners)
@@ -506,7 +599,7 @@ class TeamBattleGame:
         # Handle freeforall announcement phase
         elif self.phase == "freeforall_announce":
             elapsed = self.game_time - self.phase_start_time
-            if elapsed >= 2.0:
+            if elapsed >= 1.0:
                 self.phase = "freeforall_countdown"
                 self.phase_start_time = self.game_time
                 self.renderer.start_countdown_video()
@@ -534,7 +627,7 @@ class TeamBattleGame:
                 self.countdown_number = max(0, 3 - int(elapsed))
 
         # Determine if combat is enabled
-        combat_enabled = self.phase in ("semifinals", "finals", "freeforall")
+        combat_enabled = self.phase in ("match1", "match2", "finals", "freeforall")
 
         # Performance optimization: Update throttling for large player counts
         total_fighters = len(self.fighters)
@@ -562,12 +655,12 @@ class TeamBattleGame:
             # Use fighter update
             fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled)
 
-            # Apply wall collision constraints
-            fighter.x, fighter.y = self.arena.clamp_position_with_walls(
-                fighter.x, fighter.y, config.FOLLOWER_RADIUS, prev_x, prev_y
+            # Apply arena bounds constraints
+            fighter.x, fighter.y = self.arena.clamp_position(
+                fighter.x, fighter.y, config.FOLLOWER_RADIUS
             )
 
-            # Bounce off walls
+            # Bounce off arena edges
             if abs(fighter.x - prev_x) < 0.01 and abs(fighter.vx) > 0.1:
                 fighter.vx *= -0.5
                 fighter.push_vx *= -0.5
@@ -583,50 +676,18 @@ class TeamBattleGame:
         # DISABLED: resolve_overlaps is O(n²) and too slow for large counts
         # self.physics.resolve_overlaps(self.fighters)
 
-        # Re-apply wall/quadrant clamping after physics resolution
-        # This prevents fighters from being pushed through walls
+        # Re-apply arena clamping after physics resolution
+        # This prevents fighters from being pushed out of bounds
         # OPTIMIZED: Only clamp fighters that were updated this frame
         prof_clamp_start = time.time()
         for fighter in fighters_to_update:
             if not fighter.alive:
                 continue
 
-            # Get arena bounds
-            left, top, right, bottom = self.arena.get_bounds()
-            radius = config.FOLLOWER_RADIUS
-
-            # Always clamp to arena bounds
-            fighter.x = max(left + radius, min(right - radius, fighter.x))
-            fighter.y = max(top + radius, min(bottom - radius, fighter.y))
-
-            # If both walls are closed, clamp to quadrant
-            if self.arena.horizontal_wall_closed and self.arena.vertical_wall_closed:
-                fighter.x, fighter.y = self.arena.clamp_to_quadrant(
-                    fighter.x, fighter.y, config.FOLLOWER_RADIUS, fighter.team
-                )
-            else:
-                # Apply specific wall constraints based on which walls are still closed
-                wall_margin = self.arena.wall_thickness // 2 + radius
-
-                # Horizontal wall still closed - keep fighters on their side (top/bottom)
-                if self.arena.horizontal_wall_closed:
-                    is_top_team = fighter.team in (Team.RED, Team.BLUE)
-                    if is_top_team:
-                        # Top teams stay above horizontal wall
-                        fighter.y = min(fighter.y, self.arena.center_y - wall_margin)
-                    else:
-                        # Bottom teams stay below horizontal wall
-                        fighter.y = max(fighter.y, self.arena.center_y + wall_margin)
-
-                # Vertical wall still closed - keep fighters on their side (left/right)
-                if self.arena.vertical_wall_closed:
-                    is_left_team = fighter.team in (Team.RED, Team.GREEN)
-                    if is_left_team:
-                        # Left teams stay left of vertical wall
-                        fighter.x = min(fighter.x, self.arena.center_x - wall_margin)
-                    else:
-                        # Right teams stay right of vertical wall
-                        fighter.x = max(fighter.x, self.arena.center_x + wall_margin)
+            # Clamp to arena bounds (no walls)
+            fighter.x, fighter.y = self.arena.clamp_position(
+                fighter.x, fighter.y, config.FOLLOWER_RADIUS
+            )
 
         # Particles
         self.particles.update(dt)
@@ -635,10 +696,14 @@ class TeamBattleGame:
         self.sound.update_music_volume()
 
         # Phase-specific logic
-        if self.phase == "semifinals":
-            self._update_semifinals()
-        elif self.phase == "semifinal_transition":
-            self._update_semifinal_transition()
+        if self.phase == "match1":
+            self._update_match1()
+        elif self.phase == "match1_transition":
+            self._update_match1_transition()
+        elif self.phase == "match2":
+            self._update_match2()
+        elif self.phase == "match2_transition":
+            self._update_match2_transition()
         elif self.phase == "finals":
             self._update_finals()
         elif self.phase == "final_transition":
@@ -675,24 +740,23 @@ class TeamBattleGame:
                 print(f"{eliminated} eliminated - R:{team_counts[Team.RED]} B:{team_counts[Team.BLUE]} G:{team_counts[Team.GREEN]} Y:{team_counts[Team.YELLOW]}")
             self.last_alive_count = alive_count
 
-    def _update_semifinals(self):
-        """Update semifinal phase"""
-        winners = self.check_semifinal_results()
-        if winners:
-            self.semifinal_winners = winners
-            print(f"\nSEMIFINALS COMPLETE!")
-            print(f"Winners: {[w.value.upper() for w in winners]}")
-            print(f"Eliminated: {[e.value.upper() for e in self.eliminated_teams]}")
+    def _update_match1(self):
+        """Update Match 1 phase"""
+        winner = self.check_match_result(self.match1_teams[0], self.match1_teams[1])
+        if winner:
+            self.match1_winner = winner
+            print(f"\nMATCH 1 COMPLETE! Winner: {winner.value.upper()}")
 
-            # Assign placements to eliminated teams (they're 3rd and 4th)
-            for i, team in enumerate(self.eliminated_teams):
-                self.team_placements[team] = 4 - i  # First eliminated = 4th, second = 3rd
+            # Assign 4th place to loser
+            loser = self.match1_teams[1] if winner == self.match1_teams[0] else self.match1_teams[0]
+            self.team_placements[loser] = 4
 
-            # Disable targeting during transition
-            self.set_targeting_enabled(False)
+            # Freeze winner (disable targeting)
+            for fighter in self.teams[winner]:
+                if fighter.alive:
+                    fighter.targeting_enabled = False
 
-            # Start transition
-            self.phase = "semifinal_transition"
+            self.phase = "match1_transition"
             self.phase_start_time = self.game_time
 
     def eliminate_team(self, team: Team):
@@ -708,46 +772,94 @@ class TeamBattleGame:
         if eliminated_count > 0:
             print(f"  Eliminated {eliminated_count} stragglers from {team.value}")
 
-    def _update_semifinal_transition(self):
-        """Handle transition between semifinals and finals"""
+    def _update_match1_transition(self):
+        """Transition from Match 1 to Match 2"""
         elapsed = self.game_time - self.phase_start_time
 
-        # Brief pause, then revive winners
-        if elapsed >= 1.0:
-            # First, eliminate any remaining fighters from losing teams
-            for team in self.eliminated_teams:
-                self.eliminate_team(team)
+        if elapsed >= 0.5:
+            # Eliminate stragglers from losing team
+            loser = [t for t in [self.match1_teams[0], self.match1_teams[1]]
+                     if t != self.match1_winner][0]
+            self.eliminate_team(loser)
 
-            # Revive winning teams at their death positions
-            for team in self.semifinal_winners:
-                self.revive_team(team, at_death_position=True)
+            # Despawn Match 1 winner during Match 2
+            # They'll be respawned fresh on opposite sides for the finals
+            for fighter in self.teams[self.match1_winner]:
+                fighter.targeting_enabled = False
+                fighter.alive = False  # Make them not count as alive during Match 2
+                fighter.x = -5000
+                fighter.y = -5000
+                # Reset HP to full for finals
+                fighter.current_hp = fighter.max_hp
 
-            # Reset HP to full for surviving fighters (revived fighters already have full HP)
-            self.reset_hp_for_alive_fighters(self.semifinal_winners)
+            # Set up Match 2 announcement
+            self.matchup_text = f"{self.match2_teams[0].value.upper()} vs {self.match2_teams[1].value.upper()}"
+            self.matchup_text_2 = ""
 
-            # Disable targeting during announcement/countdown
-            self.set_targeting_enabled(False, self.semifinal_winners)
+            self.phase = "match2_announce"
+            self.phase_start_time = self.game_time
+            print(f"\nMATCH 2: {self.matchup_text}\n")
+
+    def _update_match2(self):
+        """Update Match 2 phase"""
+        winner = self.check_match_result(self.match2_teams[0], self.match2_teams[1])
+        if winner:
+            self.match2_winner = winner
+            print(f"\nMATCH 2 COMPLETE! Winner: {winner.value.upper()}")
+
+            # Assign 3rd place to loser
+            loser = self.match2_teams[1] if winner == self.match2_teams[0] else self.match2_teams[0]
+            self.team_placements[loser] = 3
+
+            # Freeze both winners
+            for team in [self.match1_winner, winner]:
+                for fighter in self.teams[team]:
+                    if fighter.alive:
+                        fighter.targeting_enabled = False
+
+            self.phase = "match2_transition"
+            self.phase_start_time = self.game_time
+
+    def _update_match2_transition(self):
+        """Transition from Match 2 to Finals"""
+        elapsed = self.game_time - self.phase_start_time
+
+        if elapsed >= 0.5:
+            # Eliminate stragglers from losing team
+            loser = [t for t in [self.match2_teams[0], self.match2_teams[1]]
+                     if t != self.match2_winner][0]
+            self.eliminate_team(loser)
+
+            # Reset HP for Match 2 winner (they'll be respawned fresh for finals)
+            for fighter in self.teams[self.match2_winner]:
+                if fighter.alive:
+                    fighter.current_hp = fighter.max_hp
+
+            # Populate semifinal_winners for finals
+            self.semifinal_winners = [self.match1_winner, self.match2_winner]
+
+            # Set up Finals announcement
+            self.matchup_text = f"{self.match1_winner.value.upper()} vs {self.match2_winner.value.upper()}"
+            self.matchup_text_2 = ""
+
+            # Set opponent teams for finals
+            for fighter in self.teams[self.match1_winner]:
+                fighter.current_opponent_team = self.match2_winner
+            for fighter in self.teams[self.match2_winner]:
+                fighter.current_opponent_team = self.match1_winner
 
             # Update alive count
             self.last_alive_count = sum(1 for f in self.fighters if f.alive)
 
-            # Set up finals announcement
-            team_a = self.semifinal_winners[0]
-            team_b = self.semifinal_winners[1]
-            self.matchup_text = f"{team_a.value.upper()} vs {team_b.value.upper()}"
-            self.matchup_text_2 = ""
-
-            # Set opponent teams for finals: the two semifinal winners fight each other
-            for fighter in self.teams[team_a]:
-                fighter.current_opponent_team = team_b
-                fighter.target_follower = None  # Reset targeting
-            for fighter in self.teams[team_b]:
-                fighter.current_opponent_team = team_a
-                fighter.target_follower = None  # Reset targeting
+            # Reset targeting
+            for fighter in self.teams[self.match1_winner]:
+                fighter.target_follower = None
+            for fighter in self.teams[self.match2_winner]:
+                fighter.target_follower = None
 
             self.phase = "finals_announce"
             self.phase_start_time = self.game_time
-            print(f"\nFINALS: {team_a.value.upper()} vs {team_b.value.upper()}!\n")
+            print(f"\nFINALS: {self.matchup_text}\n")
 
     def _update_finals(self):
         """Update finals phase"""
@@ -778,7 +890,7 @@ class TeamBattleGame:
         """Handle transition to free-for-all"""
         elapsed = self.game_time - self.phase_start_time
 
-        if elapsed >= 1.0:
+        if elapsed >= 0.5:
             # Eliminate any remaining fighters from losing teams (including finals loser)
             for team in Team:
                 if team != self.winning_team:
@@ -1001,14 +1113,20 @@ class TeamBattleGame:
             "matchup_text": self.matchup_text,
             "matchup_text_2": self.matchup_text_2,
             "semifinal_winners": self.semifinal_winners,
+            "match1_teams": self.match1_teams,
+            "match2_teams": self.match2_teams,
+            "match1_winner": self.match1_winner,
         }
 
         self.renderer.render_frame(self.fighters, self.arena, game_state, self.particles)
 
         # Record frame
-        recording_phases = ("intro", "matchup_announce", "countdown", "semifinals", "semifinal_transition",
+        recording_phases = ("intro",
+                           "match1_announce", "match1_countdown", "match1", "match1_transition",
+                           "match2_announce", "match2_countdown", "match2", "match2_transition",
                            "finals_announce", "finals_countdown", "finals", "final_transition",
-                           "freeforall_announce", "freeforall_countdown", "freeforall", "finished")
+                           "freeforall_announce", "freeforall_countdown", "freeforall",
+                           "finished")
         if self.phase in recording_phases:
             # Initialize recording start time on first recording frame
             if self.recording_start_time is None:
@@ -1087,33 +1205,29 @@ class TeamBattleGame:
             for fighter in self.fighters:
                 prev_x, prev_y = fighter.x, fighter.y
                 fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled=False)
-                fighter.x, fighter.y = self.arena.clamp_position_with_walls(
-                    fighter.x, fighter.y, config.FOLLOWER_RADIUS, prev_x, prev_y
+                fighter.x, fighter.y = self.arena.clamp_position(
+                    fighter.x, fighter.y, config.FOLLOWER_RADIUS
                 )
 
             # Physics - handle collision knockback and resolve overlaps
             self.physics.update(self.fighters, dt)  # Enabled: knockback from collisions
             self.physics.resolve_overlaps(self.fighters)
 
-            # Re-apply wall clamping after physics (fighters can be pushed through walls)
+            # Re-apply arena clamping after physics
             for fighter in self.fighters:
-                fighter.x, fighter.y = self.arena.clamp_to_quadrant(
-                    fighter.x, fighter.y, config.FOLLOWER_RADIUS, fighter.team
+                fighter.x, fighter.y = self.arena.clamp_position(
+                    fighter.x, fighter.y, config.FOLLOWER_RADIUS
                 )
             self.particles.update(dt)
             self.sound.update_music_volume()
             self.render()
 
-        # Start matchup announcement (before countdown)
-        print("\nAnnouncing matchups...")
-        self.phase = "matchup_announce"
+        # Start Match 1 announcement
+        print(f"\nMATCH 1: {self.match1_teams[0].value.upper()} vs {self.match1_teams[1].value.upper()}")
+        self.matchup_text = f"{self.match1_teams[0].value.upper()} vs {self.match1_teams[1].value.upper()}"
+        self.matchup_text_2 = ""
+        self.phase = "match1_announce"
         self.phase_start_time = self.game_time
-
-        # Set matchup text for semifinals
-        team_a, team_b = self.semifinal_matchups[0]
-        team_c, team_d = self.semifinal_matchups[1]
-        self.matchup_text = f"{team_a.value.upper()} vs {team_b.value.upper()}"
-        self.matchup_text_2 = f"{team_c.value.upper()} vs {team_d.value.upper()}"
 
         # Track podium display time
         game_over_start_time = None

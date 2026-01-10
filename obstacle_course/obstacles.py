@@ -221,6 +221,16 @@ class Spinner(Obstacle):
         # Keep angle in 0-2pi range
         self.angle = self.angle % (math.pi * 2)
 
+    def get_bounds(self) -> Tuple[float, float, float, float]:
+        """Get spinner bounds centered on the rotation point"""
+        half_length = self.bar_length / 2
+        padding = self.bar_width / 2
+        left = self.center_x - half_length - padding
+        top = self.center_y - half_length - padding
+        right = self.center_x + half_length + padding
+        bottom = self.center_y + half_length + padding
+        return (left, top, right, bottom)
+
     def check_collision(self, racer_pos: Tuple[float, float], racer_radius: float) -> bool:
         """Check collision with rotating bar"""
         import math

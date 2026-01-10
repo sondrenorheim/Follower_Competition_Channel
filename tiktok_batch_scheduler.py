@@ -115,9 +115,9 @@ def main():
             args.visibility,
         )
         if ok:
-            print(f"  ✓ Success: {video.name}")
+            print(f"  [OK] Success: {video.name}")
         else:
-            print(f"  ✗ Failed: {video.name}")
+            print(f"  [FAILED] Failed: {video.name}")
 
 
 if __name__ == "__main__":

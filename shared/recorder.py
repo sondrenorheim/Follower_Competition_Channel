@@ -4,6 +4,8 @@ Handles frame capture and video export using MoviePy
 Generates and mixes audio from logged events
 """
 
+import math
+from pathlib import Path
 import pygame
 import numpy as np
 from typing import List, Optional
@@ -35,6 +37,12 @@ class VideoRecorder:
         self.frames: List[np.ndarray] = []
         self.recording = config.EXPORT_VIDEO
 
+        # Streaming mode - write frames directly to disk (for long videos)
+        self.use_streaming = getattr(config, "VIDEO_STREAMING_MODE", True)
+        self.video_writer = None
+        self.temp_video_path = None
+        self.frame_count = 0
+
         # Time-based capture for accurate video speed
         self.frame_time = 1.0 / self.fps  # Time between frames in seconds
         self.next_capture_time = 0.0
@@ -42,9 +50,15 @@ class VideoRecorder:
 
         # Audio logger for post-processing
         self.audio_logger = audio_logger
+        self.background_music_start_time = None
+        self.include_background_music = True
+        self.music_segments = []
 
-        # Custom countdown audio path
-        self.countdown_audio_path = countdown_audio_path or 'assets/countdown_audio.wav'
+        # Custom countdown audio path (empty string disables countdown audio)
+        if countdown_audio_path is None:
+            self.countdown_audio_path = 'assets/countdown_audio.wav'
+        else:
+            self.countdown_audio_path = countdown_audio_path
 
         # Green screen overlay video (for obstacle course)
         self.greenscreen_video_path = None
@@ -53,6 +67,7 @@ class VideoRecorder:
         self.greenscreen_start_frame = None  # Frame index where countdown starts
 
         print(f"📹 Video Recorder initialized: {self.output_path} @ {self.fps} FPS")
+        print(f"   Mode: {'Streaming (low memory)' if self.use_streaming else 'Buffered (high quality)'}")
         print(f"   Using time-based capture (1 frame every {self.frame_time*1000:.1f}ms)")
 
         if config.UPSCALE_VIDEO and config.UPSCALE_FACTOR > 1.0:
@@ -97,16 +112,21 @@ class VideoRecorder:
             if config.UPSCALE_VIDEO and config.UPSCALE_FACTOR > 1.0:
                 frame = self._upscale_frame(frame, config.UPSCALE_FACTOR)
 
-            self.frames.append(frame)
+            # Write frame based on mode
+            if self.use_streaming:
+                self._write_frame_streaming(frame)
+            else:
+                self.frames.append(frame)
 
             # Schedule next capture (only advance if not forced)
             if not force:
                 self.next_capture_time += self.frame_time
 
             # Print progress every 100 frames
-            if len(self.frames) % 100 == 0:
-                duration = len(self.frames) / self.fps
-                print(f"   Captured {len(self.frames)} frames ({duration:.1f}s of video)")
+            frame_count = self.frame_count if self.use_streaming else len(self.frames)
+            if frame_count % 100 == 0:
+                duration = frame_count / self.fps
+                print(f"   Captured {frame_count} frames ({duration:.1f}s of video)")
 
     def _upscale_frame(self, frame: np.ndarray, scale_factor: float) -> np.ndarray:
         """
@@ -139,6 +159,57 @@ class VideoRecorder:
                 print("   Install opencv-python for better quality: pip install opencv-python")
                 upscaled = np.repeat(np.repeat(frame, int(scale_factor), axis=0), int(scale_factor), axis=1)
                 return upscaled
+
+    def _write_frame_streaming(self, frame: np.ndarray):
+        """
+        Write frame directly to disk using OpenCV VideoWriter (streaming mode)
+
+        Args:
+            frame: Frame to write (height, width, 3) in RGB format
+        """
+        import cv2
+
+        # Initialize video writer on first frame
+        if self.video_writer is None:
+            # Create temporary file for video
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            self.temp_video_path = os.path.join(temp_dir, f"video_stream_{os.getpid()}.mp4")
+
+            height, width = frame.shape[:2]
+
+            # Use H264 codec for MP4 (widely compatible)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' works on all platforms
+
+            self.video_writer = cv2.VideoWriter(
+                self.temp_video_path,
+                fourcc,
+                self.fps,
+                (width, height)
+            )
+
+            if not self.video_writer.isOpened():
+                print(f"❌ Failed to initialize video writer")
+                print(f"   Falling back to buffered mode")
+                self.use_streaming = False
+                self.frames.append(frame)
+                return
+
+            print(f"✅ Streaming video writer initialized: {self.temp_video_path}")
+
+        # Convert RGB to BGR (OpenCV uses BGR)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        # Write frame
+        self.video_writer.write(frame_bgr)
+        self.frame_count += 1
+
+    def _close_streaming_writer(self):
+        """Close the streaming video writer"""
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.video_writer = None
+            print(f"✅ Video stream closed: {self.frame_count} frames written")
 
     def _generate_elimination_sfx(self):
         """
@@ -187,6 +258,111 @@ class VideoRecorder:
             print(f"⚠️  Error generating elimination SFX: {e}")
             return None
 
+    def _generate_impact_sfx(self, freq: int = 400, duration_ms: int = 80, volume: float = 0.5, decay: float = 0.7):
+        """
+        Generate impact sound effect (hit sounds for fighting games)
+        Returns pydub AudioSegment
+        """
+        try:
+            from pydub import AudioSegment
+            import numpy as np
+
+            sample_rate = 22050
+            num_samples = int(sample_rate * duration_ms / 1000)
+            samples = []
+
+            for i in range(num_samples):
+                t = i / sample_rate
+                progress = i / num_samples
+                envelope = volume * (1 - progress) ** decay
+
+                # Mix sine wave with noise for punch feel
+                sine_val = np.sin(2 * np.pi * freq * t)
+                noise_val = np.random.uniform(-0.3, 0.3)
+                value = int(32767 * envelope * (sine_val * 0.7 + noise_val * 0.3))
+                samples.append(value)
+
+            audio_data = np.array(samples, dtype=np.int16).tobytes()
+            sfx = AudioSegment(
+                data=audio_data,
+                sample_width=2,
+                frame_rate=sample_rate,
+                channels=1
+            )
+            return sfx.set_channels(2)
+
+        except Exception as e:
+            return None
+
+    def _generate_sweep_sfx(self, freq_start: int = 400, freq_end: int = 800, duration_ms: int = 100, volume: float = 0.5):
+        """
+        Generate frequency sweep sound effect (whoosh, charge-up sounds)
+        Returns pydub AudioSegment
+        """
+        try:
+            from pydub import AudioSegment
+            import numpy as np
+
+            sample_rate = 22050
+            num_samples = int(sample_rate * duration_ms / 1000)
+            samples = []
+
+            for i in range(num_samples):
+                t = i / sample_rate
+                progress = i / num_samples
+                freq = freq_start + (freq_end - freq_start) * progress
+                envelope = volume * (1 - abs(progress - 0.5) * 0.5)  # Peak in middle
+
+                value = int(32767 * envelope * np.sin(2 * np.pi * freq * t))
+                samples.append(value)
+
+            audio_data = np.array(samples, dtype=np.int16).tobytes()
+            sfx = AudioSegment(
+                data=audio_data,
+                sample_width=2,
+                frame_rate=sample_rate,
+                channels=1
+            )
+            return sfx.set_channels(2)
+
+        except Exception as e:
+            return None
+
+    def _generate_combat_sfx(self, sound_name: str):
+        """
+        Generate combat sound effect based on name
+        Returns pydub AudioSegment or None
+        """
+        # Map sound names to generation parameters
+        sfx_params = {
+            'light_hit': ('impact', {'freq': 700, 'duration_ms': 50, 'volume': 0.4, 'decay': 0.8}),
+            'heavy_hit': ('impact', {'freq': 180, 'duration_ms': 120, 'volume': 0.6, 'decay': 0.6}),
+            'finisher_hit': ('impact', {'freq': 120, 'duration_ms': 150, 'volume': 0.7, 'decay': 0.5}),
+            'ki_blast_fire': ('sweep', {'freq_start': 800, 'freq_end': 1200, 'duration_ms': 100, 'volume': 0.5}),
+            'ki_blast_hit': ('impact', {'freq': 500, 'duration_ms': 80, 'volume': 0.5, 'decay': 0.7}),
+            'block': ('impact', {'freq': 1000, 'duration_ms': 100, 'volume': 0.4, 'decay': 0.9}),
+            'final_smash_charge': ('sweep', {'freq_start': 100, 'freq_end': 500, 'duration_ms': 500, 'volume': 0.6}),
+            'final_smash_impact': ('impact', {'freq': 80, 'duration_ms': 300, 'volume': 0.8, 'decay': 0.5}),
+            'teleport': ('sweep', {'freq_start': 400, 'freq_end': 800, 'duration_ms': 50, 'volume': 0.4}),
+            'dash': ('impact', {'freq': 300, 'duration_ms': 80, 'volume': 0.3, 'decay': 0.9}),
+            # New dynamic fight sounds
+            'clash': ('impact', {'freq': 600, 'duration_ms': 150, 'volume': 0.7, 'decay': 0.6}),
+            'counter_hit': ('impact', {'freq': 400, 'duration_ms': 100, 'volume': 0.6, 'decay': 0.7}),
+            'desperation_activate': ('sweep', {'freq_start': 200, 'freq_end': 800, 'duration_ms': 300, 'volume': 0.6}),
+        }
+
+        if sound_name not in sfx_params:
+            return None
+
+        sfx_type, params = sfx_params[sound_name]
+
+        if sfx_type == 'impact':
+            return self._generate_impact_sfx(**params)
+        elif sfx_type == 'sweep':
+            return self._generate_sweep_sfx(**params)
+
+        return None
+
     def _generate_mixed_audio(self, video_duration: float, export_fps: int) -> Optional[str]:
         """
         Generate mixed audio track from audio files (background music and countdown)
@@ -214,40 +390,112 @@ class VideoRecorder:
                 'background': 'assets/sydney_tour_music.wav',
                 'countdown': self.countdown_audio_path,
             }
+            base_dir = Path(__file__).resolve().parents[1]
+            background_path = Path(audio_files['background'])
+            if not background_path.is_absolute():
+                background_path = base_dir / background_path
+            audio_files['background'] = str(background_path)
+
+            countdown_path = Path(audio_files['countdown'])
+            if not countdown_path.is_absolute():
+                countdown_path = base_dir / countdown_path
+            audio_files['countdown'] = str(countdown_path)
 
             # 1. Add background music (trimmed from beginning to sync ending)
-            if os.path.exists(audio_files['background']):
+            include_background = getattr(self, "include_background_music", True)
+            if include_background and os.path.exists(audio_files['background']):
                 print(f"   Adding background music...")
                 bg_music = AudioSegment.from_wav(audio_files['background'])
                 bg_music = bg_music - 12  # Reduce volume by 12dB
 
                 video_duration_ms = int(video_duration * 1000)
                 bg_duration_ms = len(bg_music)
+                bg_start_ms = 0
+                if self.background_music_start_time is not None:
+                    bg_start_ms = max(0, int(self.background_music_start_time * 1000))
 
-                # If video is longer than music, we need to loop
-                # If video is shorter than music, we trim from the beginning
-                if video_duration_ms > bg_duration_ms:
-                    # Loop background music to fill video duration
-                    print(f"   Background music shorter than video, looping...")
-                    looped_bg = bg_music
-                    while len(looped_bg) < video_duration_ms:
-                        looped_bg = looped_bg + bg_music
-
-                    # Trim from beginning to keep the ending
-                    # We want the last video_duration_ms of the looped music
-                    start_trim = len(looped_bg) - video_duration_ms
-                    looped_bg = looped_bg[start_trim:]
+                if bg_start_ms >= video_duration_ms:
+                    print("   Background music start is after video end; skipping music")
                 else:
-                    # Music is longer than video, trim from beginning to keep ending
-                    print(f"   Trimming {(bg_duration_ms - video_duration_ms)/1000:.2f}s from beginning of music...")
-                    start_trim = bg_duration_ms - video_duration_ms
-                    looped_bg = bg_music[start_trim:]
+                    available_duration_ms = video_duration_ms - bg_start_ms
 
-                # Overlay background music
-                mixed_audio = mixed_audio.overlay(looped_bg, position=0)
-                print(f"   ✓ Background music added (ending synced)")
+                    # If video segment is longer than music, we need to loop
+                    # If video segment is shorter than music, we trim from the beginning
+                    if available_duration_ms > bg_duration_ms:
+                        # Loop background music to fill video duration
+                        print(f"   Background music shorter than video, looping...")
+                        looped_bg = bg_music
+                        while len(looped_bg) < available_duration_ms:
+                            looped_bg = looped_bg + bg_music
 
-            # 2. Add countdown audio at the correct position (when countdown actually starts)
+                        # Trim from beginning to keep the ending
+                        # We want the last available_duration_ms of the looped music
+                        start_trim = len(looped_bg) - available_duration_ms
+                        looped_bg = looped_bg[start_trim:]
+                    else:
+                        # Music is longer than segment, trim from beginning to keep ending
+                        print(f"   Trimming {(bg_duration_ms - available_duration_ms)/1000:.2f}s from beginning of music...")
+                        start_trim = bg_duration_ms - available_duration_ms
+                        looped_bg = bg_music[start_trim:]
+
+                    # Overlay background music at the requested offset
+                    mixed_audio = mixed_audio.overlay(looped_bg, position=bg_start_ms)
+                    if bg_start_ms > 0:
+                        print(f"   Background music added at {bg_start_ms/1000:.1f}s (ending synced)")
+                    else:
+                        print(f"   Background music added (ending synced)")
+            elif not include_background:
+                print("   Background music disabled for this export")
+
+            # 2. Add custom music segments (if any)
+            music_segments = getattr(self, "music_segments", [])
+            if music_segments:
+                print(f"   Adding {len(music_segments)} custom music segment(s)...")
+            for segment in music_segments:
+                if not isinstance(segment, dict):
+                    continue
+                path = segment.get("path", "")
+                if not path or not os.path.exists(path):
+                    print(f"   Warning: music segment not found: {path}")
+                    continue
+
+                start_time = float(segment.get("start", 0.0))
+                end_time = segment.get("end", None)
+                if end_time is None:
+                    end_time = video_duration
+                else:
+                    end_time = float(end_time)
+
+                if start_time >= video_duration:
+                    continue
+                if end_time <= start_time:
+                    continue
+
+                start_ms = max(0, int(start_time * 1000))
+                end_ms = max(start_ms, int(min(end_time, video_duration) * 1000))
+                segment_duration_ms = end_ms - start_ms
+                if segment_duration_ms <= 0:
+                    continue
+
+                segment_audio = AudioSegment.from_file(path)
+                volume_scale = segment.get("volume", 1.0)
+                try:
+                    volume_scale = float(volume_scale)
+                except (TypeError, ValueError):
+                    volume_scale = 1.0
+                volume_scale = max(0.001, volume_scale)
+                volume_db = 20 * math.log10(volume_scale)
+                segment_audio = segment_audio + volume_db
+
+                if len(segment_audio) < segment_duration_ms:
+                    loops = segment_duration_ms // max(1, len(segment_audio)) + 1
+                    segment_audio = (segment_audio * loops)[:segment_duration_ms]
+                else:
+                    segment_audio = segment_audio[:segment_duration_ms]
+
+                mixed_audio = mixed_audio.overlay(segment_audio, position=start_ms)
+
+            # 3. Add countdown audio at the correct position (when countdown actually starts)
             if os.path.exists(audio_files['countdown']):
                 print(f"   Adding countdown audio...")
                 countdown_audio = AudioSegment.from_wav(audio_files['countdown'])
@@ -265,20 +513,32 @@ class VideoRecorder:
                 sound_effects = [e for e in self.audio_logger.events if e.event_type == 'sound_effect']
                 if sound_effects:
                     print(f"   Adding {len(sound_effects)} sound effects...")
+                    sfx_added = 0
                     for event in sound_effects:
                         sound_name = event.data.get('sound_name', '')
                         timestamp_ms = int(event.timestamp * 1000)
                         volume_db = event.data.get('volume', 1.0)
 
+                        # Skip if timestamp is beyond video duration
+                        if timestamp_ms >= int(video_duration * 1000):
+                            continue
+
+                        sfx = None
+
                         # Generate elimination sound effect
                         if sound_name == 'elimination':
                             sfx = self._generate_elimination_sfx()
-                            if sfx:
-                                # Adjust volume
-                                sfx = sfx + (20 * (volume_db - 1.0))  # Convert to dB adjustment
-                                mixed_audio = mixed_audio.overlay(sfx, position=timestamp_ms)
+                        else:
+                            # Try to generate combat sound effect
+                            sfx = self._generate_combat_sfx(sound_name)
 
-                    print(f"   ✓ Sound effects added")
+                        if sfx:
+                            # Adjust volume
+                            sfx = sfx + (20 * (volume_db - 1.0))  # Convert to dB adjustment
+                            mixed_audio = mixed_audio.overlay(sfx, position=timestamp_ms)
+                            sfx_added += 1
+
+                    print(f"   ✓ {sfx_added} sound effects added")
 
             # Save final audio mix
             output_file = tempfile.mktemp(suffix='.wav')
@@ -479,6 +739,14 @@ class VideoRecorder:
         Export captured frames to MP4 video file using MoviePy
         Mixes all audio tracks (background music, intro, countdown)
         """
+        # Close streaming writer if active
+        if self.use_streaming and self.video_writer is not None:
+            self._close_streaming_writer()
+
+        # Handle streaming mode differently
+        if self.use_streaming:
+            return self._export_streaming_video()
+
         if not self.recording or not self.frames:
             print("No frames to export")
             return
@@ -558,6 +826,86 @@ class VideoRecorder:
             print(f"❌ Error exporting video: {e}")
             print(f"   Make sure MoviePy and ffmpeg are installed correctly")
 
+    def _export_streaming_video(self):
+        """
+        Export video in streaming mode (already written to temp file)
+        Only adds audio and moves to final location
+        """
+        if self.temp_video_path is None or not os.path.exists(self.temp_video_path):
+            print("❌ No streaming video file found")
+            return
+
+        try:
+            print(f"\n🎬 Exporting streaming video...")
+            print(f"   Frames: {self.frame_count}")
+            print(f"   Duration: {self.frame_count / self.fps:.1f}s")
+
+            # If audio is needed, use MoviePy to add it
+            if self.audio_logger:
+                from moviepy.editor import VideoFileClip, AudioFileClip
+
+                video_duration = self.frame_count / self.fps
+                audio_file = self._generate_mixed_audio(video_duration, self.fps)
+
+                if audio_file and os.path.exists(audio_file):
+                    try:
+                        video_clip = VideoFileClip(self.temp_video_path)
+                        audio_clip = AudioFileClip(audio_file)
+
+                        # Adjust audio duration to match video
+                        if audio_clip.duration > video_duration:
+                            audio_clip = audio_clip.subclip(0, video_duration)
+
+                        video_clip = video_clip.set_audio(audio_clip)
+                        video_clip.write_videofile(
+                            self.output_path,
+                            codec='libx264',
+                            audio_codec='aac',
+                            temp_audiofile='temp-audio.m4a',
+                            remove_temp=True,
+                            logger=None
+                        )
+
+                        video_clip.close()
+                        audio_clip.close()
+
+                        # Remove temp audio file
+                        if os.path.exists(audio_file):
+                            os.remove(audio_file)
+
+                        print(f"🎵 Audio track added to video")
+
+                    except Exception as e:
+                        print(f"⚠️  Could not add audio: {e}")
+                        print(f"   Copying video without audio")
+                        import shutil
+                        shutil.copy2(self.temp_video_path, self.output_path)
+                else:
+                    # No audio - just copy the file
+                    import shutil
+                    shutil.copy2(self.temp_video_path, self.output_path)
+            else:
+                # No audio needed - just move the file
+                import shutil
+                shutil.copy2(self.temp_video_path, self.output_path)
+
+            # Clean up temp file
+            if os.path.exists(self.temp_video_path):
+                os.remove(self.temp_video_path)
+                self.temp_video_path = None
+
+            print(f"✅ Video exported successfully!")
+            print(f"   File: {self.output_path}")
+            print(f"   Duration: {self.frame_count / self.fps:.1f}s")
+            print(f"   Frames: {self.frame_count}")
+            print(f"   FPS: {self.fps}")
+            print(f"   Mode: Streaming (low memory)")
+
+        except Exception as e:
+            print(f"❌ Error exporting streaming video: {e}")
+            import traceback
+            traceback.print_exc()
+
     def get_frame_count(self) -> int:
         """
         Get number of captured frames
@@ -565,7 +913,7 @@ class VideoRecorder:
         Returns:
             Number of frames
         """
-        return len(self.frames)
+        return self.frame_count if self.use_streaming else len(self.frames)
 
     def finalize(self):
         """
@@ -593,7 +941,8 @@ class VideoRecorder:
         Returns:
             Duration in seconds
         """
-        return len(self.frames) / self.fps if self.frames else 0
+        frame_count = self.frame_count if self.use_streaming else len(self.frames)
+        return frame_count / self.fps if frame_count > 0 else 0
 
     def clear_frames(self):
         """

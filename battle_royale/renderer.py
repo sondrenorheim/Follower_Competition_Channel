@@ -37,6 +37,12 @@ class Renderer:
         self.font_xlarge = pygame.font.Font(None, 36)
         self.font_large = pygame.font.Font(None, 48)
         self.font_huge = pygame.font.Font(None, 72)
+        self.font_promo = pygame.font.Font(None, 24)
+        self.promo_text_left = "Join Discord, link in bio"
+        self.promo_text_right = "Check your results in bio"
+        self.discord_logo = None
+        self.trophy_logo = None
+        self._load_promo_assets()
 
         # Cache for follower surfaces (avatar circles)
         self.follower_surfaces = {}
@@ -98,11 +104,13 @@ class Renderer:
         # Draw countdown overlay if in countdown phase
         if game_state.get("game_phase") == "countdown":
             self._draw_countdown(game_state.get("countdown_number", 3))
+            self._draw_promo_overlay()
             return render_stats  # Skip other UI during countdown
 
         # Draw intro overlay if in intro phase
         if game_state.get("game_phase") == "intro":
             self._draw_intro(game_state.get("day_number", 1))
+            self._draw_promo_overlay()
             return render_stats  # Skip other UI during intro
 
         # Draw zone shrink warning (only during playing phase)
@@ -129,6 +137,8 @@ class Renderer:
 
         if self.show_podium:
             self._draw_podium(self.winners, self.game_state)
+
+        self._draw_promo_overlay()
 
         # Return rendering statistics
         return render_stats
@@ -418,7 +428,7 @@ class Renderer:
         day_number = game_state.get("day_number", getattr(config, 'DAY_NUMBER', 1))
         day_font = pygame.font.Font(None, 36)
         arena_bottom = arena.center[1] + arena.initial_radius
-        day_text = day_font.render(f"Day {day_number}: {total_count} followers", True, config.COLOR_TEXT)
+        day_text = day_font.render(f"Day {day_number}: 75032 followers", True, config.COLOR_TEXT)
         day_rect = day_text.get_rect(center=(self.width // 2, arena_bottom + 25))
         self.screen.blit(day_text, day_rect)
 
@@ -443,6 +453,160 @@ class Renderer:
         zone_text = stats_font.render(f"Zone: {zone_pct:.0f}%", True, zone_color)
         zone_rect = zone_text.get_rect(center=(self.width // 2 + 80, arena_bottom + 55))
         self.screen.blit(zone_text, zone_rect)
+
+    def _get_pill_size(self, text: str, logo_surface: Optional[pygame.Surface]) -> Tuple[int, int]:
+        """Calculate pill size based on text and logo dimensions."""
+        text_surface = self.font_promo.render(text, True, (245, 245, 245))
+        text_width, text_height = text_surface.get_size()
+
+        logo_width = logo_surface.get_width() if logo_surface else 0
+        logo_height = logo_surface.get_height() if logo_surface else 0
+
+        gap = 8 if logo_surface else 0
+        padding_x = 16
+        padding_y = 8
+
+        content_width = text_width + logo_width + gap
+        content_height = max(text_height, logo_height)
+        pill_width = content_width + padding_x * 2
+        pill_height = content_height + padding_y * 2
+
+        return pill_width, pill_height
+
+    def _draw_pill(self, text: str, logo_surface: Optional[pygame.Surface],
+                  center_pos: Tuple[int, int]):
+        """Draw a single promo pill with optional logo."""
+        text_surface = self.font_promo.render(text, True, (245, 245, 245))
+        text_width, text_height = text_surface.get_size()
+
+        logo_width = logo_surface.get_width() if logo_surface else 0
+        logo_height = logo_surface.get_height() if logo_surface else 0
+
+        gap = 8 if logo_surface else 0
+        padding_x = 16
+        padding_y = 8
+
+        content_width = text_width + logo_width + gap
+        content_height = max(text_height, logo_height)
+        pill_width = content_width + padding_x * 2
+        pill_height = content_height + padding_y * 2
+
+        pill_rect = pygame.Rect(0, 0, pill_width, pill_height)
+        pill_rect.center = center_pos
+
+        shadow_surface = pygame.Surface((pill_width, pill_height), pygame.SRCALPHA)
+        pygame.draw.rect(
+            shadow_surface,
+            (0, 0, 0, 90),
+            shadow_surface.get_rect(),
+            border_radius=pill_height // 2
+        )
+        self.screen.blit(shadow_surface, (pill_rect.x + 2, pill_rect.y + 2))
+
+        pill_surface = pygame.Surface((pill_width, pill_height), pygame.SRCALPHA)
+        pygame.draw.rect(
+            pill_surface,
+            (30, 30, 35, 210),
+            pill_surface.get_rect(),
+            border_radius=pill_height // 2
+        )
+        pygame.draw.rect(
+            pill_surface,
+            (200, 200, 200, 40),
+            pill_surface.get_rect(),
+            width=1,
+            border_radius=pill_height // 2
+        )
+        self.screen.blit(pill_surface, pill_rect.topleft)
+
+        content_x = pill_rect.x + padding_x
+        if logo_surface:
+            logo_y = pill_rect.y + (pill_height - logo_height) // 2
+            self.screen.blit(logo_surface, (content_x, logo_y))
+            content_x += logo_width + gap
+
+        text_center_y = pill_rect.y + pill_height // 2
+        shadow_text = self.font_promo.render(text, True, (0, 0, 0))
+        shadow_rect = shadow_text.get_rect(midleft=(content_x, text_center_y))
+        self.screen.blit(shadow_text, shadow_rect.move(1, 1))
+
+        text_rect = text_surface.get_rect(midleft=(content_x, text_center_y))
+        self.screen.blit(text_surface, text_rect)
+
+    def _draw_promo_overlay(self):
+        """Draw promo pills in the bottom banner area."""
+        base_y = self.height - 28
+        gap_between = 12
+        margin_x = 24
+
+        left_width, left_height = self._get_pill_size(self.promo_text_left, self.discord_logo)
+        right_width, right_height = self._get_pill_size(self.promo_text_right, self.trophy_logo)
+
+        left_center = (margin_x + left_width // 2, base_y)
+        right_center = (self.width - margin_x - right_width // 2, base_y)
+
+        left_rect = pygame.Rect(0, 0, left_width, left_height)
+        left_rect.center = left_center
+        right_rect = pygame.Rect(0, 0, right_width, right_height)
+        right_rect.center = right_center
+
+        if left_rect.right + gap_between > right_rect.left:
+            total_width = left_width + right_width + gap_between
+            start_x = (self.width - total_width) // 2
+            left_center = (start_x + left_width // 2, base_y)
+            right_center = (start_x + left_width + gap_between + right_width // 2, base_y)
+
+        self._draw_pill(self.promo_text_left, self.discord_logo, left_center)
+        self._draw_pill(self.promo_text_right, self.trophy_logo, right_center)
+
+    def _load_promo_assets(self):
+        """Load and scale promo logos for the overlay pills."""
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        discord_path = os.path.join(base_dir, "discord_logo.png")
+        self.discord_logo = self._load_logo([discord_path])
+
+        trophy_paths = [
+            os.path.join(base_dir, "trophy.png"),
+            os.path.join(base_dir, "trophy_icon.png"),
+            os.path.join(base_dir, "assets", "trophy.png"),
+            os.path.join(base_dir, "website", "src", "assets", "trophy.png"),
+            os.path.join(base_dir, "website", "public", "trophy.png"),
+            os.path.join(base_dir, "website", "dist", "trophy.png"),
+        ]
+        self.trophy_logo = self._load_logo(trophy_paths)
+        if self.trophy_logo is None:
+            self.trophy_logo = self._render_emoji_icon("\U0001F3C6")
+
+    def _load_logo(self, paths: List[str]) -> Optional[pygame.Surface]:
+        """Load and scale a logo from the first existing path."""
+        target_height = max(16, int(self.font_promo.get_height() * 1.2))
+        for logo_path in paths:
+            if not os.path.exists(logo_path):
+                continue
+
+            try:
+                logo = pygame.image.load(logo_path).convert_alpha()
+                if logo.get_height() <= 0:
+                    return None
+                scale = target_height / logo.get_height()
+                target_width = max(1, int(logo.get_width() * scale))
+                return pygame.transform.smoothscale(logo, (target_width, target_height))
+            except Exception:
+                return None
+
+        return None
+
+    def _render_emoji_icon(self, emoji_text: str) -> Optional[pygame.Surface]:
+        """Render a small emoji icon as a surface fallback."""
+        target_height = max(16, int(self.font_promo.get_height() * 1.2))
+        try:
+            emoji_font = pygame.font.SysFont("Segoe UI Emoji", target_height)
+            emoji_surface = emoji_font.render(emoji_text, True, (255, 255, 255))
+            if emoji_surface is None:
+                return None
+            return emoji_surface.convert_alpha()
+        except Exception:
+            return None
 
     def _draw_zone_warning(self):
         """

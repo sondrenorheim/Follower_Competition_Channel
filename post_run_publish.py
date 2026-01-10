@@ -15,6 +15,7 @@ import argparse
 import os
 import time
 import random
+import webbrowser
 from pathlib import Path
 
 import config
@@ -37,7 +38,12 @@ def load_client(session_file: Path) -> Client:
         raise FileNotFoundError(f"Session file not found: {session_file}")
     cl = Client()
     cl.load_settings(session_file)
-    cl.get_timeline_feed()  # sanity check
+    try:
+        cl.get_timeline_feed()  # sanity check
+    except Exception as e:
+        raise SystemExit(
+            "Instagram session invalid or blocked. Refresh the session file or use --ig-uploader safe."
+        ) from e
     return cl
 
 
@@ -52,6 +58,17 @@ def load_tiktok_session(session_file: Path) -> str:
     if not session_id:
         raise ValueError(f"Missing 'sessionid' in {session_file}")
     return session_id
+
+
+def wait_for_manual_login(profile_url: str):
+    if not profile_url:
+        profile_url = "https://www.instagram.com/accounts/login/"
+    print(f"Opening browser for manual login: {profile_url}")
+    try:
+        webbrowser.open_new_tab(profile_url)
+    except Exception as e:
+        print(f"Could not open browser automatically: {e}")
+    input("Log in and navigate to your profile page, then press Enter to continue...")
 
 
 def upload_videos(cl: Client, video_paths: list[Path], caption_template: str, delay_seconds: int):
@@ -84,6 +101,27 @@ def upload_instagram(cl: Client, video_path: Path, caption: str) -> bool:
         except Exception as e2:
             print(f"❌ IG upload retry failed for {video_path.name}: {e2}")
             return False
+
+
+def save_instagram_cookies(cookies_file: Path) -> bool:
+    try:
+        from safe_instagram_uploader import SafeInstagramUploader
+    except Exception as e:
+        print(f"IG safe uploader unavailable: {e}")
+        return False
+    uploader = SafeInstagramUploader(cookies_file=str(cookies_file), headless=False)
+    uploader.save_cookies()
+    return True
+
+
+def upload_instagram_safe(video_path: Path, caption: str, cookies_file: Path, headless: bool) -> bool:
+    try:
+        from safe_instagram_uploader import SafeInstagramUploader
+    except Exception as e:
+        print(f"IG safe uploader unavailable: {e}")
+        return False
+    uploader = SafeInstagramUploader(cookies_file=str(cookies_file), headless=headless)
+    return uploader.upload_reel(str(video_path), caption)
 
 
 def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "SingingNarrator", schedule_hours: int = 0):
@@ -204,6 +242,75 @@ def upload_tiktok(session_id: str, video_path: Path, caption: str):
     )
 
 
+def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_hours: int = 0, privacy: str = "private") -> bool:
+    """
+    Upload to YouTube using the same channel as movie pipeline.
+
+    Args:
+        video_path: Path to the video file
+        game_mode: Game mode (e.g., "team_battle", "battle_royale")
+        day_number: Day number of the competition
+        schedule_hours: Hours to schedule ahead (0 = upload as private immediately)
+        privacy: Privacy status ("private", "unlisted", or "public")
+
+    Returns:
+        True if upload successful, False otherwise
+    """
+    youtube_uploader = Path(__file__).parent / "youtube_uploader.py"
+
+    if not youtube_uploader.exists():
+        print(f"❌ YouTube uploader not found: {youtube_uploader}")
+        return False
+
+    if not video_path.exists():
+        print(f"⚠️ Skipping missing video for YouTube: {video_path}")
+        return False
+
+    schedule_msg = f" (scheduled {schedule_hours}h from now)" if schedule_hours > 0 else f" (privacy: {privacy})"
+    print(f"▶️ Uploading to YouTube{schedule_msg}...")
+
+    cmd = [
+        "python",
+        str(youtube_uploader),
+        "--video", str(video_path),
+        "--day", str(day_number),
+        "--game", game_mode,
+        "--privacy", privacy,
+    ]
+
+    if schedule_hours > 0:
+        cmd.extend(["--schedule-hours", str(schedule_hours)])
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minute timeout for YouTube
+        )
+
+        # Print output
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
+
+        if result.returncode == 0:
+            print(f"✅ YouTube upload successful!")
+            return True
+        else:
+            print(f"❌ YouTube upload failed (exit code: {result.returncode})")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print("❌ YouTube upload timed out after 10 minutes")
+        return False
+    except Exception as e:
+        print(f"❌ YouTube upload failed: {e}")
+        return False
+
+
 def push_stats(commit_message: str | None):
     if getattr(config, "TEST_MODE", False):
         raise SystemExit("TEST_MODE is True: stats/history not saved. Re-run games with TEST_MODE=False before pushing.")
@@ -228,6 +335,68 @@ def push_stats(commit_message: str | None):
 def parse_args():
     parser = argparse.ArgumentParser(description="Push stats to GitHub and upload generated videos as Reels.")
     parser.add_argument(
+        "--enable-uploads",
+        action="store_true",
+        help="Enable Instagram/TikTok/YouTube uploads (default: stats only).",
+    )
+    parser.add_argument(
+        "--wait-for-login",
+        action="store_true",
+        help="Open a browser and wait for manual Instagram login before uploading (instagrapi only).",
+    )
+    parser.add_argument(
+        "--ig-profile-url",
+        default="",
+        help="Instagram profile URL to open for manual login (optional).",
+    )
+    parser.add_argument(
+        "--ig-uploader",
+        choices=["instagrapi", "safe"],
+        default="instagrapi",
+        help="Instagram uploader backend (default: instagrapi). 'safe' uses browser automation.",
+    )
+    parser.add_argument(
+        "--ig-cookies-file",
+        type=Path,
+        default=Path("instagram_cookies.json"),
+        help="Path to Instagram cookies for the safe uploader.",
+    )
+    parser.add_argument(
+        "--ig-headless",
+        action="store_true",
+        help="Run the safe Instagram uploader headless.",
+    )
+    parser.add_argument(
+        "--ig-save-cookies",
+        action="store_true",
+        help="Save Instagram cookies before uploading (legacy safe uploader only).",
+    )
+    parser.add_argument(
+        "--ig-export-followers",
+        action="store_true",
+        help="Run Account Center export flow before uploads (safe uploader only).",
+    )
+    parser.add_argument(
+        "--ig-export-after-uploads",
+        action="store_true",
+        help="Run Account Center export after uploads (requires --ig-export-followers and --ig-uploader safe).",
+    )
+    parser.add_argument(
+        "--export-only",
+        action="store_true",
+        help="Run Account Center export only (no stats push, no uploads). Requires --ig-uploader safe.",
+    )
+    parser.add_argument(
+        "--ig-export-profile",
+        default="",
+        help="Override export profile name (default: config.IG_EXPORT_PROFILE_NAME).",
+    )
+    parser.add_argument(
+        "--ig-export-date-range",
+        default="",
+        help="Override export date range label (default: config.IG_EXPORT_DATE_RANGE).",
+    )
+    parser.add_argument(
         "--session-file",
         type=Path,
         default=Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json"),
@@ -247,25 +416,117 @@ def parse_args():
     parser.add_argument(
         "--delay-seconds",
         type=int,
+        default=None,
+        help="Fixed delay between uploads in seconds. If set, randomization of ±20%% will be applied.",
+    )
+    parser.add_argument(
+        "--delay-min-seconds",
+        type=int,
+        default=10800,
+        help="Minimum delay between uploads in seconds (default 10800 = 3 hours).",
+    )
+    parser.add_argument(
+        "--delay-max-seconds",
+        type=int,
         default=14400,
-        help="Delay between uploads in seconds (default 14400 = 4 hours). Randomization of ±20%% will be applied.",
+        help="Maximum delay between uploads in seconds (default 14400 = 4 hours).",
     )
     parser.add_argument(
         "--push-message",
         default=None,
         help="Optional git commit message for stats push.",
     )
+    parser.add_argument(
+        "--skip-youtube",
+        action="store_true",
+        help="Skip YouTube uploads (only upload to Instagram/TikTok).",
+    )
+    parser.add_argument(
+        "--youtube-privacy",
+        choices=["private", "unlisted", "public"],
+        default="private",
+        help="YouTube privacy status (default: private).",
+    )
+    parser.add_argument(
+        "--youtube-schedule-hours",
+        type=int,
+        default=0,
+        help="Schedule YouTube upload X hours from now (0 = upload as private immediately).",
+    )
     return parser.parse_args()
+
+def load_export_password_from_file(path: Path) -> str:
+    try:
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+def run_ig_export(ig_persistent, args):
+    if args.ig_uploader != "safe" or not ig_persistent:
+        print("IG export requires --ig-uploader safe; skipping export.")
+        return False
+
+    profile_name = args.ig_export_profile or getattr(config, "IG_EXPORT_PROFILE_NAME", "followerbattlegrounds")
+    account_center_url = getattr(config, "IG_EXPORT_ACCOUNT_CENTER_URL", "https://accountscenter.instagram.com/")
+    info_permissions_label = getattr(config, "IG_EXPORT_INFO_PERMISSIONS_LABEL", "Your information and permissions")
+    export_info_label = getattr(config, "IG_EXPORT_EXPORT_INFO_LABEL", "Export your information")
+    export_to_device_label = getattr(config, "IG_EXPORT_EXPORT_TO_DEVICE_LABEL", "Export to device")
+    date_range_label = args.ig_export_date_range or getattr(config, "IG_EXPORT_DATE_RANGE", "Last week")
+    followers_label = getattr(config, "IG_EXPORT_FOLLOWERS_LABEL", "Followers and following")
+    format_label = getattr(config, "IG_EXPORT_FORMAT_LABEL", "JSON")
+    media_quality_label = getattr(config, "IG_EXPORT_MEDIA_QUALITY_LABEL", "Low")
+    wait_for_ready = getattr(config, "IG_EXPORT_WAIT_FOR_READY", True)
+    max_wait_minutes = getattr(config, "IG_EXPORT_MAX_WAIT_MINUTES", 90)
+    poll_interval_seconds = getattr(config, "IG_EXPORT_POLL_INTERVAL_SECONDS", 60)
+    export_password = getattr(config, "IG_EXPORT_PASSWORD", "") or os.getenv("IG_EXPORT_PASSWORD", "")
+    if not export_password:
+        export_password = load_export_password_from_file(Path("ig_export_password.txt"))
+
+    return ig_persistent.export_followers_from_account_center(
+        profile_name=profile_name,
+        account_center_url=account_center_url,
+        info_permissions_label=info_permissions_label,
+        export_info_label=export_info_label,
+        export_to_device_label=export_to_device_label,
+        date_range_label=date_range_label,
+        followers_label=followers_label,
+        format_label=format_label,
+        media_quality_label=media_quality_label,
+        export_password=export_password,
+        wait_for_ready=wait_for_ready,
+        max_wait_minutes=max_wait_minutes,
+        poll_interval_seconds=poll_interval_seconds,
+    )
 
 
 def main():
     args = parse_args()
-    # Session files not needed when video upload is disabled
-    # session_path = args.session_file or os.getenv("IG_SESSION_FILE")
-    # if not session_path:
-    #     raise SystemExit("Missing session file. Provide --session-file or set IG_SESSION_FILE.")
-    # session_path = Path(session_path)
-    # tiktok_session_path = args.tiktok_session_file or os.getenv("TIKTOK_SESSION_FILE")
+    if args.ig_export_after_uploads and not args.ig_export_followers:
+        args.ig_export_followers = True
+
+    if args.export_only:
+        if args.ig_uploader != "safe":
+            raise SystemExit("Export-only requires --ig-uploader safe.")
+        ig_cookies_path = Path(os.getenv("IG_COOKIES_FILE", str(args.ig_cookies_file)))
+        from persistent_instagram_uploader import PersistentInstagramUploader
+        export_download_dir = getattr(config, "IG_EXPORT_DOWNLOAD_DIR", "")
+        ig_persistent = PersistentInstagramUploader(
+            cookies_file=str(ig_cookies_path),
+            headless=args.ig_headless,
+            download_dir=export_download_dir or None,
+        )
+        if not ig_persistent.start_session():
+            raise SystemExit("Failed to start persistent Instagram session.")
+        try:
+            ok = run_ig_export(ig_persistent, args)
+            if not ok:
+                raise SystemExit("Export failed.")
+        finally:
+            ig_persistent.close_session()
+        print("Export completed.")
+        return
 
     # Build expected videos from ALL_GAME_MODES
     game_modes = getattr(config, "ALL_GAME_MODES", [])
@@ -274,11 +535,47 @@ def main():
     print("📦 Pushing stats/history to GitHub...")
     push_stats(args.push_message)
 
-    # VIDEO UPLOAD DISABLED - Only pushing stats to GitHub
-    # Uncomment the section below to re-enable video uploads
-    """
-    print("📤 Uploading videos as Reels/TikTok...")
-    client = load_client(session_path)
+    if not args.enable_uploads:
+        print("✅ Done (stats pushed only - video upload disabled).")
+        return
+
+    session_path = os.getenv("IG_SESSION_FILE", str(args.session_file))
+    if not session_path:
+        raise SystemExit("Missing session file. Provide --session-file or set IG_SESSION_FILE.")
+    session_path = Path(session_path)
+    ig_cookies_path = Path(os.getenv("IG_COOKIES_FILE", str(args.ig_cookies_file)))
+    tiktok_session_path = os.getenv("TIKTOK_SESSION_FILE", str(args.tiktok_session_file))
+
+    ig_safe = None
+    ig_export = None
+
+    def start_export_session(existing_driver=None):
+        from persistent_instagram_uploader import PersistentInstagramUploader
+        export_download_dir = getattr(config, "IG_EXPORT_DOWNLOAD_DIR", "")
+        exporter = PersistentInstagramUploader(
+            cookies_file=str(ig_cookies_path),
+            headless=args.ig_headless,
+            download_dir=export_download_dir or None,
+        )
+        if existing_driver is not None:
+            exporter.attach_existing_driver(existing_driver)
+            return exporter
+        if not exporter.start_session():
+            raise SystemExit("Failed to start persistent Instagram session for export.")
+        return exporter
+
+    client = None
+    if args.ig_uploader == "instagrapi":
+        if args.wait_for_login:
+            ig_profile_url = args.ig_profile_url
+            if not ig_profile_url:
+                ig_username = getattr(config, "INSTAGRAM_USERNAME", "")
+                if ig_username:
+                    ig_profile_url = f"https://www.instagram.com/{ig_username}/"
+                else:
+                    ig_profile_url = "https://www.instagram.com/accounts/login/"
+            wait_for_manual_login(ig_profile_url)
+        client = load_client(session_path)
     tiktok_session_id = None
     if tiktok_session_path:
         try:
@@ -286,33 +583,95 @@ def main():
         except Exception as e:
             print(f"⚠️ TikTok session load failed: {e}. TikTok uploads will be skipped.")
 
-    for idx, video_path in enumerate(video_paths):
-        if not video_path.exists():
-            print(f"⚠️ Skipping missing video: {video_path}")
-            continue
-        game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
-        caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
+    if args.ig_export_followers and not args.ig_export_after_uploads:
+        if args.ig_uploader == "safe":
+            ig_export = start_export_session()
+            ok = run_ig_export(ig_export, args)
+            if not ok:
+                print("IG export failed; continuing with uploads.")
+            ig_export.close_session()
+            ig_export = None
+        else:
+            run_ig_export(None, args)
 
-        # Instagram upload
-        print(f"▶️ IG: Uploading {video_path.name}")
-        ig_ok = upload_instagram(client, video_path, caption)
+    print("📤 Uploading videos as Reels/TikTok/YouTube...")
+    try:
+        if args.ig_uploader == "safe":
+            from safe_instagram_uploader import SafeInstagramUploader
+            ig_safe = SafeInstagramUploader(
+                cookies_file=str(ig_cookies_path),
+                headless=args.ig_headless,
+            )
+            if not ig_safe.start_session():
+                raise SystemExit("Failed to start safe Instagram session.")
 
-        # TikTok upload
-        if tiktok_session_id:
-            print(f"▶️ TikTok: Uploading {video_path.name}")
-            upload_tiktok(tiktok_session_id, video_path, caption)
+        for idx, video_path in enumerate(video_paths):
+            if not video_path.exists():
+                print(f"⚠️ Skipping missing video: {video_path}")
+                continue
+            game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
+            caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
 
-        # Delay before next upload (except after last one)
-        # Add randomization to avoid automation detection
-        if args.delay_seconds > 0 and idx < len(video_paths) - 1:
-            # Add ±20% randomization to delay (e.g., 3 hours ± 36 minutes)
-            variation = args.delay_seconds * 0.2
-            randomized_delay = args.delay_seconds + random.uniform(-variation, variation)
-            print(f"⏳ Waiting {randomized_delay/3600:.2f} hours before next upload...")
-            time.sleep(randomized_delay)
-    """
+            # Instagram upload
+            print(f"▶️ IG: Uploading {video_path.name}")
+            if args.ig_uploader == "safe":
+                ig_safe.upload_reel(str(video_path), caption, reuse_session=True)
+            else:
+                upload_instagram(client, video_path, caption)
 
-    print("✅ Done (stats pushed only - video upload disabled).")
+            # TikTok upload
+            if tiktok_session_id:
+                print(f"▶️ TikTok: Uploading {video_path.name}")
+                upload_tiktok(tiktok_session_id, video_path, caption)
+
+            # YouTube upload
+            skip_youtube_modes = set(getattr(config, "YOUTUBE_SKIP_GAME_MODES", []))
+            if not args.skip_youtube and game_mode not in skip_youtube_modes:
+                print(f"▶️ YouTube: Uploading {video_path.name}")
+                upload_youtube(
+                    video_path=video_path,
+                    game_mode=game_mode,
+                    day_number=config.DAY_NUMBER,
+                    schedule_hours=args.youtube_schedule_hours,
+                    privacy=args.youtube_privacy
+                )
+            elif game_mode in skip_youtube_modes:
+                print(f"Skipping YouTube upload for {game_mode} (config.YOUTUBE_SKIP_GAME_MODES).")
+
+            # Delay before next upload (except after last one)
+            if idx < len(video_paths) - 1:
+                randomized_delay = None
+                if args.delay_seconds is not None and args.delay_seconds > 0:
+                    variation = args.delay_seconds * 0.2
+                    randomized_delay = args.delay_seconds + random.uniform(-variation, variation)
+                elif args.delay_min_seconds and args.delay_max_seconds:
+                    low = min(args.delay_min_seconds, args.delay_max_seconds)
+                    high = max(args.delay_min_seconds, args.delay_max_seconds)
+                    randomized_delay = random.uniform(low, high)
+
+                if randomized_delay and randomized_delay > 0:
+                    print(f"⏳ Waiting {randomized_delay/3600:.2f} hours before next upload...")
+                    time.sleep(randomized_delay)
+
+        if args.ig_export_followers and args.ig_export_after_uploads:
+            if args.ig_uploader == "safe":
+                existing_driver = ig_safe.driver if ig_safe and ig_safe.driver else None
+                ig_export = start_export_session(existing_driver=existing_driver)
+                ok = run_ig_export(ig_export, args)
+                if not ok:
+                    print("IG export failed after uploads.")
+                ig_export.close_session()
+                ig_export = None
+            else:
+                run_ig_export(None, args)
+
+    finally:
+        if ig_safe:
+            ig_safe.close_session()
+        if ig_export:
+            ig_export.close_session()
+
+    print("✅ Done.")
 
 
 if __name__ == "__main__":

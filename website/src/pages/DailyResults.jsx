@@ -82,10 +82,11 @@ export default function DailyResults() {
         const fullGames = await Promise.all(
           dayGames.map(g => getGameWithResults(g))
         );
+        const scoringGames = fullGames.filter(game => game && !game.non_scoring);
 
         // Aggregate points (and kills/survival_time when available) per player across all games that day
         const aggregated = new Map();
-        fullGames.forEach(game => {
+        scoringGames.forEach(game => {
           if (!game || !game.results) return;
           game.results.forEach(result => {
             if (!aggregated.has(result.username)) {
@@ -113,7 +114,7 @@ export default function DailyResults() {
           game_type: 'all',
           game_display_name: 'All Games',
           day_number: selectedDayNumber,
-          timestamp: fullGames[0]?.timestamp || new Date().toISOString(),
+          timestamp: scoringGames[0]?.timestamp || new Date().toISOString(),
           total_participants: totalParticipants,
           results: aggregatedResults
         };

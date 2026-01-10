@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List
+import config
 
 # Fix Windows console encoding for UTF-8 emojis
 if os.name == 'nt':
@@ -73,7 +74,11 @@ class EnhancedGameHistoryPartitioner:
             "total_kills": 0
         }))
 
+        non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+
         for game in self.history.get('games', []):
+            if game.get("non_scoring") or game.get("game_type") in non_scoring_types:
+                continue
             timestamp = game.get("timestamp", "")
             if not timestamp or len(timestamp) < 7:
                 continue

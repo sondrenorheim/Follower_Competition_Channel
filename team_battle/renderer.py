@@ -1,6 +1,6 @@
 """
 Team Battle Renderer Module
-Handles rendering for Team Battle game mode with team colors and walls
+Handles rendering for Team Battle game mode with team colors and sequential tournaments
 """
 
 import pygame
@@ -18,7 +18,7 @@ from .team_arena import TeamArena
 class TeamBattleRenderer:
     """
     Handles all rendering for Team Battle game mode.
-    Includes team-colored rings, walls, and phase announcements.
+    Includes team-colored rings and sequential tournament announcements.
     """
 
     def __init__(self, screen: pygame.Surface, arena: TeamArena):
@@ -27,7 +27,7 @@ class TeamBattleRenderer:
 
         Args:
             screen: Pygame display surface
-            arena: TeamArena instance for wall state
+            arena: TeamArena instance
         """
         self.screen = screen
         self.arena = arena
@@ -101,18 +101,16 @@ class TeamBattleRenderer:
         # Draw intro overlay if in intro phase
         if game_state.get("phase") == "intro":
             self._draw_intro(game_state.get("day_number", 1))
-            # Draw team labels during intro
-            self._draw_team_labels_overlay(arena)
             return
 
         # Draw countdown if in any countdown phase
         phase = game_state.get("phase", "")
-        if phase in ("countdown", "finals_countdown", "freeforall_countdown"):
+        if phase in ("match1_countdown", "match2_countdown", "finals_countdown", "freeforall_countdown"):
             self._draw_countdown(game_state.get("countdown_number", 3))
             return
 
         # Draw matchup announcement phases
-        if phase in ("matchup_announce", "finals_announce", "freeforall_announce"):
+        if phase in ("match1_announce", "match2_announce", "finals_announce", "freeforall_announce"):
             self._draw_matchup_announcement(game_state)
             return
 
@@ -130,54 +128,14 @@ class TeamBattleRenderer:
             self._draw_podium(game_state)
 
     def _draw_arena(self, arena: TeamArena, game_state: dict):
-        """Draw the arena with quadrants and walls"""
+        """Draw simple open arena background"""
         rect = arena.get_rect()
 
-        # Draw quadrant backgrounds with subtle team tints
-        for team in Team:
-            qx, qy, qw, qh = arena.get_quadrant_bounds(team)
-            team_color = TEAM_COLORS[team]
-
-            # Create subtle tint (blend with arena color)
-            tint_strength = 0.15
-            base_color = config.COLOR_FIGHTER_ARENA
-            tinted = tuple(
-                int(base_color[i] * (1 - tint_strength) + team_color[i] * tint_strength)
-                for i in range(3)
-            )
-
-            pygame.draw.rect(self.screen, tinted, (qx, qy, qw, qh))
+        # Draw solid arena background
+        pygame.draw.rect(self.screen, config.COLOR_FIGHTER_ARENA, rect)
 
         # Draw arena border
         pygame.draw.rect(self.screen, (0, 0, 0), rect, 3)
-
-        # Draw walls with animation
-        wall_color = (60, 60, 60)
-        wall_thickness = arena.wall_thickness
-
-        # Vertical wall (center, left-right division) - shrinks from top and bottom
-        if arena.vertical_wall_closed or arena.vertical_wall_open_progress < 1.0:
-            wall_height = int(arena.height * (1.0 - arena.vertical_wall_open_progress))
-            if wall_height > 0:
-                wall_y = arena.center_y - wall_height // 2
-                pygame.draw.rect(
-                    self.screen,
-                    wall_color,
-                    (arena.center_x - wall_thickness // 2, wall_y,
-                     wall_thickness, wall_height)
-                )
-
-        # Horizontal wall (center, top-bottom division) - shrinks from left and right
-        if arena.horizontal_wall_closed or arena.horizontal_wall_open_progress < 1.0:
-            wall_width = int(arena.width * (1.0 - arena.horizontal_wall_open_progress))
-            if wall_width > 0:
-                wall_x = arena.center_x - wall_width // 2
-                pygame.draw.rect(
-                    self.screen,
-                    wall_color,
-                    (wall_x, arena.center_y - wall_thickness // 2,
-                     wall_width, wall_thickness)
-                )
 
     def _draw_fighters(self, fighters: List[TeamFighter]):
         """Draw all fighters with team-colored rings"""
@@ -223,20 +181,20 @@ class TeamBattleRenderer:
             # if fighter.alive or fighter.is_fading():
             #     self._draw_hp_bar(fighter)
 
-        # Draw nametags for all visible fighters (if alive count is low enough)
-        alive_count = sum(1 for f in fighters if f.alive)
-        if alive_count <= config.NAMETAG_MAX_ALIVE_TEAM_BATTLE:
-            for fighter in fighters:
-                if not (fighter.alive or fighter.is_fading()):
-                    continue
+        # Username tags disabled for team battle
+        # alive_count = sum(1 for f in fighters if f.alive)
+        # if alive_count <= config.NAMETAG_MAX_ALIVE_TEAM_BATTLE:
+        #     for fighter in fighters:
+        #         if not (fighter.alive or fighter.is_fading()):
+        #             continue
 
-                # Check if visible (same frustum culling as above)
-                pos = fighter.get_position()
-                if (pos[0] < -margin or pos[0] > screen_width + margin or
-                    pos[1] < -margin or pos[1] > screen_height + margin):
-                    continue
+        #         # Check if visible (same frustum culling as above)
+        #         pos = fighter.get_position()
+        #         if (pos[0] < -margin or pos[0] > screen_width + margin or
+        #             pos[1] < -margin or pos[1] > screen_height + margin):
+        #             continue
 
-                self._draw_fighter_name(fighter)
+        #         self._draw_fighter_name(fighter)
 
     def _get_fighter_surface(self, fighter: TeamFighter) -> pygame.Surface:
         """Get or create cached surface with team-colored ring"""
@@ -552,47 +510,9 @@ class TeamBattleRenderer:
         self.screen.blit(countdown_text, rect)
 
     def _draw_team_labels_overlay(self, arena: TeamArena):
-        """Draw team labels with semi-transparent backgrounds in each quadrant"""
-        label_font = pygame.font.Font(None, 32)
-
-        for team in Team:
-            qx, qy, qw, qh = arena.get_quadrant_bounds(team)
-            team_color = TEAM_COLORS[team]
-
-            # Create label text
-            label_text = f"{team.value.upper()} TEAM"
-            text_surface = label_font.render(label_text, True, (255, 255, 255))
-            text_rect = text_surface.get_rect()
-
-            # Create background box with padding
-            padding = 8
-            box_width = text_rect.width + padding * 2
-            box_height = text_rect.height + padding * 2
-
-            # Position in center of quadrant
-            box_x = qx + (qw - box_width) // 2
-            box_y = qy + (qh - box_height) // 2
-
-            # Draw semi-transparent background with team color tint
-            box_surface = pygame.Surface((box_width, box_height), pygame.SRCALPHA)
-            # Mix team color with black for background
-            bg_color = (
-                team_color[0] // 3,
-                team_color[1] // 3,
-                team_color[2] // 3,
-                200
-            )
-            box_surface.fill(bg_color)
-
-            # Draw border in team color
-            pygame.draw.rect(box_surface, team_color, (0, 0, box_width, box_height), 2)
-
-            self.screen.blit(box_surface, (box_x, box_y))
-
-            # Draw text centered in box
-            text_x = box_x + padding
-            text_y = box_y + padding
-            self.screen.blit(text_surface, (text_x, text_y))
+        """Draw team labels - no longer used in sequential tournament format"""
+        # Teams spawn during match announcements, not in intro
+        pass
 
     def _draw_matchup_announcement(self, game_state: dict):
         """Draw matchup announcement with team-colored text"""
@@ -609,24 +529,45 @@ class TeamBattleRenderer:
 
         matchup_font = pygame.font.Font(None, 48)
         vs_font = pygame.font.Font(None, 40)
+        match_font = pygame.font.Font(None, 36)
 
-        if phase == "matchup_announce":
-            # Semifinals: Two horizontal fights
-            # Top half: Red vs Blue - centered in top half of arena
-            top_center_y = arena_top + arena_rect[3] // 4
+        if phase == "match1_announce":
+            # Match 1 announcement
+            # Draw "MATCH 1" header
+            match_text = match_font.render("MATCH 1", True, (255, 255, 255))
+            match_rect = match_text.get_rect(center=(self.width // 2, self.height // 2 - 40))
+            self.screen.blit(match_text, match_rect)
+
+            # Get teams from game state
+            match1_teams = game_state.get("match1_teams", (Team.RED, Team.BLUE))
+            team1 = match1_teams[0]
+            team2 = match1_teams[1]
+
+            # Draw matchup
             self._draw_colored_matchup(
-                "RED", TEAM_COLORS[Team.RED],
-                "BLUE", TEAM_COLORS[Team.BLUE],
-                self.width // 2, top_center_y,
+                team1.value.upper(), TEAM_COLORS[team1],
+                team2.value.upper(), TEAM_COLORS[team2],
+                self.width // 2, self.height // 2 + 10,
                 matchup_font, vs_font
             )
 
-            # Bottom half: Green vs Yellow - centered in bottom half of arena
-            bottom_center_y = arena_top + 3 * arena_rect[3] // 4
+        elif phase == "match2_announce":
+            # Match 2 announcement
+            # Draw "MATCH 2" header
+            match_text = match_font.render("MATCH 2", True, (255, 255, 255))
+            match_rect = match_text.get_rect(center=(self.width // 2, self.height // 2 - 40))
+            self.screen.blit(match_text, match_rect)
+
+            # Get teams from game state
+            match2_teams = game_state.get("match2_teams", (Team.GREEN, Team.YELLOW))
+            team1 = match2_teams[0]
+            team2 = match2_teams[1]
+
+            # Draw matchup
             self._draw_colored_matchup(
-                "GREEN", TEAM_COLORS[Team.GREEN],
-                "YELLOW", TEAM_COLORS[Team.YELLOW],
-                self.width // 2, bottom_center_y,
+                team1.value.upper(), TEAM_COLORS[team1],
+                team2.value.upper(), TEAM_COLORS[team2],
+                self.width // 2, self.height // 2 + 10,
                 matchup_font, vs_font
             )
 

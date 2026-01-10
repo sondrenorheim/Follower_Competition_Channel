@@ -93,6 +93,15 @@ class Projectile:
     already_hit: Set[int] = field(default_factory=set)
 
 
+@dataclass
+class ClashEvent:
+    """Represents a clash between two simultaneous attacks"""
+    pos: pygame.Vector2
+    fighter1_id: int
+    fighter2_id: int
+    intensity: float  # 0.0 to 1.0 based on combined attack power
+
+
 # ============================================================
 # Hit-stop tuning (seconds)
 # ============================================================
@@ -281,7 +290,7 @@ def spawn_sparks(
     count: int,
     color: Tuple[int, int, int],
     speed: float,
-    max_particles: int = 1400
+    max_particles: int = 2000
 ):
     """
     Spawn particle effects at position
@@ -318,6 +327,190 @@ def spawn_sparks(
                 drag=random.uniform(9.0, 15.0),
             )
         )
+
+
+def spawn_sparks_colored(
+    particles: List,
+    pos: pygame.Vector2,
+    facing: pygame.Vector2,
+    count: int,
+    fighter_color: Tuple[int, int, int],
+    speed: float,
+    is_heavy: bool = False,
+    max_particles: int = 2000
+):
+    """
+    Spawn fighter-colored particle effects (dynamic based on fighter's color)
+
+    Args:
+        particles: List to append particles to
+        pos: Spawn position
+        facing: Direction to spray particles
+        count: Base number of particles
+        fighter_color: Fighter's unique color for particles
+        speed: Initial particle velocity
+        is_heavy: If True, spawn bigger/more dramatic particles (for H1, FIN hits)
+        max_particles: Maximum particle count (performance limit)
+    """
+    if len(particles) > max_particles:
+        return
+
+    from .camera_fx import Particle
+
+    base = safe_normalize(facing, pygame.Vector2(1, 0))
+
+    # Create color variants from fighter color
+    r, g, b = fighter_color
+    colors = [
+        fighter_color,  # Primary
+        (min(255, r + 60), min(255, g + 60), min(255, b + 60)),  # Light variant
+        (255, 255, 255),  # White flash
+    ]
+
+    # Heavy hits spawn more particles
+    actual_count = count * (2 if is_heavy else 1)
+
+    for _ in range(actual_count):
+        ang = random.uniform(-0.9, 0.9)
+        rot = pygame.Vector2(
+            base.x * math.cos(ang) - base.y * math.sin(ang),
+            base.x * math.sin(ang) + base.y * math.cos(ang),
+        )
+        v = rot * random.uniform(speed * 0.35, speed)
+
+        # Heavy hits have larger particles
+        radius_mult = 1.5 if is_heavy else 1.0
+
+        particles.append(
+            Particle(
+                pos=pygame.Vector2(pos),
+                vel=v,
+                life=random.uniform(0.12, 0.30) * (1.2 if is_heavy else 1.0),
+                radius=random.uniform(1.6, 3.2) * radius_mult,
+                color=random.choice(colors),
+                drag=random.uniform(8.0, 14.0),
+            )
+        )
+
+
+def detect_clash(hitshapes: List[HitShape], fighters: List) -> Optional[ClashEvent]:
+    """
+    Detect when two opposing hitboxes overlap (simultaneous attack clash)
+
+    Args:
+        hitshapes: Active melee hitboxes
+        fighters: All fighters in match
+
+    Returns:
+        ClashEvent if clash detected, None otherwise
+    """
+    # Group hitshapes by owner
+    owner_hitshapes = {}
+    for h in hitshapes:
+        if h.owner_id not in owner_hitshapes:
+            owner_hitshapes[h.owner_id] = []
+        owner_hitshapes[h.owner_id].append(h)
+
+    # Need at least 2 different owners with active hitboxes
+    owner_ids = list(owner_hitshapes.keys())
+    if len(owner_ids) < 2:
+        return None
+
+    # Check for overlapping hitboxes from different owners
+    for i in range(len(owner_ids)):
+        for j in range(i + 1, len(owner_ids)):
+            id1, id2 = owner_ids[i], owner_ids[j]
+            for h1 in owner_hitshapes[id1]:
+                for h2 in owner_hitshapes[id2]:
+                    if circle_overlap(h1.center, h1.radius, h2.center, h2.radius):
+                        # Clash detected!
+                        clash_pos = (h1.center + h2.center) / 2
+                        # Intensity based on combined damage (normalized)
+                        intensity = min(1.0, (h1.damage + h2.damage) / 40.0)
+                        return ClashEvent(
+                            pos=clash_pos,
+                            fighter1_id=id1,
+                            fighter2_id=id2,
+                            intensity=intensity
+                        )
+    return None
+
+
+def resolve_clash(
+    clash: ClashEvent,
+    fighters: List,
+    particles: List,
+    camera_fx,
+    sound=None
+):
+    """
+    Handle clash visual and mechanical effects
+
+    Creates dramatic explosion when both fighters attack simultaneously:
+    - 50-80 spark explosion
+    - Both fighters pushed back
+    - Screen shake + time slowdown
+    - Both attacks cancelled
+
+    Args:
+        clash: ClashEvent with position and fighter info
+        fighters: All fighters in match
+        particles: Particle list for effects
+        camera_fx: CameraFX instance
+        sound: SoundManager instance (optional)
+    """
+    from .camera_fx import Particle
+
+    # Find fighters
+    f1 = next((f for f in fighters if f.id == clash.fighter1_id), None)
+    f2 = next((f for f in fighters if f.id == clash.fighter2_id), None)
+
+    if not f1 or not f2:
+        return
+
+    # Push both fighters back
+    pushback = 400 + 200 * clash.intensity
+    direction = safe_normalize(f2.pos - f1.pos, pygame.Vector2(1, 0))
+    f1.vel -= direction * pushback
+    f2.vel += direction * pushback
+
+    # Cancel both attacks - return to idle (not recovery, since recovery needs attack spec)
+    f1.state = "idle"
+    f1.state_t = 0.0
+    f1.attack = None
+    f2.state = "idle"
+    f2.state_t = 0.0
+    f2.attack = None
+
+    # Spawn dramatic spark explosion (50-80 particles)
+    spark_count = int(50 + 30 * clash.intensity)
+    for _ in range(spark_count):
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.uniform(300, 700) * (0.5 + clash.intensity * 0.5)
+        color = random.choice([
+            (255, 255, 255),  # White
+            (255, 255, 200),  # Yellow-white
+            (255, 220, 100),  # Orange-yellow
+            (255, 180, 80),   # Orange
+        ])
+        particles.append(Particle(
+            pos=pygame.Vector2(clash.pos),
+            vel=pygame.Vector2(math.cos(angle) * speed, math.sin(angle) * speed),
+            life=random.uniform(0.25, 0.55),
+            radius=random.uniform(3, 8),
+            color=color,
+            drag=7.0
+        ))
+
+    # Camera effects
+    camera_fx.trigger_hitstop(0.08 + 0.04 * clash.intensity)
+    camera_fx.add_shake(12 + 6 * clash.intensity)
+    camera_fx.trigger_time_slowdown(0.3, 0.25)  # 30% speed for 0.25s
+    camera_fx.trigger_screen_flash(0.05, (255, 255, 200))  # Yellow-white flash
+
+    # Sound effect
+    if sound and hasattr(sound, 'play_clash'):
+        sound.play_clash()
 
 
 def separate_fighters(fighter_a, fighter_b):
@@ -444,12 +637,26 @@ def resolve_hits(
                 f.take_hit(h.damage, knock_dir * h.knockback, h.hitstun, bypasses_invuln=h.bypasses_invuln)
                 h.already_hit.add(f.id)
 
+                # Check for near-KO dramatic effects (< 15% HP)
+                hp_percent = f.hp / f.max_hp if f.hp > 0 else 0
+                is_near_ko = 0 < hp_percent < 0.15
+
                 # FX: hit-stop + zoom punch centered on victim
-                if h.hitstop > 0:
-                    camera_fx.trigger_hitstop(h.hitstop)
-                if h.zoom_punch > 0:
-                    camera_fx.trigger_zoom_punch(f.pos, h.zoom_punch, h.zoom_hold)
-                camera_fx.add_shake(4.5)
+                if is_near_ko:
+                    # Near-KO: Extra dramatic effects
+                    camera_fx.trigger_near_ko_hit(f.pos)
+                else:
+                    if h.hitstop > 0:
+                        camera_fx.trigger_hitstop(h.hitstop)
+                    if h.zoom_punch > 0:
+                        camera_fx.trigger_zoom_punch(f.pos, h.zoom_punch, h.zoom_hold)
+                    # Scale shake by damage
+                    shake_amount = 4.5 + (h.damage * 0.3)
+                    camera_fx.add_shake(shake_amount)
+
+                # Screen flash on finisher hits
+                if h.damage >= 15:
+                    camera_fx.trigger_screen_flash(0.06)
 
                 # Sound effects based on damage
                 if sound:
@@ -460,7 +667,14 @@ def resolve_hits(
                     else:
                         sound.play_light_hit()
 
-                spawn_sparks(particles, f.pos, -knock_dir, 18, (255, 255, 255), 720)
+                # Fighter-colored sparks (scaled by damage)
+                is_heavy = h.damage >= 10
+                spark_count = 18 + int(h.damage * 1.5)
+                spark_speed = 720 + h.damage * 15
+                if owner and hasattr(owner, 'color'):
+                    spawn_sparks_colored(particles, f.pos, -knock_dir, spark_count, owner.color, spark_speed, is_heavy)
+                else:
+                    spawn_sparks(particles, f.pos, -knock_dir, spark_count, (255, 255, 255), spark_speed)
 
     # Anti-projectile fields remove enemy projectiles
     anti_fields = [h for h in hitshapes if h.radius >= 80]  # CUT is 92
@@ -498,12 +712,23 @@ def resolve_hits(
                 pr.already_hit.add(f.id)
                 pr.ttl = -1
 
-                camera_fx.trigger_hitstop(pr.hitstop)
-                camera_fx.trigger_zoom_punch(f.pos, pr.zoom_punch, pr.zoom_hold)
-                camera_fx.add_shake(4.0)
+                # Check for near-KO dramatic effects
+                hp_percent = f.hp / f.max_hp if f.hp > 0 else 0
+                is_near_ko = 0 < hp_percent < 0.15
+
+                if is_near_ko:
+                    camera_fx.trigger_near_ko_hit(f.pos)
+                else:
+                    camera_fx.trigger_hitstop(pr.hitstop)
+                    camera_fx.trigger_zoom_punch(f.pos, pr.zoom_punch, pr.zoom_hold)
+                    camera_fx.add_shake(4.0)
 
                 # Projectile impact sound
                 if sound:
                     sound.play_ki_blast_hit()
 
-                spawn_sparks(particles, f.pos, -knock_dir, 20, (245, 245, 255), 820)
+                # Fighter-colored sparks for projectile hits
+                if owner and hasattr(owner, 'color'):
+                    spawn_sparks_colored(particles, f.pos, -knock_dir, 24, owner.color, 820, is_heavy=False)
+                else:
+                    spawn_sparks(particles, f.pos, -knock_dir, 20, (245, 245, 255), 820)

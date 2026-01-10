@@ -6,7 +6,8 @@ from pathlib import Path
 
 # ===== GAME MODE =====
 # Options: "battle_royale", "fighter_arena", "obstacle_course",
-#          "snake_escape", "team_battle", "platformer_race", "spleef", "ALL"
+#          "snake_escape", "team_battle", "platformer_race", "spleef", "mingle",
+#          "heads_or_tails", "wheel_spinner", "ALL"
 # When set to "ALL", games will run in the order defined by ALL_GAME_MODES.
 # ALL_GAME_MODES = ["obstacle_course", "team_battle", "platformer_race"]
 # ALL_GAME_MODES = [ "snake_escape", "team_battle", "platformer_race"]
@@ -28,13 +29,16 @@ SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO
 MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
 
-ALL_GAME_MODES = ["battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "platformer_race","gorillas_vs_followers", "team_battle"]
+# ALL_GAME_MODES = [ "mingle", "obstacle_course", "snake_escape", "platformer_race", "heads_or_tails", "gorillas_vs_followers", "meteor_mayhem", "fighter_arena", "battle_royale"]
+ALL_GAME_MODES = [ "battle_royale", "fighter_arena"]
+NON_SCORING_GAME_TYPES = ["mingle"]
+YOUTUBE_SKIP_GAME_MODES = ["mingle"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "ALL"
-TEST_MODE = False
+GAME_MODE = "wheel_spinner" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "ALL"
+TEST_MODE = True
 EXPORT_VIDEO = True
-DAY_NUMBER = 29  # Increment this each time you record a new video
+DAY_NUMBER = 50  # Increment this each time you record a new video
 
 # Profile picture settings:
 # - DOWNLOAD_PROFILE_PICTURES: Legacy flag for downloading during game run (slow, not recommended)
@@ -44,14 +48,14 @@ DAY_NUMBER = 29  # Increment this each time you record a new video
 #   1. Run download_all_profile_pics.py once to cache all profile pictures
 #   2. Set LOAD_PROFILE_PICTURES = True to use cached images
 #   3. Games will load instantly from disk cache
-DOWNLOAD_PROFILE_PICTURES = True  # Deprecated - use download_all_profile_pics.py instead
-LOAD_PROFILE_PICTURES = True  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
+DOWNLOAD_PROFILE_PICTURES = False  # Deprecated - use download_all_profile_pics.py instead
+LOAD_PROFILE_PICTURES = False  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
 HEADLESS_MODE = False
-SHOW_NAMETAGS = True
+SHOW_NAMETAGS = False
 
 # Minimal test players - when True, use generated test users instead of real followers
-TEST_MINIMAL_PLAYERS = False  # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 100  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
+TEST_MINIMAL_PLAYERS = False # Set True to use test users, False to use real followers
+TEST_MINIMAL_PLAYER_COUNT = 5000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
@@ -75,7 +79,7 @@ ARENA_SHAPE = "circle"
 # ===== FOLLOWER SETTINGS =====
 # Set to an integer to cap followers, or None to use all available from data/API.
 FOLLOWER_COUNT = None
-FOLLOWER_RADIUS = 14        # Radius of each follower circle (will be dynamically adjusted)
+FOLLOWER_RADIUS = 21        # Radius of each follower circle (will be dynamically adjusted) - 1.5x bigger
 FOLLOWER_BORDER_WIDTH = 2   # White border thickness
 FOLLOWER_NAME_FONT_SIZE = 12  # Nametag font size for follower usernames
 SHOW_FOLLOWER_NAMES = False  # Show usernames below profile pictures during battle
@@ -108,10 +112,17 @@ NAMETAG_VERTICAL_OFFSET = 8               # Pixels below avatar center
 
 # ===== DYNAMIC SCALING SETTINGS =====
 USE_DYNAMIC_SCALING = True  # Enable dynamic follower size based on player count
-FOLLOWER_BASE_RADIUS = 12   # Base radius for ~100 final contestants (good size)
-FOLLOWER_MIN_RADIUS = 1     # No enforced minimum; allows very dense packing
-FOLLOWER_MAX_RADIUS = 18    # Maximum radius when only a few players remain
-SCALING_GROWTH_RATE = 0.5   # How quickly players grow as others are eliminated (0.0-1.0)
+FOLLOWER_BASE_RADIUS = 18   # Base radius for ~100 final contestants (1.5x bigger: 12 * 1.5 = 18)
+FOLLOWER_MIN_RADIUS = 1.5   # No enforced minimum; allows very dense packing (1.5x bigger)
+FOLLOWER_MAX_RADIUS = 27    # Maximum radius when only a few players remain (1.5x bigger: 18 * 1.5 = 27)
+SCALING_GROWTH_RATE = 0.9   # How quickly players grow as others are eliminated (0.0-1.0) - Increased for faster growth
+
+# ===== BATTLE ROYALE SETTINGS =====
+# Set to a fixed radius to disable scaling for Battle Royale (match Meteor Mayhem size).
+BATTLE_ROYALE_FIXED_RADIUS = 15
+BATTLE_ROYALE_TARGETING_BAND = (0.25, 0.75)
+BATTLE_ROYALE_PRESTART_RADIUS_RATIO = 0.85
+BATTLE_ROYALE_PRESTART_CENTER_PULL = 0.45
 
 # ===== PERFORMANCE OPTIMIZATION SETTINGS =====
 # These settings help Battle Royale handle 100,000+ players
@@ -176,8 +187,14 @@ OUTPUT_VIDEO_PATH = get_output_video_path()
 VIDEO_CODEC = "libx264"
 VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 
+# Streaming mode - write frames directly to disk (prevents memory errors for long videos)
+VIDEO_STREAMING_MODE = True  # True = low memory (unlimited length), False = high quality (limited length)
 
 FOLLOWER_IMPORT_FILE = "Followers/all_followers_fresh.json"
+# Per-game import overrides (keys = game_mode). Example: {"mingle": "Followers/discord_followers.json"}
+FOLLOWER_IMPORT_FILE_BY_MODE = {
+    "mingle": "Followers/discord_followers.json",
+}
 
 # TikTok followers import file (optional - will be combined with Instagram followers)
 TIKTOK_IMPORT_FILE = ""  # Disabled - only using Instagram followers
@@ -186,6 +203,21 @@ TIKTOK_IMPORT_FILE = ""  # Disabled - only using Instagram followers
 INSTAGRAM_ACCESS_TOKEN = ""  # Your Instagram Graph API access token
 INSTAGRAM_USER_ID = ""       # Your Instagram user ID
 
+# Account Center export defaults (used by automation)
+IG_EXPORT_ACCOUNT_CENTER_URL = "https://accountscenter.instagram.com/"
+IG_EXPORT_PROFILE_NAME = "followerbattlegrounds"
+IG_EXPORT_INFO_PERMISSIONS_LABEL = "Your information and permissions"
+IG_EXPORT_EXPORT_INFO_LABEL = "Export your information"
+IG_EXPORT_EXPORT_TO_DEVICE_LABEL = "Export to device"
+IG_EXPORT_DATE_RANGE = "All time"
+IG_EXPORT_FOLLOWERS_LABEL = "Followers and following"
+IG_EXPORT_FORMAT_LABEL = "JSON"
+IG_EXPORT_MEDIA_QUALITY_LABEL = "Low"
+IG_EXPORT_PASSWORD = ""
+IG_EXPORT_WAIT_FOR_READY = True
+IG_EXPORT_MAX_WAIT_MINUTES = 90
+IG_EXPORT_POLL_INTERVAL_SECONDS = 60
+IG_EXPORT_DOWNLOAD_DIR = "Followers/exports"
 
 USE_INSTALOADER_SCRAPER = False  # Set to True to enable web scraping
 INSTAGRAM_USERNAME = ""          # Your Instagram username (for scraping)
@@ -263,6 +295,16 @@ def calculate_dynamic_follower_radius(total_players, alive_count, safe_zone_radi
 # Height similar to Battle Royale circle diameter (500px = 2 * 250 radius)
 FIGHTER_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, 500)
 
+# Fighter Arena performance mode (skip combat/collisions at huge counts)
+FIGHTER_ARENA_SIMPLIFIED_MODE_THRESHOLD = 10000  # Enable simplified mode when alive > this
+FIGHTER_ARENA_RANDOM_ELIMINATION_RATE = 0.015    # Fraction of alive eliminated per second in simplified mode
+FIGHTER_ARENA_SIMPLIFIED_SPEED_MULTIPLIER = 2.5  # Speed boost for simplified mode movement
+FIGHTER_ARENA_SIMPLIFIED_TURN_CHANCE = 0.12      # Direction change chance per frame in simplified mode
+FIGHTER_ARENA_DELAY_MUSIC_UNTIL_SPEEDUP_END = False  # Start export music at countdown instead of waiting for speedup to end
+FIGHTER_ARENA_LATE_GAME_THRESHOLD = 400
+FIGHTER_ARENA_LATE_GAME_ATTACK_DAMAGE = 10
+FIGHTER_ARENA_LATE_GAME_HP = 40
+
 # Default fighter stats (must sum to 100)
 FIGHTER_DEFAULT_STATS = {
     "hp": 40,           # Number of attack points it can survive
@@ -283,7 +325,7 @@ FIGHTER_STAT_BOOSTS = {
 # ===== TEAM BATTLE SETTINGS =====
 # Team battle uses separate stats from fighter arena
 TEAM_BATTLE_DEFAULT_STATS = {
-    "hp": 40,           # Number of attack points it can survive
+    "hp": 30,           # Number of attack points it can survive (2 hits to kill at 15 attack)
     "speed": 5,         # Pixels moved every 2 frames
     "attack": 15,      # HP damage dealt per hit
     "regeneration": 0,  # HP regenerated per second (divided by 2 in code = 2.5 actual)
@@ -301,7 +343,7 @@ TEAM_BATTLE_STAT_BOOSTS = {
 BATTLE_ROYALE_DEFAULT_STATS = {
     "base_speed": 4.0,           # Movement speed (pixels per frame)
     "friction": 0.75,            # Velocity decay multiplier (0-1)
-    "push_force": 16.0,           # Force applied during collisions
+    "push_force": 24.0,           # Force applied during collisions
     "bump_cooldown": 0.5,        # Cooldown between bumps (seconds)
     "movement_randomness": 0.2   # Movement direction randomness (0-1)
 }
@@ -317,6 +359,10 @@ COLOR_HP_BAR_LOW = (255, 50, 50)       # Red when HP is low
 FIGHTER_ATTACK_RANGE = FOLLOWER_RADIUS * 2.5  # Distance to land an attack
 FIGHTER_HP_BAR_WIDTH = 30             # Width of HP bar above fighters
 FIGHTER_HP_BAR_HEIGHT = 4             # Height of HP bar
+
+# ===== PLATFORMER RACE SETTINGS =====
+# Platformer-specific player size (50% of default FOLLOWER_RADIUS)
+PLATFORMER_RACER_RADIUS = FOLLOWER_RADIUS * 0.5  # 50% smaller than other games
 
 # ===== OBSTACLE COURSE SETTINGS =====
 # Course dimensions
@@ -377,6 +423,8 @@ METEOR_ZONE_INITIAL_RADIUS = 240     # Safe zone radius at start
 METEOR_ZONE_MIN_RADIUS = 90          # Minimum radius after shrinking
 METEOR_ZONE_SHRINK_RATE = 4.0        # Pixels per second shrink
 METEOR_SPAWN_INTERVAL = (1.4, 2.4)   # Seconds between meteor spawns (min, max)
+METEOR_SPAWN_INTERVAL_MIN = (0.7, 1.2)  # Fastest spawn interval at peak intensity
+METEOR_SPAWN_RAMP_DURATION = 60.0       # Seconds to reach peak intensity
 METEOR_FALL_SPEED = (380.0, 520.0)   # Speed range for meteors (pixels/sec)
 METEOR_RADIUS = (10, 16)             # Visual radius range
 METEOR_IMPACT_RADIUS = (60, 90)      # Damage radius range (larger for stronger visuals)
@@ -415,15 +463,70 @@ TEAM_PLACEMENT_SCORES = {
 }
 
 # ===== GORILLAS VS FOLLOWERS SETTINGS =====
-# Gorilla stats (boss enemy)
+# Gorilla variants with different rarities and stats
+GORILLA_VARIANTS = {
+    "brown": {
+        "weight": 44.9,  # 44.9% spawn chance
+        "color": (101, 67, 33),  # Medium brown
+        "hp": 8000,
+        "speed": 1,
+        "attack": 30,
+        "attack_speed": 15,  # 3 attacks per second (value / 10)
+        "knockback_distance": 55,
+        "regeneration": 0
+    },
+    "black": {
+        "weight": 30.0,  # 30% spawn chance
+        "color": (30, 20, 10),  # Nearly black
+        "hp": 8000,
+        "speed": 1,
+        "attack": 30,
+        "attack_speed": 10,  # 2 attacks per second (value / 10)
+        "knockback_distance": 65,
+        "regeneration": 0
+    },
+    "white": {
+        "weight": 20.0,  # 20% spawn chance
+        "color": (220, 220, 220),  # White
+        "hp": 10000,
+        "speed": 1,
+        "attack": 15,
+        "attack_speed": 5,  # 3 attacks per second (value / 10)
+        "knockback_distance": 55,
+        "regeneration": 0
+    },
+    "red": {
+        "weight": 5.0,  # 5% spawn chance
+        "color": (200, 30, 30),  # Red
+        "hp": 3000,
+        "speed": 6,
+        "attack": 40,
+        "attack_speed": 20,  # 6 attacks per second (value / 10)
+        "knockback_distance": 55,
+        "regeneration": 0
+    },
+    "golden": {
+        "weight": 0.1,  # 0.1% spawn chance (ultra rare!)
+        "color": (255, 215, 0),  # Golden
+        "hp": 50000,
+        "speed": 1,
+        "attack": 40,
+        "attack_speed": 65,  # 6 attacks per second (value / 10)
+        "knockback_distance": 100,
+        "regeneration": 0
+    }
+} 
+
+# Default gorilla stats (fallback if GORILLA_VARIANTS not used)
 GORILLA_STATS = {
-    "hp": 15000,
+    "hp": 17000,
     "speed": 1,
     "attack": 30,
-    "attack_speed": 20,  # Attacks per second = value / 10 (2 attacks/sec)
+    "attack_speed": 30,
     "knockback_distance": 55,
-    "regeneration": 0  # No regeneration for gorillas
+    "regeneration": 0
 }
+
 GORILLA_ATTACK_SPLASH_RADIUS = 21  # Full-damage radius around primary target (pixels)
 GORILLA_ATTACK_SPLASH_FALLOFF_RADIUS = 30  # Outer radius for half damage (pixels)
 GORILLA_ATTACK_KNOCKBACK = 60      # Knockback applied to players hit by gorilla attacks (pixels)
@@ -437,7 +540,7 @@ GORILLA_ARM_WIDTH_MULTIPLIER = 0.4   # Arm width relative to body radius
 GORILLA_ARM_SWING_AMPLITUDE = 30     # Degrees of arm swing
 GORILLA_ARM_SWING_PERIOD = 2.0       # Seconds per full arm swing cycle
 
-# Gorilla colors (brown/black variations)
+# Gorilla colors (legacy - now using colors from GORILLA_VARIANTS)
 GORILLA_COLORS = [
     (101, 67, 33),   # Medium brown
     (40, 26, 13),    # Dark brown
@@ -456,7 +559,7 @@ GORILLAS_MODE_FOLLOWER_STATS = {
     "attack": 7.5,
     "regeneration": 0,  # No regeneration
     "knockback": 3,
-    "attack_speed": 30  # Attacks per second = value / 10 (3 attacks/sec)
+    "attack_speed": 25  # Attacks per second = value / 10 (3 attacks/sec)
 }
 
 # Arena dimensions (extended height)
@@ -465,6 +568,180 @@ GORILLAS_ARENA_RECT = (40, 180, SCREEN_WIDTH - 80, SCREEN_HEIGHT - 190)
 
 # Kill bonus points
 TEAM_BATTLE_KILL_BONUS = 1  # Points per kill
+
+# ===== MINGLE SETTINGS =====
+MINGLE_ROOM_COUNT = 20
+MINGLE_ROOM_COLORS = [
+    (220, 60, 60),   # Red
+    (240, 140, 60),  # Orange
+    (245, 220, 80),  # Yellow
+    (170, 220, 80),  # Lime
+    (80, 200, 110),  # Green
+    (70, 190, 180),  # Teal
+    (80, 200, 230),  # Cyan
+    (80, 120, 220),  # Blue
+    (100, 90, 200),  # Indigo
+    (160, 90, 200),  # Purple
+]
+MINGLE_PLATFORM_RADIUS = 140
+MINGLE_ROOM_SIZE = 32
+MINGLE_ROOM_WIDTH = 52
+MINGLE_ROOM_HEIGHT = 48
+MINGLE_ROOM_RING_PADDING = 0
+MINGLE_ROOM_ENTRY_RADIUS = 18
+MINGLE_ROOM_PACKING_FACTOR = 0.75
+MINGLE_MIN_RADIUS = 1.0
+MINGLE_TOTAL_ROUNDS = 5
+MINGLE_TARGET_FINALISTS = 1
+
+MINGLE_MAX_ROOM_SIZE = 5
+MINGLE_GROUP_SIZES = [2, 3, 4, 5]
+MINGLE_ROOM_PUSH_FORCE = 3.0
+MINGLE_ROOM_PUSH_MARGIN = 10.0
+MINGLE_ENTRY_COLLISION_SCALE = 0.6
+MINGLE_ENTRY_COLLISION_MARGIN = 8.0
+MINGLE_INTERMISSION_SONG_PATH = "mingle_song.m4a"
+MINGLE_INTERMISSION_VOLUME = 0.85
+MINGLE_SCRAMBLE_SONG_PATH = r"C:\Users\SondreNorheim\Documents\Follower_Competition_Channel\Minute to Win It - Dramatic Game Music - Dan.mp3"
+MINGLE_SCRAMBLE_SONG_VOLUME = 0.85
+MINGLE_MIX_DURATION = 6.0
+MINGLE_SCRAMBLE_DURATION = 10.0
+MINGLE_RESOLVE_DURATION = 2.0
+
+MINGLE_MIX_SPEED = 40.0
+MINGLE_SCRAMBLE_SPEED = 75.0
+MINGLE_WANDER_JITTER = 0.15
+MINGLE_PLATFORM_SPIN_SPEED = 0.9
+MINGLE_PLATFORM_ROTATION_SPEED = 0.6
+
+# ===== SIDE CHOICE SETTINGS =====
+SIDE_CHOICE_ARENA_SIZE = 500
+SIDE_CHOICE_ORIENTATION = "vertical"  # "vertical" = left/right, "horizontal" = top/bottom
+SIDE_CHOICE_PLAYER_RADIUS = 15
+SIDE_CHOICE_SELECTION_DURATION = 6.0
+SIDE_CHOICE_RESULT_DURATION = 2.0
+SIDE_CHOICE_MOVE_SPEED = 80.0
+SIDE_CHOICE_TURN_RATE = 0.18
+SIDE_CHOICE_DIRECTION_JITTER = 0.2
+SIDE_CHOICE_WANDER_SPEED = 35.0
+SIDE_CHOICE_WANDER_INTERVAL = (0.8, 1.6)
+SIDE_CHOICE_TARGET_REFRESH = (0.6, 1.4)
+SIDE_CHOICE_FALL_SPEED = 260.0
+SIDE_CHOICE_DAY_COUNTER_OFFSET = 16
+SIDE_CHOICE_STATUS_PANEL_OFFSET = 24
+SIDE_CHOICE_STATUS_PANEL_WIDTH = 200
+SIDE_CHOICE_STATUS_TEXT_SIZE = 36
+SIDE_CHOICE_STATUS_TEXT_OFFSET = 18
+SIDE_CHOICE_SHOW_NAMES_MAX = 5000
+SIDE_CHOICE_NAME_OFFSET = 18
+SIDE_CHOICE_COIN_FLIP_DURATION = 1.2
+SIDE_CHOICE_COIN_FLIP_TURNS = 8
+SIDE_CHOICE_COIN_RADIUS = 26
+SIDE_CHOICE_COIN_OFFSET = 32
+SIDE_CHOICE_COIN_COLOR = (240, 200, 80)
+SIDE_CHOICE_COIN_EDGE_COLOR = (120, 90, 30)
+SIDE_CHOICE_COIN_TEXT_COLOR = (40, 30, 10)
+SIDE_CHOICE_COIN_TEXT_SIZE = 26
+SIDE_CHOICE_COIN_INNER_COLOR = (255, 225, 140)
+SIDE_CHOICE_COIN_RIM_COLOR = (180, 120, 40)
+SIDE_CHOICE_COIN_SHINE_COLOR = (255, 250, 220)
+SIDE_CHOICE_COIN_SHADOW_ALPHA = 120
+SIDE_CHOICE_COIN_SHADOW_OFFSET = 10
+SIDE_CHOICE_COIN_BOB = 12.0
+SIDE_CHOICE_COIN_TRAIL_COUNT = 2
+SIDE_CHOICE_COIN_TRAIL_ALPHA = 80
+SIDE_CHOICE_COIN_EDGE_WIDTH = 2
+SIDE_CHOICE_COIN_FACE_SCALE = 0.9
+SIDE_CHOICE_LEFT_COLOR = (190, 200, 210)
+SIDE_CHOICE_RIGHT_COLOR = (210, 190, 200)
+SIDE_CHOICE_OPEN_COLOR = (45, 45, 50)
+SIDE_CHOICE_BORDER_COLOR = (0, 0, 0)
+SIDE_CHOICE_SPLIT_LINE_COLOR = (40, 40, 40)
+
+# ===== WHEEL SPINNER SETTINGS =====
+WHEEL_SPINNER_ARENA_WIDTH = 500
+WHEEL_SPINNER_ARENA_HEIGHT = 700
+WHEEL_SPINNER_RADIUS = 220
+WHEEL_SPINNER_CENTER_Y_OFFSET = 0
+WHEEL_SPINNER_START_ANGLE = 0.0
+WHEEL_SPINNER_WINDUP_DURATION = 0.9
+WHEEL_SPINNER_SPIN_DURATION = 4.0
+WHEEL_SPINNER_RESULT_DURATION = 2.6
+WHEEL_SPINNER_WINDUP_ANGLE_DEG = 18.0
+WHEEL_SPINNER_SPIN_TURNS_MIN = 4
+WHEEL_SPINNER_SPIN_TURNS_MAX = 7
+WHEEL_SPINNER_SPIN_EASE_POWER = 2.0
+WHEEL_SPINNER_TAIL_FRACTION = 0.3
+WHEEL_SPINNER_TAIL_POWER = 4.0
+WHEEL_SPINNER_OPTION_TEXT_SIZE = 24
+WHEEL_SPINNER_INDICATOR_TEXT_SIZE = 32
+WHEEL_SPINNER_STATUS_TEXT_SIZE = 28
+WHEEL_SPINNER_STATUS_PANEL_WIDTH = 240
+WHEEL_SPINNER_STATUS_PANEL_OFFSET = 16
+WHEEL_SPINNER_INDICATOR_OFFSET = 10
+WHEEL_SPINNER_SELECTED_TEXT_SIZE = 28
+WHEEL_SPINNER_SELECTED_OFFSET = 36
+WHEEL_SPINNER_SELECTED_MAX_SHOWN = 10
+WHEEL_SPINNER_SELECTED_COLOR = (255, 230, 160)
+WHEEL_SPINNER_SELECTED_PANEL_ALPHA = 160
+WHEEL_SPINNER_SELECTED_PANEL_BG = (28, 28, 36)
+WHEEL_SPINNER_SELECTED_PANEL_BORDER = (80, 80, 95)
+WHEEL_SPINNER_SELECTED_PANEL_RADIUS = 12
+WHEEL_SPINNER_SELECTED_PANEL_PADDING = 12
+WHEEL_SPINNER_SELECTED_PANEL_GAP = 8
+WHEEL_SPINNER_BADGE_TEXT_SIZE = 26
+WHEEL_SPINNER_BADGE_BG = (235, 235, 245)
+WHEEL_SPINNER_BADGE_BORDER = (120, 120, 140)
+WHEEL_SPINNER_BADGE_TEXT = (30, 30, 40)
+WHEEL_SPINNER_BADGE_RADIUS = 8
+WHEEL_SPINNER_BADGE_PADDING = 6
+WHEEL_SPINNER_POINTER_PANEL_BG = (28, 28, 36)
+WHEEL_SPINNER_POINTER_PANEL_BORDER = (80, 80, 95)
+WHEEL_SPINNER_POINTER_PANEL_ALPHA = 180
+WHEEL_SPINNER_POINTER_PANEL_RADIUS = 10
+WHEEL_SPINNER_POINTER_PANEL_PADDING = 10
+WHEEL_SPINNER_POINTER_GAP = 8
+WHEEL_SPINNER_POINTER_WIDTH = 32
+WHEEL_SPINNER_POINTER_HEIGHT = 22
+WHEEL_SPINNER_POINTER_COLOR = (20, 20, 20)
+WHEEL_SPINNER_POINTER_OUTLINE = (240, 240, 240)
+WHEEL_SPINNER_BORDER_COLOR = (0, 0, 0)
+WHEEL_SPINNER_DIVIDER_COLOR = (30, 30, 30)
+WHEEL_SPINNER_SEGMENT_COLORS = [
+    (245, 174, 99),
+    (129, 201, 149),
+    (132, 181, 232),
+    (233, 146, 165),
+    (238, 210, 119),
+    (174, 156, 214),
+    (118, 210, 201),
+    (247, 189, 132),
+    (150, 212, 133),
+    (128, 164, 222),
+    (232, 160, 130),
+    (210, 222, 156),
+]
+WHEEL_SPINNER_LIGHT_ANGLE_DEG = -55.0
+WHEEL_SPINNER_RIM_THICKNESS = 18
+WHEEL_SPINNER_BEVEL_DEPTH = 14
+WHEEL_SPINNER_RIM_COLOR = (54, 54, 64)
+WHEEL_SPINNER_RIM_HIGHLIGHT = (255, 255, 255)
+WHEEL_SPINNER_RIM_SHADOW = (25, 25, 30)
+WHEEL_SPINNER_FACE_BORDER = (20, 20, 20)
+WHEEL_SPINNER_FACE_INNER_RING = (250, 250, 255)
+WHEEL_SPINNER_FACE_INNER_RING_SHADOW = (120, 120, 135)
+WHEEL_SPINNER_FACE_INNER_RING_WIDTH = 4
+WHEEL_SPINNER_FACE_GLOW = (255, 255, 255)
+WHEEL_SPINNER_HUB_RADIUS = 26
+WHEEL_SPINNER_HUB_COLOR = (235, 235, 240)
+WHEEL_SPINNER_HUB_RING_COLOR = (70, 70, 80)
+WHEEL_SPINNER_HUB_GLINT_COLOR = (255, 255, 255)
+WHEEL_SPINNER_SHADOW_ALPHA = 90
+WHEEL_SPINNER_SHADOW_OFFSET = 18
+WHEEL_SPINNER_SHADOW_SCALE = 0.65
+WHEEL_SPINNER_LABEL_COLOR = (20, 20, 20)
+WHEEL_SPINNER_LABEL_SHADOW_ALPHA = 120
+WHEEL_SPINNER_LABEL_SHADOW_OFFSET = 2
 
 # ===== SPLEEF SETTINGS =====
 # Arena dimensions
@@ -546,3 +823,24 @@ STORY_AVATAR_SIZE_1ST = 200              # 1st place avatar diameter (pixels)
 STORY_AVATAR_SIZE_2_3 = 140              # 2nd/3rd place avatar diameter (pixels)
 STORY_AVATAR_BORDER = 6                  # Border width (pixels)
 AVATAR_CACHE_DIR = Path("avatar_cache")  # Avatar cache directory location
+
+# ===== ANIME FIGHTING SETTINGS =====
+# Tournament settings
+ANIME_FIGHTING_BRACKET_SIZE = 16         # Number of fighters in tournament (power of 2: 8, 16, 32)
+ANIME_FIGHTING_MATCH_TIME_LIMIT = 60     # Seconds per 1v1 match
+
+# Combat tuning
+ANIME_FIGHTING_FPS_MULTIPLIER = 1.12     # Faster than real-time for anime pace
+ANIME_FIGHTING_HITSTOP_ENABLED = True    # Enable freeze frames on hit
+ANIME_FIGHTING_ZOOM_PUNCH_ENABLED = True # Enable dynamic zoom on impacts
+ANIME_FIGHTING_SCREEN_SHAKE_ENABLED = True  # Enable screen shake effects
+
+# Visual effects
+ANIME_FIGHTING_MAX_PARTICLES = 1400      # Maximum particle count (only 2 fighters)
+ANIME_FIGHTING_AFTERIMAGE_ENABLED = True # Enable motion trail effects
+
+# Arena dimensions (for 540x960 screen)
+ANIME_FIGHTING_ARENA_MARGIN = 20         # Margin from screen edges
+ANIME_FIGHTING_ARENA_Y_OFFSET = 120      # Vertical offset below title area
+ANIME_FIGHTING_ARENA_WIDTH = 500         # Arena width
+ANIME_FIGHTING_ARENA_HEIGHT = 500        # Arena height

@@ -87,7 +87,13 @@ class FighterBattleArena:
 
         # Track game time for consistent video recording with time scaling
         self.game_time = 0.0
-        self.recording_start_time = None  # Will be set when recording starts
+        self.recording_time = 0.0
+        self.recording_start_time = None
+        self.export_speedup_factor = 11.0
+        self.export_speedup_end_alive_count = 400
+        self.background_music_start_time = None
+        self._music_start_pending = False
+        self.late_game_stats_applied = False
 
         # Game phases: "intro", "countdown", "playing", "finished"
         self.game_phase = "intro"
@@ -163,6 +169,59 @@ class FighterBattleArena:
 
         print(f"✅ {len(self.fighters)} fighters ready for battle!\n")
 
+    def _get_recording_speed_multiplier(self) -> float:
+        if not config.EXPORT_VIDEO:
+            return 1.0
+        if self.game_phase != "playing":
+            return 1.0
+        if self.last_alive_count <= self.export_speedup_end_alive_count:
+            return 1.0
+        return self.export_speedup_factor
+
+    def _should_delay_music_until_speedup_end(self) -> bool:
+        return bool(getattr(config, "FIGHTER_ARENA_DELAY_MUSIC_UNTIL_SPEEDUP_END", False))
+
+    def _is_simplified_mode(self, alive_count: int) -> bool:
+        threshold = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_MODE_THRESHOLD", 10000)
+        return alive_count > threshold
+
+    def _apply_random_eliminations(self, alive_fighters: List[Fighter], dt: float) -> int:
+        threshold = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_MODE_THRESHOLD", 10000)
+        rate = getattr(config, "FIGHTER_ARENA_RANDOM_ELIMINATION_RATE", 0.0)
+        if rate <= 0:
+            return 0
+        alive_count = len(alive_fighters)
+        if alive_count <= threshold:
+            return 0
+
+        expected = alive_count * rate * dt
+        to_eliminate = int(expected)
+        if to_eliminate < 1:
+            to_eliminate = 1
+        to_eliminate = min(to_eliminate, alive_count - threshold)
+        if to_eliminate <= 0:
+            return 0
+
+        for fighter in random.sample(alive_fighters, to_eliminate):
+            fighter.eliminate()
+        return to_eliminate
+
+    def _apply_late_game_stats(self, alive_count: int) -> None:
+        threshold = int(getattr(config, "FIGHTER_ARENA_LATE_GAME_THRESHOLD", 400))
+        if self.late_game_stats_applied or alive_count > threshold:
+            return
+
+        late_hp = int(getattr(config, "FIGHTER_ARENA_LATE_GAME_HP", 40))
+        late_attack = int(getattr(config, "FIGHTER_ARENA_LATE_GAME_ATTACK_DAMAGE", 15))
+
+        for fighter in self.fighters:
+            fighter.max_hp = late_hp
+            if fighter.current_hp > late_hp:
+                fighter.current_hp = late_hp
+            fighter.attack_stat = late_attack
+
+        self.late_game_stats_applied = True
+
     def update(self, dt: float):
         """
         Update game state
@@ -222,6 +281,14 @@ class FighterBattleArena:
                 print(f"⚔️  [{time_module.time():.2f}] COMBAT ENABLED! (delay: {delay_duration:.2f}s, elapsed: {time_since_combat_start:.2f}s)")
                 self._combat_enabled_logged = True
 
+        # Precompute alive count once per frame (avoid O(n^2) alive scans inside each fighter)
+        alive_count_hint = sum(1 for f in self.fighters if f.alive)
+        simplified_mode = self._is_simplified_mode(alive_count_hint)
+        if simplified_mode:
+            combat_enabled = False
+
+        self._apply_late_game_stats(alive_count_hint)
+
         # Debug: Log phase transitions and combat state
         if not hasattr(self, '_last_combat_state'):
             self._last_combat_state = None
@@ -230,20 +297,26 @@ class FighterBattleArena:
             print(f"🎮 [{time_module.time():.2f}] Phase: {self.game_phase} | Combat: {'ENABLED' if combat_enabled else 'DISABLED'}")
             self._last_combat_state = combat_enabled
 
-        # Precompute alive count once per frame (avoid O(n²) alive scans inside each fighter)
-        alive_count_hint = sum(1 for f in self.fighters if f.alive)
-
         for fighter in self.fighters:
             # Always use fighter-specific update (no zone avoidance)
-            fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled, alive_count_hint)
+            fighter.update_fighter(
+                dt,
+                arena_rect,
+                self.fighters,
+                current_time,
+                combat_enabled,
+                alive_count_hint,
+                simplified_mode=simplified_mode,
+            )
 
-        # Physics: collision detection and overlap resolution
-        self.physics.update(self.fighters, current_time)
-        # Overlap resolution is expensive; skip it for massive crowds and use gentle separation instead
-        if len(self.fighters) < 10000:
-            self.physics.resolve_overlaps(self.fighters)
-        else:
-            self.physics.apply_separation_force(self.fighters, strength=0.1)
+        if not simplified_mode:
+            # Physics: collision detection and overlap resolution
+            self.physics.update(self.fighters, current_time)
+            # Overlap resolution is expensive; skip it for massive crowds and use gentle separation instead
+            if len(self.fighters) < 10000:
+                self.physics.resolve_overlaps(self.fighters)
+            else:
+                self.physics.apply_separation_force(self.fighters, strength=0.1)
 
         # Update particles
         self.particles.update(dt)
@@ -255,7 +328,18 @@ class FighterBattleArena:
         if self.game_phase == "playing":
             # Check for eliminations
             alive_fighters = [f for f in self.fighters if f.alive]
+            if simplified_mode:
+                eliminated = self._apply_random_eliminations(alive_fighters, dt)
+                if eliminated:
+                    alive_fighters = [f for f in self.fighters if f.alive]
             alive_count = len(alive_fighters)
+
+            if config.EXPORT_VIDEO and self.background_music_start_time is None:
+                if self._should_delay_music_until_speedup_end():
+                    if alive_count <= self.export_speedup_end_alive_count:
+                        self._music_start_pending = True
+                else:
+                    self._music_start_pending = True
 
             # Update dynamic radius
             if config.USE_DYNAMIC_SCALING:
@@ -313,19 +397,15 @@ class FighterBattleArena:
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "all_followers": self.fighters,
+            "speedup_active": config.EXPORT_VIDEO and self._get_recording_speed_multiplier() > 1.0,
+            "speedup_factor": self.export_speedup_factor,
         }
 
         self.renderer.render_frame(self.fighters, self.arena, game_state, self.particles)
 
         # Record frame (only from countdown onwards)
         if self.game_phase in ("countdown", "playing", "finished"):
-            # Set recording start time on first frame
-            if self.recording_start_time is None:
-                self.recording_start_time = self.game_time
-
-            # Pass recording time (time since recording started) to capture_frame
-            recording_time = self.game_time - self.recording_start_time
-            self.recorder.capture_frame(self.screen, current_time=recording_time)
+            self.recorder.capture_frame(self.screen, current_time=self.recording_time)
 
         pygame.display.flip()
 
@@ -471,6 +551,7 @@ class FighterBattleArena:
         # Display intro
         intro_start = time.time()
         intro_duration = self.sound.get_total_intro_duration() + 0.5
+        simplified_mode = self._is_simplified_mode(len(self.fighters))
 
         while time.time() - intro_start < intro_duration:
             for event in pygame.event.get():
@@ -499,14 +580,22 @@ class FighterBattleArena:
             arena_rect = self.arena.get_rect()
             current_time = time.time()
             for fighter in self.fighters:
-                fighter.update_fighter(dt, arena_rect, self.fighters, current_time, combat_enabled=False)
+                fighter.update_fighter(
+                    dt,
+                    arena_rect,
+                    self.fighters,
+                    current_time,
+                    combat_enabled=False,
+                    simplified_mode=simplified_mode,
+                )
 
-            # Physics: collision detection and overlap resolution
-            self.physics.update(self.fighters, current_time)
-            if len(self.fighters) < 10000:
-                self.physics.resolve_overlaps(self.fighters)
-            else:
-                self.physics.apply_separation_force(self.fighters, strength=0.1)
+            if not simplified_mode:
+                # Physics: collision detection and overlap resolution
+                self.physics.update(self.fighters, current_time)
+                if len(self.fighters) < 10000:
+                    self.physics.resolve_overlaps(self.fighters)
+                else:
+                    self.physics.apply_separation_force(self.fighters, strength=0.1)
 
             self.particles.update(dt)
             self.sound.update_music_volume()
@@ -519,6 +608,11 @@ class FighterBattleArena:
         self.countdown_number = 3
         self.renderer.start_countdown_video()  # Start the video overlay
         self.sound.play_countdown_audio()
+        self.recording_time = 0.0
+        self.background_music_start_time = None
+        self._music_start_pending = False
+        if config.EXPORT_VIDEO and not self._should_delay_music_until_speedup_end():
+            self.background_music_start_time = 0.0
 
         # Track podium display time
         game_over_start_time = None
@@ -546,6 +640,14 @@ class FighterBattleArena:
             self.game_time += dt  # Track game time
 
             self.update(dt)
+            if self.game_phase in ("countdown", "playing", "finished"):
+                recording_speed = self._get_recording_speed_multiplier()
+                if recording_speed <= 0:
+                    recording_speed = 1.0
+                self.recording_time += dt / recording_speed
+                if self._music_start_pending and self.background_music_start_time is None:
+                    self.background_music_start_time = self.recording_time
+                    self._music_start_pending = False
             self.render()
 
             if self.game_over and game_over_start_time is None:
@@ -580,6 +682,8 @@ class FighterBattleArena:
 
         # Export video
         if config.EXPORT_VIDEO:
+            if self.background_music_start_time is not None:
+                self.recorder.background_music_start_time = self.background_music_start_time
             self.recorder.export_video()
 
         self.sound.cleanup()

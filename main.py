@@ -47,6 +47,17 @@ from shared import (
 # Import battle royale specific modules
 from battle_royale import Follower, Arena, Renderer
 
+_DEFAULT_FOLLOWER_IMPORT_FILE = getattr(config, "FOLLOWER_IMPORT_FILE", "")
+
+
+def _get_follower_import_file(game_mode: str) -> str:
+    overrides = getattr(config, "FOLLOWER_IMPORT_FILE_BY_MODE", {})
+    if isinstance(overrides, dict):
+        override = overrides.get(game_mode)
+        if override:
+            return override
+    return _DEFAULT_FOLLOWER_IMPORT_FILE
+
 
 class FollowerBattleRoyale:
     """
@@ -119,6 +130,12 @@ class FollowerBattleRoyale:
         # Dynamic scaling tracking
         self.initial_total_players = 0
         self.initial_zone_radius = 0
+        self.fixed_follower_radius = getattr(config, "BATTLE_ROYALE_FIXED_RADIUS", None)
+        if self.fixed_follower_radius is not None and self.fixed_follower_radius > 0:
+            self.radius_scale = 1.0
+        else:
+            self.fixed_follower_radius = None
+            self.radius_scale = 1.5
         self.last_follower_radius = config.FOLLOWER_RADIUS
 
         # Announcements tracking
@@ -139,6 +156,32 @@ class FollowerBattleRoyale:
         self.perf_monitor = PerformanceMonitor(log_interval=log_interval, enable_detailed_logging=enable_detailed)
 
         print("✅ Game initialized successfully!\n")
+
+    def _apply_battle_royale_radius_scale(self, base_radius: float) -> float:
+        if self.fixed_follower_radius is not None:
+            return base_radius
+        return base_radius * self.radius_scale
+
+    def _calculate_battle_royale_radius(self, alive_count: int) -> float:
+        if self.fixed_follower_radius is not None:
+            return float(self.fixed_follower_radius)
+        if not config.USE_DYNAMIC_SCALING:
+            return config.FOLLOWER_BASE_RADIUS
+
+        total_players = self.initial_total_players or max(1, len(self.followers))
+
+        if total_players <= 100:
+            start_radius = config.FOLLOWER_BASE_RADIUS
+        else:
+            scale_factor = math.pow(100.0 / total_players, 0.6)
+            start_radius = max(config.FOLLOWER_MIN_RADIUS, config.FOLLOWER_BASE_RADIUS * scale_factor)
+
+        elimination_progress = 1.0 - (alive_count / total_players)
+        growth_amount = elimination_progress * config.SCALING_GROWTH_RATE
+        radius_range = config.FOLLOWER_MAX_RADIUS - start_radius
+        current_radius = start_radius + (radius_range * growth_amount)
+
+        return max(config.FOLLOWER_MIN_RADIUS, min(config.FOLLOWER_MAX_RADIUS, current_radius))
 
     def setup_followers(self):
         """
@@ -172,23 +215,20 @@ class FollowerBattleRoyale:
         self.initial_zone_radius = self.arena.initial_radius
 
         # Calculate and apply initial dynamic radius before game starts
-        if config.USE_DYNAMIC_SCALING:
-            initial_radius = config.calculate_dynamic_follower_radius(
-                total_players=self.initial_total_players,
-                alive_count=self.initial_total_players,  # All alive at start
-                safe_zone_radius=self.arena.initial_radius,
-                initial_zone_radius=self.initial_zone_radius
-            )
-            config.FOLLOWER_RADIUS = initial_radius
-            config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
-            self.last_follower_radius = initial_radius
+        base_radius = self._calculate_battle_royale_radius(self.initial_total_players)
+        scaled_radius = self._apply_battle_royale_radius_scale(base_radius)
+        config.FOLLOWER_RADIUS = scaled_radius
+        config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
+        self.last_follower_radius = scaled_radius
 
-            # Invalidate all follower surfaces so they render at correct size
-            for follower in self.followers:
-                follower.surface_needs_update = True
+        # Invalidate all follower surfaces so they render at correct size
+        for follower in self.followers:
+            follower.surface_needs_update = True
 
-            print(f"🔧 Dynamic scaling enabled: follower radius = {initial_radius:.1f}px")
-
+        if self.fixed_follower_radius is not None:
+            print(f"Fixed follower radius: {scaled_radius:.1f}px")
+        elif config.USE_DYNAMIC_SCALING:
+            print(f"Dynamic scaling enabled: follower radius = {scaled_radius:.1f}px")
         print(f"✅ {len(self.followers)} followers spawned in arena\n")
 
     def update(self, dt: float):
@@ -248,7 +288,13 @@ class FollowerBattleRoyale:
 
         # Update the selected batch of followers
         for follower in followers_to_update:
-            follower.update(dt, self.arena.center, self.arena.current_radius, self.followers)
+            follower.update(
+                dt,
+                self.arena.center,
+                self.arena.current_radius,
+                self.followers,
+                allow_targeting=self.game_phase == "playing",
+            )
 
             # Only check safe zone during PLAYING phase (not during intro/countdown)
             if self.game_phase == "playing":
@@ -304,21 +350,17 @@ class FollowerBattleRoyale:
             alive_count = len(alive_followers)
 
             # Update dynamic follower radius based on player count
-            if config.USE_DYNAMIC_SCALING:
-                new_radius = config.calculate_dynamic_follower_radius(
-                    total_players=self.initial_total_players,
-                    alive_count=alive_count,
-                    safe_zone_radius=self.arena.current_radius,
-                    initial_zone_radius=self.initial_zone_radius
-                )
+            if config.USE_DYNAMIC_SCALING and self.fixed_follower_radius is None:
+                new_radius = self._calculate_battle_royale_radius(alive_count)
+                scaled_radius = self._apply_battle_royale_radius_scale(new_radius)
 
                 # If radius changed significantly, invalidate cached surfaces
-                if abs(new_radius - self.last_follower_radius) > 0.5:
+                if abs(scaled_radius - self.last_follower_radius) > 0.5:
                     for follower in self.followers:
                         follower.surface_needs_update = True
-                    self.last_follower_radius = new_radius
+                    self.last_follower_radius = scaled_radius
 
-                config.FOLLOWER_RADIUS = new_radius
+                config.FOLLOWER_RADIUS = scaled_radius
                 # Update collision distance to match new radius
                 config.COLLISION_DISTANCE = config.FOLLOWER_RADIUS * 2
 
@@ -582,7 +624,13 @@ class FollowerBattleRoyale:
 
             # Update followers so they move around during intro
             for follower in self.followers:
-                follower.update(dt, self.arena.center, self.arena.current_radius, self.followers)
+                follower.update(
+                    dt,
+                    self.arena.center,
+                    self.arena.current_radius,
+                    self.followers,
+                    allow_targeting=self.game_phase == "playing",
+                )
 
             # Update physics (collisions) so followers interact naturally
             self.physics.update(self.followers, dt)
@@ -692,6 +740,10 @@ def _create_game_instance(game_mode: str):
         from fighter_arena import FighterBattleArena
         print("Starting Fighter Arena mode...")
         return FighterBattleArena()
+    elif game_mode == "anime_fighting":
+        from anime_fighting import AnimeFightingGame
+        print("Starting Anime Fighting mode...")
+        return AnimeFightingGame()
     elif game_mode == "gorillas_vs_followers":
         from gorillas_vs_followers import GorillasVsFollowersGame
         print("Starting Gorillas vs Followers mode...")
@@ -720,6 +772,18 @@ def _create_game_instance(game_mode: str):
         from meteor_mayhem import MeteorMayhemGame
         print("Starting Meteor Mayhem mode...")
         return MeteorMayhemGame()
+    elif game_mode == "mingle":
+        from mingle import MingleGame
+        print("Starting Mingle mode...")
+        return MingleGame()
+    elif game_mode in ("heads_or_tails", "side_choice"):
+        from side_choice import SideChoiceGame
+        print("Starting Heads/Tails mode...")
+        return SideChoiceGame()
+    elif game_mode == "wheel_spinner":
+        from wheel_spinner import WheelSpinnerGame
+        print("Starting Wheel Spinner mode...")
+        return WheelSpinnerGame()
 
     print("Starting Battle Royale mode...")
     return FollowerBattleRoyale()
@@ -746,6 +810,7 @@ def _run_single_mode(game_mode: str):
     """Set per-game config and run one game mode."""
     config.GAME_MODE = game_mode
     config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode=game_mode)
+    config.FOLLOWER_IMPORT_FILE = _get_follower_import_file(game_mode)
     game = _create_game_instance(game_mode)
     game.run()
 
@@ -762,16 +827,22 @@ def main():
         if game_mode == "ALL":
             print("Running ALL game modes sequentially:")
             print(" -> " + ", ".join(getattr(config, "ALL_GAME_MODES", [])))
+            default_import_file = _DEFAULT_FOLLOWER_IMPORT_FILE
+            config.FOLLOWER_IMPORT_FILE = default_import_file
             prefetched = _prefetch_followers_for_all()
             for mode in getattr(config, "ALL_GAME_MODES", []):
                 # Refresh the cache reference before each run
-                if prefetched:
+                mode_import_file = _get_follower_import_file(mode)
+                if prefetched and mode_import_file == default_import_file:
                     shared_api.set_prefetched_followers(prefetched)
+                else:
+                    shared_api.clear_prefetched_followers()
                 _run_single_mode(mode)
             shared_api.clear_prefetched_followers()
             # Restore GAME_MODE for downstream references (e.g., manual push)
             config.GAME_MODE = "ALL"
             config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
+            config.FOLLOWER_IMPORT_FILE = default_import_file
         else:
             _run_single_mode(game_mode)
     except KeyboardInterrupt:

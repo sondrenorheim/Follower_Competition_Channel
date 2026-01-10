@@ -32,8 +32,8 @@ class PlatformerRacer(Follower):
         """
         super().__init__(follower_data, position)
 
-        # Override radius (use config)
-        self.radius = config.FOLLOWER_RADIUS
+        # Override radius (use platformer-specific config - 50% smaller)
+        self.radius = config.PLATFORMER_RACER_RADIUS
 
         # Physics state
         self.on_ground = False

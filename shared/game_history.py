@@ -96,7 +96,11 @@ class GameHistory:
             "total_kills": 0
         }))
 
+        non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+
         for game in self.history.get('games', []):
+            if game.get("non_scoring") or game.get("game_type") in non_scoring_types:
+                continue
             timestamp = game.get("timestamp", "")
             if not timestamp or len(timestamp) < 7:
                 continue
@@ -235,7 +239,8 @@ class GameHistory:
                         "game_type": g.get("game_type"),
                         "game_display_name": g.get("game_display_name"),
                         "timestamp": g.get("timestamp"),
-                        "total_participants": g.get("total_participants")
+                        "total_participants": g.get("total_participants"),
+                        "non_scoring": g.get("non_scoring", False)
                     }
                     for g in day_games
                 ]
@@ -318,7 +323,8 @@ class GameHistory:
         game_type: str,
         game_display_name: str,
         day_number: int,
-        results: List[Dict]
+        results: List[Dict],
+        non_scoring: bool = False
     ):
         """
         Record a complete game session with all player results
@@ -334,6 +340,7 @@ class GameHistory:
                 - survival_time: float (seconds survived)
                 - kills: int (optional)
                 - damage: float (optional)
+            non_scoring: If True, this game should not affect overall leaderboards
         """
         # Generate unique game ID
         timestamp = datetime.now().isoformat()
@@ -364,7 +371,8 @@ class GameHistory:
             "day_number": day_number,
             "timestamp": timestamp,
             "total_participants": len(results),
-            "results": sorted_results
+            "results": sorted_results,
+            "non_scoring": non_scoring
         }
 
         # Add to history

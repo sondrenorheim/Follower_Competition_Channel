@@ -100,6 +100,7 @@ export default function MonthlyRankings() {
     for (const gameSummary of filteredSummaries) {
       const game = await loadGame(gameSummary.game_id);
       if (!game || !game.results) continue;
+      if (gameType === 'all' && game.non_scoring) continue;
 
       game.results.forEach((result) => {
         if (!players.has(result.username)) {

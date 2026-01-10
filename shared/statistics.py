@@ -292,6 +292,72 @@ class PlayerStatistics:
 
         return leaderboard[:top_n]
 
+    def get_monthly_leaderboard(self, year: int, month: int, top_n: int = 16) -> List[Tuple[str, list]]:
+        """
+        Get top N players for a specific month based on points earned in that month.
+
+        Args:
+            year: Year to filter (e.g., 2025)
+            month: Month to filter (1-12)
+            top_n: Number of top players to return
+
+        Returns:
+            List of tuples: (username, stats_array)
+            Empty list if game_history.json doesn't exist or has no games for that month
+        """
+        game_history_file = "game_history.json"
+
+        if not os.path.exists(game_history_file):
+            print(f"⚠️  Monthly leaderboard: game_history.json not found")
+            return []
+
+        try:
+            with open(game_history_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            games = data.get("games", [])
+
+            # Filter games by month/year
+            month_prefix = f"{year}-{month:02d}"
+            non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+            monthly_games = [
+                g for g in games
+                if g.get("timestamp", "").startswith(month_prefix)
+                and not g.get("non_scoring")
+                and g.get("game_type") not in non_scoring_types
+            ]
+
+            if not monthly_games:
+                print(f"⚠️  No games found for {year}-{month:02d}")
+                return []
+
+            # Aggregate points per player for the month
+            monthly_points = {}
+            for game in monthly_games:
+                for result in game.get("results", []):
+                    username = result.get("username")
+                    points = result.get("points", 0)
+                    if username:
+                        monthly_points[username] = monthly_points.get(username, 0.0) + points
+
+            # Build leaderboard with full stats arrays
+            leaderboard = []
+            for username, month_pts in monthly_points.items():
+                # Get full stats for this player (for avatar fetching, etc.)
+                stats = self.get_player_stats(username)
+                leaderboard.append((username, stats))
+
+            # Sort by monthly points descending
+            leaderboard.sort(key=lambda x: monthly_points[x[0]], reverse=True)
+
+            print(f"📊 Monthly leaderboard for {year}-{month:02d}: {len(leaderboard)} players")
+
+            return leaderboard[:top_n]
+
+        except Exception as e:
+            print(f"❌ Error loading monthly leaderboard: {e}")
+            return []
+
     def get_current_game_leaderboard(
         self,
         game_results: List[Tuple[str, int, float, float]]
@@ -449,6 +515,8 @@ class PlayerStatistics:
             "snake_escape": "se",
             "team_battle": "tb",
             "gorillas_vs_followers": "gv",
+            "heads_or_tails": "ht",
+            "wheel_spinner": "ws",
         }
 
         compact_players = {}
@@ -494,6 +562,8 @@ class PlayerStatistics:
             "snake_escape": "se",
             "team_battle": "tb",
             "gorillas_vs_followers": "gv",
+            "heads_or_tails": "ht",
+            "wheel_spinner": "ws",
         }
 
         # Group players by first letter

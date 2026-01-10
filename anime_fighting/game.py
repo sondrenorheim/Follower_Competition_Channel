@@ -5,14 +5,18 @@ Manages 1v1 tournament bracket with anime-style combat mechanics.
 Runs sequential matches through tournament rounds until a champion is crowned.
 """
 
+import json
 import math
+import os
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import List, Tuple, Optional
 
 import pygame
 import config
+from PIL import Image
 
 from shared import InstagramAPI, VideoRecorder, ScoringSystem, PlayerStatistics, SoundManager, AudioLogger
 
@@ -22,9 +26,30 @@ from .renderer import AnimeFightingRenderer
 from .camera_fx import CameraFX, update_particles, update_afterimages
 from .combat import (
     HitShape, Projectile, update_hitshapes, update_projectiles,
-    resolve_hits, separate_fighters
+    resolve_hits, separate_fighters, detect_clash, resolve_clash
 )
+from .camera_fx import draw_screen_flash
 from .ai import bot_brain
+
+
+class AnimeAudioLogger(AudioLogger):
+    """Audio logger that uses the game clock for timestamps."""
+
+    def __init__(self, time_provider):
+        super().__init__()
+        self._time_provider = time_provider
+
+    def start(self):
+        """Start logging audio events using the game clock."""
+        self.start_time = self._time_provider()
+        self.recording = True
+        print("Audio event logging started (game clock)")
+
+    def get_timestamp(self) -> float:
+        """Get current timestamp relative to the game clock."""
+        if self.start_time is None:
+            return 0.0
+        return self._time_provider() - self.start_time
 
 
 class AnimeFightingGame:
@@ -63,15 +88,20 @@ class AnimeFightingGame:
         self.scoring = ScoringSystem()
         self.statistics = PlayerStatistics()
 
-        # Video recording
+        # Sound system (must be initialized before VideoRecorder for audio logging)
+        self.audio_logger = AnimeAudioLogger(self._get_audio_time)
+        self.sound = SoundManager(audio_logger=self.audio_logger)
+
+        # Video recording (with audio logger for sound effects in export)
         self.recorder = None
         if config.EXPORT_VIDEO:
             output_path = config.get_output_video_path("anime_fighting")
-            self.recorder = VideoRecorder(output_path, config.SCREEN_WIDTH, config.SCREEN_HEIGHT, config.VIDEO_FPS)
-
-        # Sound system
-        self.audio_logger = AudioLogger()
-        self.sound = SoundManager(audio_logger=self.audio_logger)
+            self.recorder = VideoRecorder(
+                output_path=output_path,
+                fps=config.VIDEO_FPS,
+                audio_logger=self.audio_logger,
+                countdown_audio_path=""
+            )
 
         # Tournament state
         self.all_fighters: List[AnimeFighter] = []
@@ -88,7 +118,7 @@ class AnimeFightingGame:
         self.afterimages = []
 
         # Game phase
-        self.phase = "intro"  # intro, bracket_display, countdown, fighting, winner, bracket_transition, finished
+        self.phase = "intro"  # intro, round_intro, top16_overview, bracket_display, countdown, fighting, winner, bracket_transition, finished
         self.phase_start_time = 0.0
         self.match_time = 0.0
         self.match_start_time = 0.0
@@ -96,6 +126,22 @@ class AnimeFightingGame:
         # Game time accumulator (replaces time.time() for video sync)
         # This ensures video playback speed matches game simulation
         self.game_time = 0.0
+
+        # Best-of-3 Finals state
+        self.is_finals = False
+        self.finals_wins = {1: 0, 2: 0}  # Fighter1 wins, Fighter2 wins
+        self.finals_match_number = 0  # Current match in finals (0, 1, or 2)
+
+        # Round intro tracking
+        self.last_round_intro_round = -1
+        self.round_intro_header = ""
+        self.round_intro_label = ""
+        self.pending_top16_overview = False
+        self.top16_overview_entries = []
+        self.top16_overview_duration = 3.0
+
+        # Monthly points map (username -> points)
+        self.monthly_points_map = {}
 
         # Running flag
         self.running = True
@@ -121,6 +167,10 @@ class AnimeFightingGame:
             # Accumulate game time (ensures video sync - 1 second of video = 1 second of game time)
             self.game_time += dt_real
 
+            # Start audio logging once the game clock is running
+            if not self.audio_logger.recording:
+                self.audio_logger.start()
+
             # Update camera FX (runs in real time)
             self.camera_fx.update(dt_real)
 
@@ -138,7 +188,7 @@ class AnimeFightingGame:
 
             # Record frame (no time parameter - recorder uses internal time tracking)
             if self.recorder:
-                self.recorder.capture_frame(self.screen)
+                self.recorder.capture_frame(self.screen, current_time=self.game_time)
 
         # Cleanup
         self._cleanup()
@@ -153,13 +203,10 @@ class AnimeFightingGame:
         # Get current month/year for monthly tournament
         current_year = datetime.now().year
         current_month = datetime.now().month
+        self.monthly_points_map = self._get_monthly_points_map(current_year, current_month)
 
         # Fetch top fighters from monthly leaderboard
-        monthly_top = self.statistics.get_monthly_leaderboard(
-            year=current_year,
-            month=current_month,
-            top_n=bracket_size
-        )
+        monthly_top = self._get_monthly_leaderboard_from_points(bracket_size)
 
         # If fewer than bracket_size fighters in monthly leaderboard, fall back to all-time
         if len(monthly_top) < bracket_size:
@@ -200,12 +247,8 @@ class AnimeFightingGame:
             # Extract usernames from monthly leaderboard
             top_usernames = [username for username, _ in monthly_top]
 
-            # Fetch only the tournament participants (16 fighters) to get avatar data
-            # This is more efficient than fetching all followers
-            tournament_followers = self.api.fetch_followers(bracket_size)
-
-            # Create a username -> follower_data map
-            follower_map = {f['username']: f for f in tournament_followers}
+            # Create a username -> follower_data map for qualifiers
+            follower_map = self._fetch_follower_data_for_usernames(top_usernames)
 
             # Create fighters for top monthly performers
             for rank, (username, stats) in enumerate(monthly_top, start=1):
@@ -213,7 +256,8 @@ class AnimeFightingGame:
                 follower_data = follower_map.get(username, {
                     'id': rank,
                     'username': username,
-                    'avatar': None
+                    'avatar': None,
+                    'color': random.choice(config.RANDOM_COLORS)
                 })
 
                 fighter = AnimeFighter(follower_data, (0, 0))
@@ -224,7 +268,176 @@ class AnimeFightingGame:
 
             print(f"✅ Created {len(self.all_fighters)} fighters from {self.tournament_type} tournament leaderboard")
 
+        self._build_top16_overview_entries()
         print(f"Created {len(self.all_fighters)} fighters")
+
+    def _get_monthly_points_map(self, year: int, month: int) -> dict:
+        """Build a username -> monthly points map from game history."""
+        game_history_file = "game_history.json"
+        if not os.path.exists(game_history_file):
+            return {}
+
+        try:
+            with open(game_history_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            games = data.get("games", [])
+            month_prefix = f"{year}-{month:02d}"
+            monthly_games = [g for g in games if g.get("timestamp", "").startswith(month_prefix)]
+
+            monthly_points = {}
+            for game in monthly_games:
+                for result in game.get("results", []):
+                    username = result.get("username")
+                    points = result.get("points", 0)
+                    if username:
+                        monthly_points[username] = monthly_points.get(username, 0.0) + points
+
+            return monthly_points
+        except Exception as exc:
+            print(f"Error loading monthly points: {exc}")
+            return {}
+
+    def _get_monthly_leaderboard_from_points(self, top_n: int) -> List[Tuple[str, list]]:
+        """Build a monthly leaderboard using the cached monthly points map."""
+        if not self.monthly_points_map:
+            return []
+
+        leaderboard = []
+        for username in self.monthly_points_map.keys():
+            stats = self.statistics.get_player_stats(username)
+            leaderboard.append((username, stats))
+
+        leaderboard.sort(key=lambda x: self.monthly_points_map.get(x[0], 0.0), reverse=True)
+        return leaderboard[:top_n]
+
+    def _fetch_follower_data_for_usernames(self, usernames: List[str]) -> dict:
+        """Fetch follower data for specific usernames with correct avatars."""
+        follower_map = {}
+        if not usernames:
+            return follower_map
+
+        remaining = set(usernames)
+
+        # First pass: load from avatar cache if available
+        for username in list(remaining):
+            avatar_img = self._load_cached_avatar(username)
+            if avatar_img is not None:
+                follower_map[username] = self._build_follower_data(username, avatar_img)
+                remaining.remove(username)
+
+        if not remaining:
+            return follower_map
+
+        import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
+        if import_file and os.path.exists(import_file):
+            try:
+                with open(import_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                if isinstance(data, list):
+                    follower_list = data
+                elif isinstance(data, dict):
+                    if 'followers' in data:
+                        follower_list = data.get('followers', [])
+                    elif 'relationships_followers' in data:
+                        follower_list = data.get('relationships_followers', [])
+                    else:
+                        follower_list = data.get('data', [])
+                else:
+                    follower_list = []
+
+                for item in follower_list:
+                    username, profile_pic_url = self._extract_username_entry(item)
+                    if not username or username not in remaining:
+                        continue
+
+                    avatar_img = None
+                    if profile_pic_url and getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False):
+                        avatar_img = self.api._download_avatar(profile_pic_url, username=username)
+                    if avatar_img is None:
+                        avatar_img = self._load_cached_avatar(username)
+
+                    follower_map[username] = self._build_follower_data(username, avatar_img)
+                    remaining.remove(username)
+                    if not remaining:
+                        break
+            except Exception as exc:
+                print(f"Error loading follower import file: {exc}")
+
+        if remaining:
+            sample = ", ".join(sorted(list(remaining))[:5])
+            print(f"Missing avatar data for {len(remaining)} qualifiers: {sample}")
+
+        return follower_map
+
+    def _load_cached_avatar(self, username: str) -> Optional[Image.Image]:
+        """Load avatar from disk cache if it exists."""
+        if not getattr(config, 'LOAD_PROFILE_PICTURES', True):
+            return None
+
+        cache_file = Path("avatar_cache") / f"{username}.jpg"
+        if not cache_file.exists():
+            return None
+
+        try:
+            return Image.open(cache_file).convert("RGBA")
+        except Exception:
+            return None
+
+    def _extract_username_entry(self, item) -> Tuple[Optional[str], Optional[str]]:
+        """Extract username and profile_pic_url from an import entry."""
+        username = None
+        profile_pic_url = None
+
+        if isinstance(item, dict):
+            if 'string_list_data' in item and item['string_list_data']:
+                username = item['string_list_data'][0].get('value')
+            elif 'username' in item:
+                username = item.get('username')
+                profile_pic_url = item.get('profile_pic_url') or item.get('profile_pic_url_hd')
+            elif 'value' in item:
+                username = item.get('value')
+            else:
+                username = item.get('user')
+
+            if not profile_pic_url:
+                profile_pic_url = item.get('avatar_url') or item.get('avatarurl')
+        elif isinstance(item, str):
+            username = item
+
+        return username, profile_pic_url
+
+    def _build_follower_data(self, username: str, avatar_img: Optional[Image.Image]) -> dict:
+        """Build follower data dict for AnimeFighter."""
+        return {
+            'id': username,
+            'username': username,
+            'avatar': avatar_img,
+            'color': random.choice(config.RANDOM_COLORS)
+        }
+
+    def _build_top16_overview_entries(self):
+        """Prepare overview entries with fighter avatars and monthly points."""
+        self.top16_overview_entries = []
+        max_entries = min(16, len(self.all_fighters))
+        for fighter in self.all_fighters[:max_entries]:
+            points = 0.0
+            if hasattr(fighter, 'username'):
+                points = self.monthly_points_map.get(fighter.username, 0.0)
+            self.top16_overview_entries.append((fighter, points))
+
+    def _get_audio_time(self) -> float:
+        """Return audio timeline time aligned to exported video frames."""
+        if self.recorder and getattr(config, "EXPORT_VIDEO", False):
+            frame_count = self.recorder.get_frame_count()
+            fps = self.recorder.fps
+            if not self.recorder.use_streaming:
+                fps = fps * self.recorder.export_speed_factor
+            if fps > 0:
+                return frame_count / fps
+            return 0.0
+        return self.game_time
 
     def create_bracket(self):
         """Create single-elimination tournament bracket with ranked seeding"""
@@ -319,6 +532,22 @@ class AnimeFightingGame:
                 self.phase = "countdown"
                 self.phase_start_time = current_time
 
+        elif self.phase == "round_intro":
+            # Show round intro before bracket overview
+            if elapsed >= 2.0:
+                if self.pending_top16_overview:
+                    self.pending_top16_overview = False
+                    self.phase = "top16_overview"
+                    self.phase_start_time = current_time
+                else:
+                    self.phase = "bracket_display"
+                    self.phase_start_time = current_time
+
+        elif self.phase == "top16_overview":
+            if elapsed >= self.top16_overview_duration:
+                self.phase = "bracket_display"
+                self.phase_start_time = current_time
+
         elif self.phase == "countdown":
             # 3-2-1-FIGHT countdown (3 seconds)
             if elapsed >= 3.0:
@@ -372,6 +601,13 @@ class AnimeFightingGame:
         for fighter in [self.fighter1, self.fighter2]:
             fighter.update_cooldowns(dt)
             fighter.update_final_smash_meter(dt)  # Charge Final Smash meter over time
+            # Desperation mode visual effects
+            was_desperate = getattr(fighter, '_was_desperate', False)
+            fighter.update_desperation_mode(dt, self.particles)
+            # Play sound when entering desperation mode
+            if fighter.is_desperate and not was_desperate and self.sound:
+                if hasattr(self.sound, 'play_desperation_activate'):
+                    self.sound.play_desperation_activate()
 
         # Update fighter states (with other_fighter and camera_fx for Final Smash choreography)
         self.fighter1.update_state(dt, self.hitshapes, self.projectiles, self.particles,
@@ -405,12 +641,22 @@ class AnimeFightingGame:
         # Update combat systems
         update_hitshapes(self.hitshapes, dt, [self.fighter1, self.fighter2])
         update_projectiles(self.projectiles, dt, self.arena.get_bounds(), self.particles)
-        resolve_hits(
-            self.hitshapes, self.projectiles,
-            [self.fighter1, self.fighter2],
-            self.particles, self.camera_fx, self.match_time,
-            sound=self.sound
-        )
+
+        # Check for clash (both fighters attacking simultaneously)
+        clash = detect_clash(self.hitshapes, [self.fighter1, self.fighter2])
+        if clash:
+            resolve_clash(clash, [self.fighter1, self.fighter2],
+                         self.particles, self.camera_fx, self.sound)
+            # Clear hitshapes after clash to prevent double-hits
+            self.hitshapes.clear()
+        else:
+            # Normal hit resolution
+            resolve_hits(
+                self.hitshapes, self.projectiles,
+                [self.fighter1, self.fighter2],
+                self.particles, self.camera_fx, self.match_time,
+                sound=self.sound
+            )
 
         # Update visual effects
         update_particles(self.particles, dt)
@@ -536,6 +782,16 @@ class AnimeFightingGame:
         self.fighter1 = current_round_fighters[idx1]
         self.fighter2 = current_round_fighters[idx2]
 
+        # Check if this is the Finals (only 2 fighters in round)
+        if len(current_round_fighters) == 2 and not self.is_finals:
+            # Initialize best-of-3 finals
+            self.is_finals = True
+            self.finals_wins = {1: 0, 2: 0}
+            self.finals_match_number = 0
+            print(f"\n{'='*40}")
+            print(f"GRAND FINALS - BEST OF 3")
+            print(f"{'='*40}")
+
         # Reset fighters with HP multiplier based on round
         # Round of 16 (round 0) has half HP for faster matches
         hp_multiplier = 0.5 if self.current_round == 0 else 1.0
@@ -555,24 +811,87 @@ class AnimeFightingGame:
         self.afterimages.clear()
 
         # Show bracket display with this matchup highlighted, then countdown
-        self.phase = "bracket_display"
-        self.phase_start_time = self.game_time
+        show_round_intro = self.current_match == 0 and self.current_round != self.last_round_intro_round
+        if show_round_intro:
+            self.last_round_intro_round = self.current_round
+            self.round_intro_header, self.round_intro_label = self._get_round_intro_text()
+            fighters_in_round = len(self.bracket[self.current_round]) if self.current_round < len(self.bracket) else 0
+            self.pending_top16_overview = fighters_in_round == 16 and bool(self.top16_overview_entries)
+            self.phase = "round_intro"
+            self.phase_start_time = self.game_time
+        else:
+            self.phase = "bracket_display"
+            self.phase_start_time = self.game_time
 
         round_name = self._get_round_name()
-        print(f"\n{round_name} - Match {self.current_match + 1}/{matches_in_round}")
-        print(f"{self.fighter1.username} vs {self.fighter2.username}")
+        if self.is_finals:
+            print(f"\n{round_name} - Game {self.finals_match_number + 1} (First to 2 wins)")
+            print(f"{self.fighter1.username} [{self.finals_wins[1]}] vs [{self.finals_wins[2]}] {self.fighter2.username}")
+        else:
+            print(f"\n{round_name} - Match {self.current_match + 1}/{matches_in_round}")
+            print(f"{self.fighter1.username} vs {self.fighter2.username}")
 
     def _advance_bracket(self):
         """Record match winner and prepare for next match"""
-        # Determine winner
-        winner = self.fighter1 if self.fighter1.is_alive() else self.fighter2
+        # Determine winner of this game
+        game_winner = self.fighter1 if self.fighter1.is_alive() else self.fighter2
+        game_loser = self.fighter2 if game_winner == self.fighter1 else self.fighter1
 
+        # Handle best-of-3 finals
+        if self.is_finals:
+            # Record the win
+            if game_winner == self.fighter1:
+                self.finals_wins[1] += 1
+            else:
+                self.finals_wins[2] += 1
+
+            self.finals_match_number += 1
+
+            print(f"Game {self.finals_match_number} Winner: {game_winner.username}")
+            print(f"Score: {self.fighter1.username} [{self.finals_wins[1]}] - [{self.finals_wins[2]}] {self.fighter2.username}")
+
+            # Check if someone has won the best-of-3 (first to 2 wins)
+            if self.finals_wins[1] >= 2 or self.finals_wins[2] >= 2:
+                # Finals complete - determine champion
+                champion = self.fighter1 if self.finals_wins[1] >= 2 else self.fighter2
+                runner_up = self.fighter2 if champion == self.fighter1 else self.fighter1
+
+                # Mark runner_up as eliminated for tournament results
+                runner_up.hp = 0
+                runner_up.alive = False
+
+                print(f"\n{'='*40}")
+                print(f"CHAMPION: {champion.username} wins {self.finals_wins[1]}-{self.finals_wins[2]}!")
+                print(f"{'='*40}")
+
+                # Add champion to next round bracket for display
+                if not hasattr(self, '_next_round_fighters'):
+                    self._next_round_fighters = []
+                self._next_round_fighters.append(champion)
+
+                next_round_index = self.current_round + 1
+                while len(self.bracket) <= next_round_index:
+                    self.bracket.append([])
+                self.bracket[next_round_index] = self._next_round_fighters.copy()
+
+                # Move to finished state
+                self.current_match += 1
+                self.phase = "bracket_transition"
+                self.phase_start_time = self.game_time
+            else:
+                # More games needed - reset for next finals game
+                # Don't increment current_match, just show transition and restart
+                self.phase = "bracket_transition"
+                self.phase_start_time = self.game_time
+            return
+
+        # Normal bracket advancement (non-finals)
         # Initialize next round bracket if needed
         if not hasattr(self, '_next_round_fighters'):
             self._next_round_fighters = []
 
         # Add winner to temporary list
-        self._next_round_fighters.append(winner)
+        self._next_round_fighters.append(game_winner)
 
         # Immediately update the bracket display for visual feedback
         # Ensure bracket has a slot for the next round
@@ -630,6 +949,27 @@ class AnimeFightingGame:
             return "Round of 32"
         else:
             return f"Round of {fighters_in_round}"
+
+    def _get_round_intro_text(self) -> Tuple[str, str]:
+        """Build round intro header and label text"""
+        fighters_in_round = len(self.bracket[self.current_round]) if self.current_round < len(self.bracket) else 0
+
+        if fighters_in_round == 16:
+            round_label = "Top 16"
+        elif fighters_in_round == 8:
+            round_label = "Quarterfinals"
+        elif fighters_in_round == 4:
+            round_label = "Semifinals"
+        elif fighters_in_round == 2:
+            round_label = "Final"
+        elif fighters_in_round > 0:
+            round_label = f"Top {fighters_in_round}"
+        else:
+            round_label = "Tournament"
+
+        month_name = datetime.now().strftime("%B")
+        header = f"{month_name} Leaderboard"
+        return header, round_label
 
     def _count_remaining_matches(self) -> int:
         """Count total matches remaining in tournament"""
@@ -718,6 +1058,12 @@ class AnimeFightingGame:
         if self.phase == "intro":
             self._render_intro()
 
+        elif self.phase == "round_intro":
+            self.renderer.render_round_intro(self.round_intro_header, self.round_intro_label)
+
+        elif self.phase == "top16_overview":
+            self.renderer.render_top16_overview(self.round_intro_header, self.top16_overview_entries)
+
         elif self.phase == "bracket_display":
             # Render tournament bracket overview
             if self.fighter1 and self.fighter2:
@@ -736,7 +1082,10 @@ class AnimeFightingGame:
                 "round_name": self._get_round_name(),
                 "match_num": self.current_match + 1,
                 "total_matches": len(self.bracket[self.current_round]) // 2 if self.current_round < len(self.bracket) else 1,
-                "timer": getattr(config, 'ANIME_FIGHTING_MATCH_TIME_LIMIT', 60) - self.match_time
+                "timer": getattr(config, 'ANIME_FIGHTING_MATCH_TIME_LIMIT', 60) - self.match_time,
+                "is_finals": self.is_finals,
+                "finals_wins": self.finals_wins.copy() if self.is_finals else None,
+                "finals_game": self.finals_match_number + 1 if self.is_finals else None
             }
 
             # Draw arena background
@@ -759,6 +1108,11 @@ class AnimeFightingGame:
             # Apply camera effects (zoom, shake)
             self.camera_fx.blit_world(self.screen, self.world_surface)
 
+            # Screen flash overlay (for finisher hits and clashes)
+            flash_intensity = self.camera_fx.get_flash_intensity()
+            if flash_intensity > 0:
+                draw_screen_flash(self.screen, flash_intensity, self.camera_fx.screen_flash_color)
+
             # Render UI on top
             self.renderer.render_ui(self.fighter1, self.fighter2, match_state)
 
@@ -772,7 +1126,27 @@ class AnimeFightingGame:
             # Winner overlay
             if self.phase == "winner":
                 winner = self.fighter1 if self.fighter1.is_alive() else self.fighter2
-                self.renderer.render_winner_announcement(winner)
+
+                # Build finals info if in finals
+                finals_info = None
+                if self.is_finals:
+                    # Check if series is over (someone has 2 wins after this game)
+                    wins_after = self.finals_wins.copy()
+                    if winner == self.fighter1:
+                        wins_after[1] += 1
+                    else:
+                        wins_after[2] += 1
+                    is_series_over = wins_after[1] >= 2 or wins_after[2] >= 2
+
+                    finals_info = {
+                        'wins': wins_after,
+                        'game': self.finals_match_number + 1,
+                        'is_series_over': is_series_over,
+                        'fighter1_name': self.fighter1.username,
+                        'fighter2_name': self.fighter2.username
+                    }
+
+                self.renderer.render_winner_announcement(winner, finals_info)
 
         elif self.phase == "bracket_transition":
             # Show updated bracket after winner advances
@@ -804,6 +1178,7 @@ class AnimeFightingGame:
 
             self.renderer.render_podium(winner, runner_up, semifinalists)
 
+        self.renderer.render_promo_overlay()
         pygame.display.flip()
 
     def _render_intro(self):
@@ -823,5 +1198,7 @@ class AnimeFightingGame:
             print("Exporting video...")
             self.recorder.export_video()
             print(f"Video saved to {self.recorder.output_path}")
+
+        self.audio_logger.stop()
 
         pygame.quit()

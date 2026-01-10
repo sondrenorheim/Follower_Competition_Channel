@@ -698,3 +698,216 @@ class SoundManager:
             except:
                 pass
         pygame.mixer.quit()
+
+    # =========================================================================
+    # ANIME FIGHTING SOUND EFFECTS
+    # =========================================================================
+
+    def _generate_sweep_sound(self, freq_start: float, freq_end: float,
+                              duration: float, volume: float = 0.5) -> pygame.mixer.Sound:
+        """
+        Generate a frequency sweep sound (whoosh effect)
+
+        Args:
+            freq_start: Starting frequency in Hz
+            freq_end: Ending frequency in Hz
+            duration: Duration in seconds
+            volume: Volume (0.0 to 1.0)
+        """
+        sample_rate = 22050
+        num_samples = int(duration * sample_rate)
+        samples = np.zeros((num_samples, 2), dtype=np.int16)
+
+        max_amplitude = int(32767 * volume)
+
+        for i in range(num_samples):
+            t = i / sample_rate
+            progress = t / duration
+            # Linear frequency interpolation
+            freq = freq_start + (freq_end - freq_start) * progress
+            # Envelope (attack + decay)
+            envelope = min(1.0, t * 20) * (1.0 - progress * 0.5)
+            value = int(max_amplitude * envelope * math.sin(2 * math.pi * freq * t))
+            samples[i] = [value, value]
+
+        return pygame.sndarray.make_sound(samples)
+
+    def _generate_noise_burst(self, duration: float, volume: float = 0.3) -> pygame.mixer.Sound:
+        """
+        Generate a short noise burst (whoosh/dash sound)
+
+        Args:
+            duration: Duration in seconds
+            volume: Volume (0.0 to 1.0)
+        """
+        sample_rate = 22050
+        num_samples = int(duration * sample_rate)
+        samples = np.zeros((num_samples, 2), dtype=np.int16)
+
+        max_amplitude = int(32767 * volume)
+
+        for i in range(num_samples):
+            t = i / sample_rate
+            progress = t / duration
+            # Quick attack, gradual decay
+            envelope = min(1.0, t * 50) * (1.0 - progress)
+            # White noise
+            noise = np.random.uniform(-1, 1)
+            value = int(max_amplitude * envelope * noise)
+            samples[i] = [value, value]
+
+        return pygame.sndarray.make_sound(samples)
+
+    def _generate_impact_sound(self, freq: float, duration: float,
+                               volume: float = 0.5, noise_mix: float = 0.0,
+                               decay: float = 0.7) -> pygame.mixer.Sound:
+        """
+        Generate an impact sound with optional noise
+
+        Args:
+            freq: Base frequency in Hz
+            duration: Duration in seconds
+            volume: Volume (0.0 to 1.0)
+            noise_mix: Amount of noise to mix in (0.0 to 1.0)
+            decay: Decay rate (higher = faster decay)
+        """
+        sample_rate = 22050
+        num_samples = int(duration * sample_rate)
+        samples = np.zeros((num_samples, 2), dtype=np.int16)
+
+        max_amplitude = int(32767 * volume)
+
+        for i in range(num_samples):
+            t = i / sample_rate
+            progress = t / duration
+            # Exponential decay envelope
+            envelope = math.exp(-decay * progress * 10)
+            # Tone
+            tone = math.sin(2 * math.pi * freq * t)
+            # Mix with noise if specified
+            if noise_mix > 0:
+                noise = np.random.uniform(-1, 1)
+                signal = tone * (1 - noise_mix) + noise * noise_mix
+            else:
+                signal = tone
+            value = int(max_amplitude * envelope * signal)
+            samples[i] = [value, value]
+
+        return pygame.sndarray.make_sound(samples)
+
+    def play_light_hit(self):
+        """Play light attack impact sound (quick punch pop)"""
+        sound = self._generate_impact_sound(freq=700, duration=0.05, volume=0.4, decay=0.8)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('light_hit', self.sfx_volume)
+
+    def play_heavy_hit(self):
+        """Play heavy attack impact sound (deep thud)"""
+        sound = self._generate_impact_sound(freq=180, duration=0.12, volume=0.6, decay=0.6)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('heavy_hit', self.sfx_volume)
+
+    def play_finisher_hit(self):
+        """Play finisher attack impact sound (strong slam)"""
+        sound = self._generate_impact_sound(freq=120, duration=0.15, volume=0.7, decay=0.5)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('finisher_hit', self.sfx_volume)
+
+    def play_ki_blast_fire(self):
+        """Play projectile launch sound (rising whoosh)"""
+        sound = self._generate_sweep_sound(freq_start=800, freq_end=1200, duration=0.1, volume=0.5)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('ki_blast_fire', self.sfx_volume)
+
+    def play_ki_blast_hit(self):
+        """Play projectile impact sound (energy burst)"""
+        sound = self._generate_impact_sound(freq=500, duration=0.08, volume=0.5, noise_mix=0.3)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('ki_blast_hit', self.sfx_volume)
+
+    def play_block(self):
+        """Play blocked attack sound (shield clang)"""
+        sound = self._generate_impact_sound(freq=1000, duration=0.1, volume=0.4, decay=0.9)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('block', self.sfx_volume)
+
+    def play_final_smash_charge(self):
+        """Play Final Smash charge-up sound (rising power)"""
+        sound = self._generate_sweep_sound(freq_start=100, freq_end=500, duration=0.5, volume=0.6)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('final_smash_charge', self.sfx_volume)
+
+    def play_final_smash_impact(self):
+        """Play Final Smash impact sound (massive explosion)"""
+        sound = self._generate_impact_sound(freq=80, duration=0.3, volume=0.8, noise_mix=0.4)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('final_smash_impact', self.sfx_volume)
+
+    def play_teleport(self):
+        """Play teleportation sound (warp effect)"""
+        sound = self._generate_sweep_sound(freq_start=400, freq_end=800, duration=0.05, volume=0.4)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('teleport', self.sfx_volume)
+
+    def play_dash(self):
+        """Play dash/roll movement sound (quick whoosh)"""
+        sound = self._generate_noise_burst(duration=0.08, volume=0.3)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('dash', self.sfx_volume)
+
+    def play_clash(self):
+        """Play clash sound (both fighters attack simultaneously - metal clash)"""
+        sound = self._generate_impact_sound(freq=600, duration=0.15, volume=0.7)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('clash', self.sfx_volume)
+
+    def play_counter_hit(self):
+        """Play counter-attack hit sound (satisfying parry impact)"""
+        sound = self._generate_impact_sound(freq=400, duration=0.1, volume=0.6)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('counter_hit', self.sfx_volume)
+
+    def play_desperation_activate(self):
+        """Play desperation mode activation sound (power-up whoosh)"""
+        sound = self._generate_sweep_sound(freq_start=200, freq_end=800, duration=0.3, volume=0.6)
+        sound.set_volume(self.sfx_volume * self.master_volume)
+        self.sfx_channel.play(sound)
+
+        if self.audio_logger:
+            self.audio_logger.log_sound_effect('desperation_activate', self.sfx_volume)

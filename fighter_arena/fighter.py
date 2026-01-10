@@ -129,9 +129,16 @@ class Fighter(Follower):
         # print(f"⚔️  [{time.time():.2f}] {self.username} attacked {target.username} (combat_enabled={combat_enabled})")
         self.attack_animation_frames = 10  # Brief attack animation
 
-        # Deal damage - use 40 damage (one-shot) when more than 200 fighters, normal stats below that
-        if alive_count > 200:
-            damage = 40  # One-shot kills for fast early game
+        # Late game uses fixed damage; early game uses one-shot for faster eliminations.
+        late_game_threshold = int(getattr(config, "FIGHTER_ARENA_LATE_GAME_THRESHOLD", 400))
+        late_game_damage = float(getattr(config, "FIGHTER_ARENA_LATE_GAME_ATTACK_DAMAGE", 15))
+        one_shot_threshold = int(getattr(config, "FIGHTER_ARENA_ONE_SHOT_THRESHOLD", 200))
+        one_shot_damage = float(getattr(config, "FIGHTER_ARENA_ONE_SHOT_DAMAGE", 40))
+
+        if alive_count <= late_game_threshold:
+            damage = late_game_damage
+        elif alive_count > one_shot_threshold:
+            damage = one_shot_damage
         else:
             damage = self.attack_stat
 
@@ -204,7 +211,8 @@ class Fighter(Follower):
 
     def update_fighter(self, dt: float, arena_rect: Tuple[int, int, int, int],
                       all_fighters: List['Fighter'], current_time: float,
-                      combat_enabled: bool = True, alive_count_hint: int = None):
+                      combat_enabled: bool = True, alive_count_hint: int = None,
+                      simplified_mode: bool = False):
         """
         Update fighter state each frame (Fighter Arena specific)
 
@@ -215,6 +223,7 @@ class Fighter(Follower):
             current_time: Current game time
             combat_enabled: Whether combat is allowed (False during intro/countdown)
             alive_count_hint: Optional precomputed alive count to avoid O(n) per fighter
+            simplified_mode: Disable combat/targeting for high-count performance mode
         """
         if not self.alive:
             # Handle fade out animation
@@ -224,36 +233,45 @@ class Fighter(Follower):
                 self.surface_needs_update = True
             return
 
-        # Decrement knockback stun
-        if self.knockback_frames_remaining > 0:
-            self.knockback_frames_remaining -= 1
-
-        # Decrement attack animation
-        if self.attack_animation_frames > 0:
-            self.attack_animation_frames -= 1
-            if self.attack_animation_frames == 0:
-                self.is_attacking = False
-
-        # Regenerate HP
-        self.regenerate(dt)
-
-        # Choose target if we don't have one or target is dead
-        # Also occasionally re-target (0.2% chance per frame) to break circular patterns
-        # OPTIMIZED: Reduced from 2% to 0.2% for 10x less retargeting overhead
-        if self.target_follower is None or not self.target_follower.alive or random.random() < 0.002:
-            self._choose_target_fighter(all_fighters)
-
-        # Move toward target
-        if self.target_follower and self.target_follower.alive:
-            self._move_toward_target_fighter(dt)
-
-            # Try to attack if in range (only if combat is enabled)
-            if combat_enabled and isinstance(self.target_follower, Fighter):
-                # Use precomputed alive count when provided (huge speedup at 30k+ fighters)
-                alive_count = alive_count_hint if alive_count_hint is not None else sum(1 for f in all_fighters if f.alive)
-                self.attack(self.target_follower, current_time, combat_enabled, alive_count)
+        if simplified_mode:
+            self.knockback_frames_remaining = 0
+            self.attack_animation_frames = 0
+            self.is_attacking = False
+            self.target_follower = None
+            speed_multiplier = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_SPEED_MULTIPLIER", 2.5)
+            turn_chance = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_TURN_CHANCE", 0.12)
+            self._random_movement_fighter(dt, speed_multiplier=speed_multiplier, turn_chance=turn_chance)
         else:
-            self._random_movement_fighter(dt)
+            # Decrement knockback stun
+            if self.knockback_frames_remaining > 0:
+                self.knockback_frames_remaining -= 1
+
+            # Decrement attack animation
+            if self.attack_animation_frames > 0:
+                self.attack_animation_frames -= 1
+                if self.attack_animation_frames == 0:
+                    self.is_attacking = False
+
+            # Regenerate HP
+            self.regenerate(dt)
+
+            # Choose target if we don't have one or target is dead
+            # Also occasionally re-target (0.2% chance per frame) to break circular patterns
+            # OPTIMIZED: Reduced from 2% to 0.2% for 10x less retargeting overhead
+            if self.target_follower is None or not self.target_follower.alive or random.random() < 0.002:
+                self._choose_target_fighter(all_fighters)
+
+            # Move toward target
+            if self.target_follower and self.target_follower.alive:
+                self._move_toward_target_fighter(dt)
+
+                # Try to attack if in range (only if combat is enabled)
+                if combat_enabled and isinstance(self.target_follower, Fighter):
+                    # Use precomputed alive count when provided (huge speedup at 30k+ fighters)
+                    alive_count = alive_count_hint if alive_count_hint is not None else sum(1 for f in all_fighters if f.alive)
+                    self.attack(self.target_follower, current_time, combat_enabled, alive_count)
+            else:
+                self._random_movement_fighter(dt)
 
         # Apply push velocity from knockback
         self.x += self.push_vx
@@ -386,16 +404,18 @@ class Fighter(Follower):
         self.vx += (target_vx - self.vx) * smoothing
         self.vy += (target_vy - self.vy) * smoothing
 
-    def _random_movement_fighter(self, dt: float):
+    def _random_movement_fighter(self, dt: float, speed_multiplier: float = 1.0, turn_chance: float = 0.02):
         """
         Apply random movement when no target
 
         Args:
             dt: Delta time
+            speed_multiplier: Movement speed multiplier
+            turn_chance: Probability to pick a new direction each frame
         """
-        if random.random() < 0.02:
+        if random.random() < turn_chance:
             angle = random.random() * 2 * math.pi
-            movement_speed = self.get_movement_speed()
+            movement_speed = self.get_movement_speed() * speed_multiplier
             target_vx = math.cos(angle) * movement_speed
             target_vy = math.sin(angle) * movement_speed
 

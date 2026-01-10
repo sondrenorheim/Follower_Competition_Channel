@@ -62,7 +62,14 @@ class Follower:
         self.surface: Optional[pygame.Surface] = None
         self.surface_needs_update = True
 
-    def update(self, dt: float, arena_center: Tuple[float, float], safe_radius: float, all_followers: list):
+    def update(
+        self,
+        dt: float,
+        arena_center: Tuple[float, float],
+        safe_radius: float,
+        all_followers: list,
+        allow_targeting: bool = True,
+    ):
         """
         Update follower state each frame
 
@@ -81,16 +88,53 @@ class Follower:
                 self.surface_needs_update = True
             return
 
-        # Choose target if we don't have one or target is dead
-        if self.target_follower is None or not self.target_follower.alive:
-            self._choose_target(all_followers)
+        prestart_radius = None
+        prestart_pull = 0.0
+        movement_radius = safe_radius
+        if not allow_targeting and safe_radius is not None:
+            try:
+                prestart_ratio = float(getattr(config, "BATTLE_ROYALE_PRESTART_RADIUS_RATIO", 1.0))
+            except (TypeError, ValueError):
+                prestart_ratio = 1.0
+            prestart_ratio = max(0.0, min(1.0, prestart_ratio))
+            try:
+                prestart_pull = float(getattr(config, "BATTLE_ROYALE_PRESTART_CENTER_PULL", 0.0))
+            except (TypeError, ValueError):
+                prestart_pull = 0.0
+            prestart_pull = max(0.0, prestart_pull)
+            if 0.0 < prestart_ratio < 1.0:
+                prestart_radius = safe_radius * prestart_ratio
 
-        # Move toward target (trying to push them toward edge)
-        if self.target_follower and self.target_follower.alive:
-            self._move_toward_target(arena_center, dt, safe_radius)
+        targeting_allowed = allow_targeting and self._is_in_targeting_band(
+            arena_center,
+            safe_radius,
+        )
+
+        if targeting_allowed:
+            # Choose target if we don't have one or target is dead
+            if self.target_follower is None or not self.target_follower.alive:
+                self._choose_target(all_followers)
+
+            # Move toward target (trying to push them toward edge)
+            if self.target_follower and self.target_follower.alive:
+                self._move_toward_target(arena_center, dt, movement_radius)
+            else:
+                # Random movement if no target, but still avoid danger zone
+                self._random_movement(dt, arena_center, movement_radius)
         else:
-            # Random movement if no target, but still avoid danger zone
-            self._random_movement(dt, arena_center, safe_radius)
+            # Random movement if targeting is disabled or outside the target band
+            self._random_movement(dt, arena_center, movement_radius)
+
+        if prestart_radius is not None and prestart_pull > 0.0 and safe_radius is not None:
+            dx_to_center = arena_center[0] - self.x
+            dy_to_center = arena_center[1] - self.y
+            distance_to_center = math.sqrt(dx_to_center * dx_to_center + dy_to_center * dy_to_center)
+            if distance_to_center > prestart_radius and distance_to_center > 0.1:
+                range_span = max(1.0, safe_radius - prestart_radius)
+                excess = min(1.0, (distance_to_center - prestart_radius) / range_span)
+                pull_strength = self.stats['base_speed'] * prestart_pull * excess
+                self.vx += (dx_to_center / distance_to_center) * pull_strength
+                self.vy += (dy_to_center / distance_to_center) * pull_strength
 
         # Apply push velocity from collisions
         self.x += self.push_vx
@@ -106,6 +150,7 @@ class Follower:
 
         # Keep within arena bounds (can't go outside the main arena)
         max_distance = config.ARENA_INITIAL_RADIUS - config.FOLLOWER_RADIUS
+        max_distance = max(0.0, max_distance)
         dx = self.x - arena_center[0]
         dy = self.y - arena_center[1]
         distance = math.sqrt(dx * dx + dy * dy)
@@ -186,8 +231,8 @@ class Follower:
         # Distance from safe zone edge (negative if inside danger zone)
         distance_from_edge = safe_radius - distance_from_center - config.FOLLOWER_RADIUS
 
-        # Start avoiding when within this distance from edge
-        avoidance_threshold = 120  # Look further ahead to steer away sooner
+        # Start avoiding when within this distance from edge (moderate increase from 120 to 180)
+        avoidance_threshold = 70  # Look further ahead to steer away sooner
 
         if distance_from_edge < avoidance_threshold:
             # Normalize direction to center
@@ -197,19 +242,41 @@ class Follower:
 
                 # Calculate avoidance strength (stronger as we get closer to edge)
                 avoidance_strength = 1.0 - (distance_from_edge / avoidance_threshold)
-                # Bias upward to make fleeing the rim more decisive
-                avoidance_strength = max(0.0, min(1.0, avoidance_strength * 1.4))
+                # Bias upward to make fleeing the rim more decisive (moderate increase from 1.4 to 1.6)
+                avoidance_strength = max(0.0, min(1.0, avoidance_strength * 1.05))
 
                 # Apply strong force when very close to or in danger zone
                 if distance_from_edge < 0:
-                    # In danger zone - panic mode!
-                    avoidance_strength = 1.3
-
-                # Return force toward center
-                force_magnitude = self.stats['base_speed'] * avoidance_strength * 1.5
+                    # In danger zone - panic mode! (moderate increase from 1.3 to 1.5)
+                    avoidance_strength = 1.5
+                # Return force toward center (moderate increase from 1.5 to 1.8)
+                force_magnitude = self.stats['base_speed'] * avoidance_strength * 1.8
                 return (dx_to_center * force_magnitude, dy_to_center * force_magnitude)
 
         return (0.0, 0.0)
+
+    def _is_in_targeting_band(self, arena_center: Tuple[float, float], safe_radius: float) -> bool:
+        band = getattr(config, "BATTLE_ROYALE_TARGETING_BAND", (0.25, 0.75))
+        try:
+            inner_ratio, outer_ratio = float(band[0]), float(band[1])
+        except (TypeError, ValueError, IndexError):
+            inner_ratio, outer_ratio = 0.25, 0.75
+
+        inner_ratio = max(0.0, min(1.0, inner_ratio))
+        outer_ratio = max(0.0, min(1.0, outer_ratio))
+        if outer_ratio < inner_ratio:
+            inner_ratio, outer_ratio = outer_ratio, inner_ratio
+
+        if safe_radius is None or safe_radius <= 0:
+            return True
+
+        dx = self.x - arena_center[0]
+        dy = self.y - arena_center[1]
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        inner_radius = safe_radius * inner_ratio
+        outer_radius = safe_radius * outer_ratio
+        return inner_radius <= distance <= outer_radius
 
     def _move_toward_target(self, arena_center: Tuple[float, float], dt: float, safe_radius: float = None):
         """

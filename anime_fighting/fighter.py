@@ -9,6 +9,7 @@ from typing import Tuple, Optional, List
 import pygame
 import math
 import random
+from PIL import Image
 
 from battle_royale.follower import Follower
 from .combat import ATTACKS, AttackSpec, HitShape, Projectile, spawn_sparks
@@ -45,6 +46,16 @@ class AnimeFighter(Follower):
         # Override radius for 1v1 avatars (smaller for zoomed-out camera effect)
         self.radius = 24
 
+        # Convert PIL avatar_image to pygame avatar_surface for rendering
+        self.avatar_surface = None
+        if self.avatar_image is not None:
+            try:
+                avatar_size = self.radius * 2  # Diameter
+                self.avatar_surface = self._pil_to_pygame(self.avatar_image, avatar_size)
+            except Exception as e:
+                print(f"Failed to load avatar for {self.username}: {e}")
+                self.avatar_surface = None
+
         # Combat attributes
         self.max_hp = 280.0  # Doubled for longer, more intense matches
         self.hp = self.max_hp
@@ -79,6 +90,11 @@ class AnimeFighter(Follower):
         # Visual effects
         self.afterimage_t = 0.0
 
+        # Desperation mode (low HP effects)
+        self.is_desperate = False
+        self.desperation_aura_timer = 0.0
+        self._was_desperate = False  # Track state changes
+
         # Physics override (using pygame.Vector2 instead of separate vx, vy)
         self.vel = pygame.Vector2(0, 0)
         self.acc = pygame.Vector2(0, 0)
@@ -86,6 +102,40 @@ class AnimeFighter(Follower):
     def is_alive(self) -> bool:
         """Check if fighter is still alive"""
         return self.hp > 0
+
+    def _pil_to_pygame(self, pil_image: Image.Image, size: int) -> pygame.Surface:
+        """
+        Convert PIL image to pygame surface
+
+        Args:
+            pil_image: PIL Image object
+            size: Target size (width and height)
+
+        Returns:
+            Pygame surface with the avatar
+        """
+        # Resize to target size
+        pil_image = pil_image.resize((size, size), Image.Resampling.LANCZOS)
+
+        # Ensure RGBA mode for transparency
+        if pil_image.mode != 'RGBA':
+            pil_image = pil_image.convert('RGBA')
+
+        # Convert to pygame surface
+        mode = pil_image.mode
+        img_size = pil_image.size
+        data = pil_image.tobytes()
+
+        surface = pygame.image.fromstring(data, img_size, mode).convert_alpha()
+
+        # Crop to circle with alpha mask
+        circle_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        circle_surface.blit(surface, (0, 0))
+        mask = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(mask, (255, 255, 255, 255), (size // 2, size // 2), size // 2)
+        circle_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+        return circle_surface
 
     def get_beam_data(self) -> Optional[dict]:
         """
@@ -134,6 +184,66 @@ class AnimeFighter(Follower):
             if self.final_smash_meter >= 100.0:
                 self.final_smash_ready = True
 
+    def update_desperation_mode(self, dt: float, particles: list):
+        """
+        Update desperation mode status and visual effects when HP < 25%
+
+        Creates dramatic low-HP visuals:
+        - Red glowing aura particles floating upward
+        - Red particle trail when moving
+        - Burst of particles when first entering desperation
+
+        Args:
+            dt: Delta time
+            particles: Particle list for visual effects
+        """
+        from .camera_fx import Particle
+
+        hp_percent = self.hp / self.max_hp
+        self._was_desperate = self.is_desperate
+        self.is_desperate = hp_percent < 0.25 and self.is_alive()
+
+        if not self.is_desperate:
+            return
+
+        # First frame entering desperation - burst of particles
+        if not self._was_desperate and self.is_desperate:
+            for _ in range(30):
+                angle = random.uniform(0, 2 * math.pi)
+                particles.append(Particle(
+                    pos=pygame.Vector2(self.pos),
+                    vel=pygame.Vector2(math.cos(angle) * 200, math.sin(angle) * 200),
+                    life=0.5,
+                    radius=random.uniform(4, 10),
+                    color=(255, 100, 100)  # Red
+                ))
+
+        # Continuous aura effect
+        self.desperation_aura_timer += dt
+        if self.desperation_aura_timer >= 0.04:
+            self.desperation_aura_timer = 0.0
+
+            # Glowing aura particles around fighter (float upward)
+            for _ in range(2):
+                angle = random.uniform(0, 2 * math.pi)
+                offset = pygame.Vector2(math.cos(angle) * 30, math.sin(angle) * 30)
+                particles.append(Particle(
+                    pos=self.pos + offset,
+                    vel=pygame.Vector2(0, random.uniform(-60, -100)),  # Float upward
+                    life=random.uniform(0.2, 0.4),
+                    radius=random.uniform(3, 7),
+                    color=(255, 80 + random.randint(0, 40), 80)  # Red/orange
+                ))
+
+            # Movement trail particles when moving
+            if self.vel.length() > 100:
+                particles.append(Particle(
+                    pos=pygame.Vector2(self.pos),
+                    vel=pygame.Vector2(random.uniform(-30, 30), random.uniform(-30, 30)),
+                    life=0.15,
+                    radius=random.uniform(2, 5),
+                    color=(255, 60, 60)
+                ))
 
     def can_cancel_into(self, key: str) -> bool:
         """
@@ -863,9 +973,12 @@ class AnimeFighter(Follower):
             dt: Delta time
             arena: Arena boundaries
         """
+        # Desperation mode speed boost (10%)
+        speed_mult = 1.10 if self.is_desperate else 1.0
+
         # Anime-style movement
-        max_speed = 520.0 if self.attack and self.attack.key in ("DASH", "ROLL") else 420.0
-        accel_strength = 1800.0
+        max_speed = (520.0 if self.attack and self.attack.key in ("DASH", "ROLL") else 420.0) * speed_mult
+        accel_strength = 1800.0 * speed_mult
         damping = 10.5
 
         steer_mult = 1.0 if self.state in ("idle", "move") else 0.35

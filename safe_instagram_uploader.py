@@ -50,6 +50,7 @@ class SafeInstagramUploader:
         self.headless = headless
         self.driver = None
         self.start_time = None
+        self.session_active = False
 
     def _log(self, message: str, level: str = "INFO"):
         """Log message with timestamp and elapsed time"""
@@ -97,6 +98,120 @@ class SafeInstagramUploader:
         for char in text:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))  # 50-150ms between keystrokes
+
+    def _safe_click(self, element, label: str = "") -> bool:
+        try:
+            element.click()
+            return True
+        except Exception as e:
+            suffix = f" ({label})" if label else ""
+            self._log(f"Click failed{suffix}: {e}", "WARN")
+            try:
+                self.driver.execute_script("arguments[0].click();", element)
+                return True
+            except Exception as js_e:
+                self._log(f"JS click failed{suffix}: {js_e}", "WARN")
+                return False
+
+    def _attempt_cover_selection(self) -> bool:
+        self._log("Checking for cover/thumbnail options...")
+        try:
+            # Look for "Add cover" or "Edit cover" button
+            cover_selectors = [
+                "//button[contains(text(), 'Add cover')]",
+                "//button[contains(text(), 'Edit cover')]",
+                "//div[contains(text(), 'Add cover')]",
+                "//*[@aria-label='Add cover']",
+                "//*[@aria-label='Edit cover']"
+            ]
+
+            cover_button = None
+            for selector in cover_selectors:
+                try:
+                    cover_button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log("Found cover button, clicking...")
+                    if not self._safe_click(cover_button, "cover button"):
+                        continue
+                    self._human_delay(2, 3)
+
+                    # Try to find and drag the thumbnail slider to the middle
+                    self._log("Looking for thumbnail slider...")
+                    try:
+                        from selenium.webdriver.common.action_chains import ActionChains
+
+                        # Look for slider/range input
+                        slider_selectors = [
+                            'input[type="range"]',
+                            'input[role="slider"]',
+                            '//*[@role="slider"]'
+                        ]
+
+                        slider = None
+                        for slider_sel in slider_selectors:
+                            try:
+                                if slider_sel.startswith('//'):
+                                    slider = self.driver.find_element(By.XPATH, slider_sel)
+                                else:
+                                    slider = self.driver.find_element(By.CSS_SELECTOR, slider_sel)
+                                self._log("Found slider!")
+                                break
+                            except NoSuchElementException:
+                                continue
+
+                        if slider:
+                            # Move to center of slider element
+                            actions = ActionChains(self.driver)
+                            actions.move_to_element(slider).perform()
+                            self._human_delay(0.5, 1)
+
+                            # Click at the center of the slider
+                            actions.click().perform()
+                            self._log("Selected middle frame of video for thumbnail")
+                            self._human_delay(1, 2)
+                        else:
+                            self._log("No slider found, using default frame")
+
+                    except Exception as slider_error:
+                        self._log(f"Could not adjust slider: {slider_error}")
+
+                    # Close cover selector if there's a done/save button
+                    try:
+                        done_selectors = [
+                            "//button[contains(text(), 'Done')]",
+                            "//div[contains(text(), 'Done') and @role='button']",
+                            "//*[@role='button' and text()='Done']"
+                        ]
+
+                        for done_sel in done_selectors:
+                            try:
+                                done_button = WebDriverWait(self.driver, 2).until(
+                                    EC.element_to_be_clickable((By.XPATH, done_sel))
+                                )
+                                if self._safe_click(done_button, "cover done"):
+                                    self._log("Closed cover selector")
+                                    self._human_delay(1, 2)
+                                    break
+                            except TimeoutException:
+                                continue
+                    except Exception:
+                        self._log("Cover selector closed automatically")
+
+                    return True
+                except TimeoutException:
+                    continue
+                except Exception as e:
+                    self._log(f"Cover selector error for {selector}: {e}", "WARN")
+                    continue
+
+            if not cover_button:
+                self._log("No cover selection option - using default thumbnail")
+            return False
+
+        except Exception as e:
+            self._log(f"Cover selection skipped - using default thumbnail: {e}", "WARN")
+            return False
 
     def save_cookies(self):
         """
@@ -181,19 +296,74 @@ class SafeInstagramUploader:
             except NoSuchElementException:
                 # Good! No login button means we're logged in
                 self._log("Logged in successfully using saved cookies", "SUCCESS")
+                self.session_active = True
                 return True
 
         except Exception as e:
             self._log(f"Error loading cookies: {e}", "ERROR")
             return False
 
-    def upload_reel(self, video_path: str, caption: str = "") -> bool:
+    def _is_logged_in(self) -> bool:
+        if not self.driver:
+            return False
+        try:
+            self.driver.find_element(By.XPATH, "//button[contains(text(), 'Log in')]")
+            return False
+        except NoSuchElementException:
+            return True
+        except Exception:
+            return True
+
+    def start_session(self) -> bool:
+        """
+        Start a browser session and load cookies once for multiple uploads.
+        """
+        self.start_time = time.time()
+        self._log("=" * 50)
+        self._log("STARTING SAFE INSTAGRAM SESSION")
+        self._log("=" * 50)
+
+        try:
+            if not self.driver:
+                self._log("Setting up Chrome browser...")
+                self._setup_driver()
+                self._log("Browser started successfully")
+
+            self._log("Loading saved cookies...")
+            if not self._load_cookies():
+                self._log("Failed to load cookies", "ERROR")
+                return False
+
+            self._log("Navigating to Instagram home...")
+            self.driver.get("https://www.instagram.com/")
+            self._human_delay(3, 5)
+            self.session_active = True
+            return True
+        except Exception as e:
+            self._log(f"Failed to start session: {e}", "ERROR")
+            return False
+
+    def close_session(self):
+        """
+        Close the browser session.
+        """
+        if self.driver:
+            try:
+                self._human_delay(1, 2)
+                self.driver.quit()
+            except Exception:
+                pass
+        self.driver = None
+        self.session_active = False
+
+    def upload_reel(self, video_path: str, caption: str = "", reuse_session: bool = False) -> bool:
         """
         Upload a video as an Instagram Reel
 
         Args:
             video_path: Path to video file
             caption: Caption text
+            reuse_session: Keep browser open and reuse existing session
 
         Returns:
             True if upload successful
@@ -214,14 +384,21 @@ class SafeInstagramUploader:
         self._log(f"Caption: {caption[:50]}..." if len(caption) > 50 else f"Caption: {caption}")
 
         try:
-            self._log("STEP 1: Setting up Chrome browser...")
-            self._setup_driver()
-            self._log("Browser started successfully")
+            if not self.driver:
+                self._log("STEP 1: Setting up Chrome browser...")
+                self._setup_driver()
+                self._log("Browser started successfully")
 
-            self._log("STEP 2: Loading saved cookies...")
-            if not self._load_cookies():
-                self._log("Failed to load cookies", "ERROR")
-                return False
+            if not self.session_active:
+                self._log("STEP 2: Loading saved cookies...")
+                if not self._load_cookies():
+                    self._log("Failed to load cookies", "ERROR")
+                    return False
+            elif not self._is_logged_in():
+                self._log("Session appears logged out; reloading cookies...", "WARN")
+                if not self._load_cookies():
+                    self._log("Failed to reload cookies", "ERROR")
+                    return False
 
             # Navigate to create page
             self._log("STEP 3: Navigating to Instagram home...")
@@ -396,7 +573,11 @@ class SafeInstagramUploader:
                     "//button[@aria-label='Select crop']",
                     "//*[contains(@aria-label, 'crop')]",
                     "//*[contains(@aria-label, 'Crop')]",
-                    "//button[contains(@aria-label, 'aspect')]"
+                    "//button[contains(@aria-label, 'aspect')]",
+                    "//*[@role='button' and .//*[contains(text(), 'Original')]]",
+                    "//*[@role='button' and .//*[contains(text(), '1:1')]]",
+                    "//*[contains(text(), 'Original')]/ancestor::button[1]",
+                    "//*[contains(text(), '1:1')]/ancestor::button[1]"
                 ]
 
                 aspect_button = None
@@ -406,35 +587,51 @@ class SafeInstagramUploader:
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
                         self._log("Found aspect ratio button, clicking...")
-                        aspect_button.click()
+                        self._safe_click(aspect_button, "aspect button")
                         self._human_delay(1, 2)
                         break
                     except TimeoutException:
                         continue
+                    except Exception as e:
+                        self._log(f"Aspect button error for selector {selector}: {e}", "WARN")
+                        continue
 
-                # If we opened a menu, look for 9:16 or vertical option
-                if aspect_button:
-                    vertical_selectors = [
-                        "//*[contains(text(), '9:16')]",
-                        "//*[contains(text(), 'Portrait')]",
-                        "//*[contains(text(), 'Vertical')]",
-                        "//button[@aria-label='Portrait']"
-                    ]
+                # Look for 9:16 or vertical option (menu may already be open)
+                vertical_selectors = [
+                    "//*[@aria-label='9:16']",
+                    "//*[@aria-label='Portrait']",
+                    "//*[@aria-label='Vertical']",
+                    "//*[contains(text(), '9:16')]/ancestor::button[1]",
+                    "//*[contains(text(), '9:16')]/ancestor::*[@role='button'][1]",
+                    "//*[@role='menuitemradio' and .//*[contains(text(), '9:16')]]",
+                    "//*[@role='menuitem' and .//*[contains(text(), '9:16')]]",
+                    "//*[contains(text(), '9:16')]",
+                    "//*[contains(text(), 'Portrait')]",
+                    "//*[contains(text(), 'Vertical')]",
+                ]
 
-                    for selector in vertical_selectors:
-                        try:
-                            vertical_option = WebDriverWait(self.driver, 2).until(
-                                EC.element_to_be_clickable((By.XPATH, selector))
-                            )
-                            self._log("Found vertical/9:16 option, clicking...")
-                            vertical_option.click()
+                vertical_clicked = False
+                for selector in vertical_selectors:
+                    try:
+                        vertical_option = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                        self._log("Found vertical/9:16 option, clicking...")
+                        if self._safe_click(vertical_option, "9:16 option"):
+                            vertical_clicked = True
                             self._human_delay(1, 2)
                             break
-                        except TimeoutException:
-                            continue
+                    except TimeoutException:
+                        continue
+                    except Exception as e:
+                        self._log(f"Aspect ratio option error for selector {selector}: {e}", "WARN")
+                        continue
+
+                if not vertical_clicked:
+                    self._log("Could not find 9:16 option - using default aspect ratio", "WARN")
 
             except Exception as e:
-                self._log("Aspect ratio selection skipped (using default)")
+                self._log(f"Aspect ratio selection skipped: {e}", "WARN")
 
             # Click "Next" button to proceed (there might be multiple Next buttons)
             self._log("STEP 7: Clicking Next button...")
@@ -446,6 +643,7 @@ class SafeInstagramUploader:
             ]
 
             # First Next button
+            first_next_clicked = False
             try:
                 next_button = None
                 for selector in next_selectors:
@@ -459,12 +657,16 @@ class SafeInstagramUploader:
 
                 if next_button:
                     self._log("Found first Next button, clicking...")
-                    next_button.click()
+                    first_next_clicked = self._safe_click(next_button, "first next")
                     self._human_delay(2, 3)
                 else:
                     self._log("First Next button not found, trying to continue...", "WARN")
             except Exception as e:
                 self._log(f"Error clicking first Next: {e}", "WARN")
+
+            cover_selected = False
+            if first_next_clicked:
+                cover_selected = self._attempt_cover_selection()
 
             # Click Next again if there's a second step
             self._log("Checking for second Next button...")
@@ -481,110 +683,15 @@ class SafeInstagramUploader:
 
                 if next_button:
                     self._log("Found second Next button, clicking...")
-                    next_button.click()
+                    self._safe_click(next_button, "second next")
                     self._human_delay(2, 3)
                 else:
                     self._log("No second Next button (OK)")
             except Exception:
                 self._log("No second Next button (OK)")
 
-            # Try to select a better cover/thumbnail from middle of video
-            self._log("Checking for cover/thumbnail options...")
-            try:
-                # Look for "Add cover" or "Edit cover" button
-                cover_selectors = [
-                    "//button[contains(text(), 'Add cover')]",
-                    "//button[contains(text(), 'Edit cover')]",
-                    "//div[contains(text(), 'Add cover')]",
-                    "//*[@aria-label='Add cover']",
-                    "//*[@aria-label='Edit cover']"
-                ]
-
-                cover_button = None
-                for selector in cover_selectors:
-                    try:
-                        cover_button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        self._log("Found cover button, clicking...")
-                        cover_button.click()
-                        self._human_delay(2, 3)
-
-                        # Try to find and drag the thumbnail slider to the middle
-                        self._log("Looking for thumbnail slider...")
-                        try:
-                            from selenium.webdriver.common.action_chains import ActionChains
-
-                            # Look for slider/range input
-                            slider_selectors = [
-                                'input[type="range"]',
-                                'input[role="slider"]',
-                                '//*[@role="slider"]'
-                            ]
-
-                            slider = None
-                            for slider_sel in slider_selectors:
-                                try:
-                                    if slider_sel.startswith('//'):
-                                        slider = self.driver.find_element(By.XPATH, slider_sel)
-                                    else:
-                                        slider = self.driver.find_element(By.CSS_SELECTOR, slider_sel)
-                                    self._log("Found slider!")
-                                    break
-                                except NoSuchElementException:
-                                    continue
-
-                            if slider:
-                                # Get slider dimensions
-                                slider_width = slider.size['width']
-
-                                # Click/drag to middle of slider (50% position)
-                                # Move to center of slider element
-                                actions = ActionChains(self.driver)
-                                actions.move_to_element(slider).perform()
-                                self._human_delay(0.5, 1)
-
-                                # Click at the center of the slider
-                                actions.click().perform()
-                                self._log("Selected middle frame of video for thumbnail")
-                                self._human_delay(1, 2)
-                            else:
-                                self._log("No slider found, using default frame")
-
-                        except Exception as slider_error:
-                            self._log(f"Could not adjust slider: {slider_error}")
-
-                        # Close cover selector if there's a done/save button
-                        try:
-                            done_selectors = [
-                                "//button[contains(text(), 'Done')]",
-                                "//div[contains(text(), 'Done') and @role='button']",
-                                "//*[@role='button' and text()='Done']"
-                            ]
-
-                            for done_sel in done_selectors:
-                                try:
-                                    done_button = WebDriverWait(self.driver, 2).until(
-                                        EC.element_to_be_clickable((By.XPATH, done_sel))
-                                    )
-                                    done_button.click()
-                                    self._log("Closed cover selector")
-                                    self._human_delay(1, 2)
-                                    break
-                                except TimeoutException:
-                                    continue
-                        except Exception:
-                            self._log("Cover selector closed automatically")
-
-                        break
-                    except TimeoutException:
-                        continue
-
-                if not cover_button:
-                    self._log("No cover selection option - using default thumbnail")
-
-            except Exception as e:
-                self._log("Cover selection skipped - using default thumbnail")
+            if not cover_selected:
+                self._attempt_cover_selection()
 
             # Add caption
             if caption:
@@ -737,9 +844,11 @@ class SafeInstagramUploader:
             return False
 
         finally:
-            if self.driver:
+            if self.driver and not reuse_session:
                 self._human_delay(2, 3)
                 self.driver.quit()
+                self.driver = None
+                self.session_active = False
 
 
 def main():

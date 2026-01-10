@@ -16,13 +16,18 @@ import pygame
 # ============================================================
 # Camera FX Tuning
 # ============================================================
-SHAKE_MAX = 6.0  # Reduced from 18.0 for less intense shake
+SHAKE_MAX = 12.0  # Increased for more dramatic heavy hits
 SHAKE_DECAY = 18.0
 
 AFTERIMAGE_INTERVAL = 0.035
 AFTERIMAGE_LIFETIME = 0.18
 
-MAX_PARTICLES = 1400
+MAX_PARTICLES = 2000  # Increased for clash effects
+
+# Near-KO dramatic effects (when hitting opponent below this HP%)
+NEAR_KO_HP_THRESHOLD = 0.15
+NEAR_KO_SLOWDOWN_SCALE = 0.4  # 40% speed
+NEAR_KO_SLOWDOWN_DURATION = 0.5
 
 # Zoom tuning
 ZOOM_SMOOTH = 18.0
@@ -102,6 +107,10 @@ class CameraFX:
         self.time_scale = 1.0        # 1.0 = normal, 0.3 = 30% speed
         self.time_scale_t = 0.0      # Duration remaining
 
+        # Screen flash effect
+        self.screen_flash_t = 0.0
+        self.screen_flash_color = (255, 255, 255)
+
     def trigger_hitstop(self, seconds: float):
         """
         Trigger hitstop (freeze frame effect)
@@ -144,6 +153,44 @@ class CameraFX:
         self.time_scale = scale
         self.time_scale_t = duration
 
+    def trigger_screen_flash(self, duration: float = 0.1, color: Tuple[int, int, int] = (255, 255, 255)):
+        """
+        Trigger a screen flash effect
+
+        Args:
+            duration: Flash duration in seconds
+            color: Flash color (default white)
+        """
+        self.screen_flash_t = max(self.screen_flash_t, duration)
+        self.screen_flash_color = color
+
+    def get_flash_intensity(self) -> float:
+        """
+        Get current screen flash intensity (0.0 to 1.0)
+
+        Returns:
+            Flash intensity for rendering
+        """
+        return min(1.0, self.screen_flash_t / 0.1) if self.screen_flash_t > 0 else 0.0
+
+    def trigger_near_ko_hit(self, victim_pos: pygame.Vector2):
+        """
+        Trigger dramatic effects when hitting near-KO opponent (< 15% HP)
+
+        Args:
+            victim_pos: Position of the near-KO fighter
+        """
+        # Extra dramatic zoom
+        self.trigger_zoom_punch(victim_pos, 1.35, 0.25)
+        # Extended hitstop
+        self.trigger_hitstop(0.1)
+        # Intense shake
+        self.add_shake(SHAKE_MAX)
+        # Time slowdown
+        self.trigger_time_slowdown(NEAR_KO_SLOWDOWN_SCALE, NEAR_KO_SLOWDOWN_DURATION)
+        # White flash
+        self.trigger_screen_flash(0.08)
+
     def update(self, dt_real: float):
         """
         Update camera effects (runs in real time, not affected by hitstop)
@@ -159,6 +206,9 @@ class CameraFX:
             self.time_scale_t = max(0.0, self.time_scale_t - dt_real)
             if self.time_scale_t == 0:
                 self.time_scale = 1.0  # Return to normal speed
+
+        # Screen flash decays in real time
+        self.screen_flash_t = max(0.0, self.screen_flash_t - dt_real)
 
         # Shake decays in real time
         self.shake = max(0.0, self.shake - SHAKE_DECAY * dt_real)
@@ -305,3 +355,22 @@ def draw_projectiles(surf: pygame.Surface, projectiles: List):
     for pr in projectiles:
         pygame.draw.circle(surf, (230, 230, 250), pr.pos, pr.radius)
         pygame.draw.circle(surf, (40, 40, 55), pr.pos, pr.radius, 2)
+
+
+def draw_screen_flash(surf: pygame.Surface, intensity: float, color: Tuple[int, int, int] = (255, 255, 255)):
+    """
+    Draw a screen flash overlay
+
+    Args:
+        surf: Surface to draw on
+        intensity: Flash intensity (0.0 to 1.0)
+        color: Flash color (default white)
+    """
+    if intensity <= 0:
+        return
+
+    alpha = int(180 * intensity)
+    w, h = surf.get_size()
+    flash_surface = pygame.Surface((w, h), pygame.SRCALPHA)
+    flash_surface.fill((*color, alpha))
+    surf.blit(flash_surface, (0, 0))
