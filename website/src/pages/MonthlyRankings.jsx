@@ -414,7 +414,7 @@ export default function MonthlyRankings() {
 
             {/* Search */}
             <div className="flex-1 min-w-[200px]">
-              <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search players..." />
+              <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search players..." trackingSource="monthly_rankings" />
             </div>
           </div>
         </div>
@@ -442,6 +442,7 @@ export default function MonthlyRankings() {
             }
             currentPage={currentPage}
             onPageChange={setCurrentPage}
+            trackingSource="monthly_rankings"
           />
         ) : (
           <div className="text-center py-20 bg-dark-bg-secondary rounded-card shadow-card-dark border-2 border-dashed border-slate-600 animate-fade-in">

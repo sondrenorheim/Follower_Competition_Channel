@@ -330,7 +330,7 @@ export default function DailyResults() {
                 <span>🔍</span>
                 <span>Search Players</span>
               </label>
-              <SearchBar value={searchQuery} onChange={setSearchQuery} />
+              <SearchBar value={searchQuery} onChange={setSearchQuery} trackingSource="daily_results" />
             </div>
           </div>
         </div>
@@ -381,6 +381,7 @@ export default function DailyResults() {
               }
               currentPage={currentPage}
               onPageChange={setCurrentPage}
+              trackingSource="daily_results"
             />
           </div>
         ) : (

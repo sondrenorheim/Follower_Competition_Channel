@@ -12,7 +12,8 @@ export default function LeaderboardTable({
   showPagination = true,
   itemsPerPage = 50,
   currentPage = 1,
-  onPageChange = () => {}
+  onPageChange = () => {},
+  trackingSource = 'leaderboard'
 }) {
   if (!data || data.length === 0) {
     return (
@@ -150,6 +151,14 @@ export default function LeaderboardTable({
                       <Link
                         to={`/player/${row.username}`}
                         className="text-accent hover:text-accent-bright font-bold transition-colors duration-200 hover:underline decoration-2 underline-offset-4"
+                        onClick={() => {
+                          if (window.gtag) {
+                            window.gtag('event', 'view_player_profile', {
+                              username: row.username,
+                              source_page: trackingSource,
+                            });
+                          }
+                        }}
                       >
                         {row.username}
                       </Link>

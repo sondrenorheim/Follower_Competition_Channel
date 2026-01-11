@@ -1,10 +1,31 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 
 /**
  * SearchBar Component
  * Search input with clear button
  */
-export default function SearchBar({ value, onChange, placeholder = 'Search username...' }) {
+export default function SearchBar({ value, onChange, placeholder = 'Search username...', trackingSource = 'unknown' }) {
+  const debounceRef = useRef(null);
+
+  // Track search queries with debounce (only fires after user stops typing)
+  useEffect(() => {
+    if (!value || value.length < 2) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      if (window.gtag) {
+        window.gtag('event', 'search_player', {
+          search_term: value,
+          page: trackingSource,
+        });
+      }
+    }, 1000); // Fire after 1 second of no typing
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [value, trackingSource]);
+
   return (
     <div className="relative group">
       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">

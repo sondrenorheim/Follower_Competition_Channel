@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Header from './components/Header';
 import DailyResults from './pages/DailyResults';
@@ -8,6 +9,15 @@ import MediaKit from './pages/MediaKit';
 function AppContent() {
   const location = useLocation();
   const hideHeader = location.pathname === '/mediakit';
+
+  // Track page views on route changes for Google Analytics
+  useEffect(() => {
+    if (!window.gtag) return;
+    window.gtag('event', 'page_view', {
+      page_path: location.pathname + location.search,
+      page_location: window.location.href,
+    });
+  }, [location]);
 
   return (
     <div className="min-h-screen bg-dark-bg-primary">
