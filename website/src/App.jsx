@@ -5,10 +5,11 @@ import DailyResults from './pages/DailyResults';
 import MonthlyRankings from './pages/MonthlyRankings';
 import PlayerProfile from './pages/PlayerProfile';
 import MediaKit from './pages/MediaKit';
+import Privacy from './pages/Privacy';
 
 function AppContent() {
   const location = useLocation();
-  const hideHeader = location.pathname === '/mediakit';
+  const hideHeader = location.pathname === '/mediakit' || location.pathname === '/privacy';
 
   // Track page views on route changes for Google Analytics
   useEffect(() => {
@@ -27,6 +28,7 @@ function AppContent() {
         <Route path="/monthly" element={<MonthlyRankings />} />
         <Route path="/player/:username" element={<PlayerProfile />} />
         <Route path="/mediakit" element={<MediaKit />} />
+        <Route path="/privacy" element={<Privacy />} />
       </Routes>
     </div>
   );
