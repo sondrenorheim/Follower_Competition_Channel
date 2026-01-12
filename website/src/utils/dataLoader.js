@@ -11,7 +11,12 @@
  * - api/player_history/{letter}.json - Player game history by first letter
  */
 
-const DATA_BASE_PATH = '/'; // Serve from root (works in both dev and production)
+const runtimeApiBase =
+  typeof window !== 'undefined' && window.__API_BASE_URL__
+    ? window.__API_BASE_URL__
+    : '';
+const apiBase = (import.meta.env.VITE_API_BASE_URL || runtimeApiBase || '').replace(/\/$/, '');
+const DATA_BASE_PATH = apiBase ? `${apiBase}/` : '/'; // Serve from root (works in dev/prod)
 
 // Cache for partitioned data
 let cachedIndex = null;
@@ -23,6 +28,9 @@ let cachedPlayerIndex = null;
 let cachedMonthlyLeaderboards = new Map(); // Map of YYYY-MM -> leaderboard_data
 let cachedPlayerHistoryIndex = null;
 let cachedPlayerHistoryLetters = new Map(); // Map of letter -> player history data
+let cachedGamePreviews = new Map(); // Map of game_id -> preview game data
+let cachedDayAggregatePreviews = new Map(); // Map of day_number -> aggregate preview
+let cachedDayAggregates = new Map(); // Map of day_number -> aggregate full data
 
 // Game code mapping for compact web stats
 const GAME_CODE_MAP = {
@@ -89,6 +97,41 @@ export async function loadDay(dayNumber) {
 }
 
 /**
+ * Load aggregated "All Games" results for a specific day.
+ * @param {number} dayNumber - Day number to load
+ * @param {Object} options
+ * @param {boolean} options.preview - When true, loads the top-N preview file
+ * @returns {Promise<Object>} Aggregated day results
+ */
+export async function loadDayAggregate(dayNumber, { preview = false } = {}) {
+  const cache = preview ? cachedDayAggregatePreviews : cachedDayAggregates;
+  if (cache.has(dayNumber)) {
+    return cache.get(dayNumber);
+  }
+
+  const suffix = preview ? "_aggregate_top" : "_aggregate";
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/days/${dayNumber}${suffix}.json`);
+    if (!response.ok) {
+      if (preview) {
+        return await loadDayAggregate(dayNumber, { preview: false });
+      }
+      console.warn(`Aggregate for day ${dayNumber} not found`);
+      return null;
+    }
+    const data = await response.json();
+    if (preview) {
+      data._isPreview = true;
+    }
+    cache.set(dayNumber, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading aggregate for day ${dayNumber}:`, err);
+    return null;
+  }
+}
+
+/**
  * Load a specific game by ID
  * @param {string} gameId - Game ID to load
  * @returns {Promise<Object>} Full game data with results
@@ -111,6 +154,31 @@ export async function loadGame(gameId) {
   } catch (err) {
     console.error(`Error loading game ${gameId}:`, err);
     return null;
+  }
+}
+
+/**
+ * Load a preview version of a game (top-N results)
+ * @param {string} gameId - Game ID to load
+ * @returns {Promise<Object>} Preview game data
+ */
+export async function loadGamePreview(gameId) {
+  if (cachedGamePreviews.has(gameId)) {
+    return cachedGamePreviews.get(gameId);
+  }
+
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/games/${gameId}_top.json`);
+    if (!response.ok) {
+      return await loadGame(gameId);
+    }
+    const data = await response.json();
+    data._isPreview = true;
+    cachedGamePreviews.set(gameId, data);
+    return data;
+  } catch (err) {
+    console.error(`Error loading preview for game ${gameId}:`, err);
+    return await loadGame(gameId);
   }
 }
 
@@ -657,5 +725,8 @@ export function clearCache() {
   cachedMonthlyLeaderboards.clear();
   cachedPlayerHistoryIndex = null;
   cachedPlayerHistoryLetters.clear();
+  cachedGamePreviews.clear();
+  cachedDayAggregatePreviews.clear();
+  cachedDayAggregates.clear();
   console.log('dY-`?,? Cache cleared');
 }
