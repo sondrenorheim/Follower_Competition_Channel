@@ -1,37 +1,43 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getGamesByType, getGameWithResults, loadDay, loadIndex } from '../utils/dataLoader';
+import { loadDay, loadIndex, loadDayAggregate, loadGame, loadGamePreview } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 import GameFilter from '../components/GameFilter';
+
+const ITEMS_PER_PAGE = 50;
 
 /**
  * DailyResults Page
  * Browse individual game episode results
  */
 export default function DailyResults() {
-  const [games, setGames] = useState([]); // Filtered games by type
   const [gameTypes, setGameTypes] = useState([]);
+  const [daysMetadata, setDaysMetadata] = useState([]);
+  const [availableDays, setAvailableDays] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
   const [selectedDayNumber, setSelectedDayNumber] = useState(null);
-  const [allGamesCache, setAllGamesCache] = useState(null);
   const [selectedGame, setSelectedGame] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('Starting');
   const [currentPage, setCurrentPage] = useState(1);
-  const prefetchAllStartedRef = useRef(false);
+  const [indexLoaded, setIndexLoaded] = useState(false);
+  const [isLoadingFullResults, setIsLoadingFullResults] = useState(false);
+  const initialLoadRef = useRef(true);
 
-  // Load game types on mount
+  // Load index + metadata on mount
   useEffect(() => {
-    async function loadData() {
+    let isMounted = true;
+
+    async function loadIndexData() {
       setLoading(true);
       setLoadingProgress(5);
       setLoadingMessage('Loading index');
       try {
         const index = await loadIndex();
-        setLoadingProgress(35);
-        setLoadingMessage('Loading latest day');
+        if (!isMounted) return;
+
         const types = (index?.types_metadata || []).map((t) => ({
           type: t.type,
           displayName: t.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
@@ -39,173 +45,177 @@ export default function DailyResults() {
         }));
         setGameTypes(types);
 
-        const availableDays = index?.available_days || [];
-        if (availableDays.length === 0) {
-          setGames([]);
+        const days = index?.available_days || [];
+        const meta = index?.days_metadata || [];
+        setAvailableDays(days);
+        setDaysMetadata(meta);
+
+        if (days.length === 0) {
           setSelectedDayNumber(null);
+          setSelectedGame(null);
           setLoadingProgress(100);
           setLoadingMessage('No days available');
+          setLoading(false);
+          initialLoadRef.current = false;
           return;
         }
 
-        const maxDay = Math.max(...availableDays);
-        const dayData = await loadDay(maxDay);
-        setLoadingProgress(75);
-        setLoadingMessage('Preparing results');
-        if (dayData && dayData.games) {
-          const dayGames = dayData.games.map((gameSummary) => ({
-            game_id: gameSummary.game_id,
-            game_type: gameSummary.game_type,
-            game_display_name: gameSummary.game_display_name,
-            day_number: dayData.day_number,
-            timestamp: gameSummary.timestamp,
-            total_participants: gameSummary.total_participants,
-            _isSummary: true,
-          }));
-          setGames(dayGames);
-        } else {
-          setGames([]);
-        }
+        setLoadingProgress(35);
+        setLoadingMessage('Preparing latest day');
+        const maxDay = Math.max(...days);
         setSelectedDayNumber(maxDay);
-        setLoadingProgress(100);
-        setLoadingMessage('Done');
+        setLoadingProgress(60);
+        setLoadingMessage('Loading results');
       } catch (error) {
-        console.error('Error loading games:', error);
+        console.error('Error loading index:', error);
         setLoadingProgress(100);
         setLoadingMessage('Loading failed');
-      } finally {
         setLoading(false);
+        initialLoadRef.current = false;
+      } finally {
+        if (isMounted) {
+          setIndexLoaded(true);
+        }
       }
     }
-    let isMounted = true;
-    loadData().then(() => {
-      if (!isMounted || prefetchAllStartedRef.current) {
-        return;
-      }
-      prefetchAllStartedRef.current = true;
-      (async () => {
-        const loadedGames = await getGamesByType('all');
-        if (!isMounted) return;
-        setAllGamesCache(loadedGames);
-      })();
-    });
+
+    loadIndexData();
     return () => {
       isMounted = false;
     };
   }, []);
 
-  // Filter games when game type changes
-  useEffect(() => {
-    async function filterGames() {
-      if (selectedGameType === 'all') {
-        if (!allGamesCache || allGamesCache.length === 0) {
-          return;
-        }
-        setGames(allGamesCache);
-
-        const availableDays = allGamesCache.map(g => g.day_number);
-        const maxDay = Math.max(...availableDays);
-        if (selectedDayNumber === null || !availableDays.includes(selectedDayNumber)) {
-          setSelectedDayNumber(maxDay);
-        }
-        return;
-      }
-
-      const filtered = await getGamesByType(selectedGameType);
-      setGames(filtered);
-
-      if (filtered.length > 0) {
-        const availableDays = filtered.map(g => g.day_number);
-        const maxDay = Math.max(...availableDays);
-
-        // If no day selected or current day not available for this game type, use highest day
-        if (selectedDayNumber === null || !availableDays.includes(selectedDayNumber)) {
-          setSelectedDayNumber(maxDay);
-        }
-      }
-    }
-    filterGames();
-  }, [selectedGameType, selectedDayNumber, allGamesCache]);
-
-  // Update selected game when day number or filtered games change
-  useEffect(() => {
-    async function loadSelectedGame() {
-      if (selectedDayNumber === null || games.length === 0) {
-        setSelectedGame(null);
-        return;
-      }
-
-      // When "all" is selected, aggregate all games for that day into one summary entry
-      if (selectedGameType === 'all') {
-        const dayGames = games.filter(g => g.day_number === selectedDayNumber);
-        if (dayGames.length === 0) {
-          setSelectedGame(null);
-          return;
-        }
-
-        // Load full results for all games on this day
-        const fullGames = await Promise.all(
-          dayGames.map(g => getGameWithResults(g))
-        );
-        const scoringGames = fullGames.filter(game => game && !game.non_scoring);
-
-        // Aggregate points (and kills/survival_time when available) per player across all games that day
-        const aggregated = new Map();
-        scoringGames.forEach(game => {
-          if (!game || !game.results) return;
-          game.results.forEach(result => {
-            if (!aggregated.has(result.username)) {
-              aggregated.set(result.username, {
-                username: result.username,
-                points: 0,
-                kills: 0,
-                survival_time: 0,
-                appearances: 0
-              });
-            }
-            const entry = aggregated.get(result.username);
-            entry.points += result.points || 0;
-            entry.kills += result.kills || 0;
-            entry.survival_time += result.survival_time || 0;
-            entry.appearances += 1;
-          });
-        });
-
-        const aggregatedResults = Array.from(aggregated.values());
-        const totalParticipants = aggregatedResults.length;
-
-        const syntheticGame = {
-          game_id: `all_day_${selectedDayNumber}`,
-          game_type: 'all',
-          game_display_name: 'All Games',
-          day_number: selectedDayNumber,
-          timestamp: scoringGames[0]?.timestamp || new Date().toISOString(),
-          total_participants: totalParticipants,
-          results: aggregatedResults
-        };
-
-        setSelectedGame(syntheticGame);
-        return;
-      }
-
-      // Otherwise, pick the game matching the day for the selected type
-      const matchingGame = games.find(g => g.day_number === selectedDayNumber);
-      if (!matchingGame) {
-        setSelectedGame(null);
-        return;
-      }
-
-      // Load full results if it's a summary
-      const fullGame = await getGameWithResults(matchingGame);
-      setSelectedGame(fullGame);
+  const dayOptions = React.useMemo(() => {
+    if (selectedGameType === 'all') {
+      return availableDays;
     }
 
-    loadSelectedGame();
-  }, [selectedDayNumber, games, selectedGameType]);
+    return daysMetadata
+      .filter((day) => Array.isArray(day.types) && day.types.includes(selectedGameType))
+      .map((day) => day.day);
+  }, [selectedGameType, availableDays, daysMetadata]);
+
+  // Ensure selected day is valid for the chosen type
+  useEffect(() => {
+    if (!indexLoaded) {
+      return;
+    }
+    if (!dayOptions || dayOptions.length === 0) {
+      setSelectedDayNumber(null);
+      setSelectedGame(null);
+      return;
+    }
+
+    const maxDay = Math.max(...dayOptions);
+    if (selectedDayNumber === null || !dayOptions.includes(selectedDayNumber)) {
+      setSelectedDayNumber(maxDay);
+    }
+  }, [dayOptions, selectedDayNumber, indexLoaded]);
+
+  useEffect(() => {
+    setSearchQuery('');
+    setCurrentPage(1);
+  }, [selectedGameType]);
+
+  useEffect(() => {
+    setSearchQuery('');
+    setCurrentPage(1);
+  }, [selectedDayNumber]);
+
+  // Load selected game when day or type changes
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSelection() {
+      if (!indexLoaded) {
+        return;
+      }
+      if (selectedDayNumber === null) {
+        setSelectedGame(null);
+        if (initialLoadRef.current) {
+          setLoadingProgress(100);
+          setLoadingMessage('No days available');
+          setLoading(false);
+          initialLoadRef.current = false;
+        }
+        return;
+      }
+
+      let game = null;
+      if (selectedGameType === 'all') {
+        game = await loadDayAggregate(selectedDayNumber, { preview: true });
+      } else {
+        const dayData = await loadDay(selectedDayNumber);
+        if (dayData && dayData.games) {
+          const matches = dayData.games.filter((g) => g.game_type === selectedGameType);
+          if (matches.length > 0) {
+            const latestGame = matches.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))[0];
+            game = await loadGamePreview(latestGame.game_id);
+          }
+        }
+      }
+
+      if (cancelled) return;
+      setSelectedGame(game);
+      setIsLoadingFullResults(false);
+
+      if (initialLoadRef.current) {
+        setLoadingProgress(100);
+        setLoadingMessage('Done');
+        setLoading(false);
+        initialLoadRef.current = false;
+      }
+    }
+
+    loadSelection();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDayNumber, selectedGameType, indexLoaded]);
+
+  const previewInfo = React.useMemo(() => {
+    if (!selectedGame || !selectedGame._isPreview) return null;
+    const previewLimit = selectedGame.preview_limit || selectedGame.results?.length || 0;
+    const totalResults = selectedGame.total_results || selectedGame.total_participants || selectedGame.results?.length || 0;
+    const previewPages = previewLimit ? Math.ceil(previewLimit / ITEMS_PER_PAGE) : 0;
+    return {
+      previewLimit,
+      totalResults,
+      previewPages
+    };
+  }, [selectedGame]);
+
+  useEffect(() => {
+    if (!selectedGame || !selectedGame._isPreview || !previewInfo) return;
+
+    const needsFullResults = searchQuery.trim().length > 0 ||
+      (previewInfo.previewPages > 0 && currentPage > previewInfo.previewPages);
+    if (!needsFullResults || isLoadingFullResults) return;
+
+    let cancelled = false;
+
+    async function loadFullResults() {
+      setIsLoadingFullResults(true);
+      const fullGame = selectedGame.game_type === 'all'
+        ? await loadDayAggregate(selectedGame.day_number, { preview: false })
+        : await loadGame(selectedGame.game_id);
+      if (!cancelled && fullGame) {
+        setSelectedGame(fullGame);
+      }
+      if (!cancelled) {
+        setIsLoadingFullResults(false);
+      }
+    }
+
+    loadFullResults();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery, currentPage, selectedGame, previewInfo, isLoadingFullResults]);
 
   // Sort all results and calculate ranks once per selection, then filter by search
   const rankedResults = React.useMemo(() => {
-    if (!selectedGame) return [];
+    if (!selectedGame || !Array.isArray(selectedGame.results)) return [];
 
     const sortedResults = [...selectedGame.results].sort((a, b) => {
       const pointsA = a.points || 0;
@@ -241,7 +251,7 @@ export default function DailyResults() {
   if (loading) {
     return (
       <div className="flex flex-col justify-center items-center min-h-screen bg-dark-bg-primary">
-        <div className="text-6xl animate-bounce-slow mb-4">🏆</div>
+        <div className="text-6xl animate-bounce-slow mb-4">dY?+</div>
         <div className="text-2xl font-bold text-primary animate-pulse">Loading Games...</div>
         <div className="mt-4 flex gap-2">
           <div className="w-3 h-3 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
@@ -271,9 +281,9 @@ export default function DailyResults() {
           <h2 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary to-accent mb-6 tracking-tight">
             Daily Results
           </h2>
-           <p className="text-lg text-text-secondary max-w-3xl mx-auto font-medium leading-relaxed mb-4">
+          <p className="text-lg text-text-secondary max-w-3xl mx-auto font-medium leading-relaxed mb-4">
             View the top performers from each follower race or use the search bar to find your result.
-            </p>
+          </p>
         </div>
 
         {/* Filters */}
@@ -289,7 +299,7 @@ export default function DailyResults() {
             {/* Day/Episode Selector */}
             <div className="group">
               <label htmlFor="day-selector" className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
-                <span>📅</span>
+                <span>dY".</span>
                 <span>Day</span>
               </label>
               <div className="relative">
@@ -298,16 +308,13 @@ export default function DailyResults() {
                   value={selectedDayNumber || ''}
                   onChange={(e) => {
                     setSelectedDayNumber(Number(e.target.value));
-                    setSearchQuery('');
-                    setCurrentPage(1);
                   }}
                   className="block w-full pl-4 pr-10 py-3 text-base border-2 border-slate-600 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent focus:shadow-glow-accent rounded-xl bg-dark-bg-tertiary text-text-primary hover:border-primary/50 transition-all duration-200 cursor-pointer font-medium shadow-card-dark appearance-none"
                 >
-                  {games.length === 0 ? (
+                  {dayOptions.length === 0 ? (
                     <option className="bg-dark-bg-secondary text-text-primary">No days available</option>
                   ) : (
-                    // Get unique day numbers, sort descending
-                    [...new Set(games.map(g => g.day_number))]
+                    [...new Set(dayOptions)]
                       .sort((a, b) => b - a)
                       .map((dayNum) => (
                         <option key={dayNum} value={dayNum} className="bg-dark-bg-secondary text-text-primary">
@@ -327,7 +334,7 @@ export default function DailyResults() {
             {/* Search Bar */}
             <div>
               <label className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
-                <span>🔍</span>
+                <span>dY"?</span>
                 <span>Search Players</span>
               </label>
               <SearchBar value={searchQuery} onChange={setSearchQuery} trackingSource="daily_results" />
@@ -347,13 +354,15 @@ export default function DailyResults() {
                   <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
-                  {new Date(selectedGame.timestamp).toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric',
-                    hour: 'numeric',
-                    minute: '2-digit'
-                  })}
+                  {selectedGame.timestamp
+                    ? new Date(selectedGame.timestamp).toLocaleDateString('en-US', {
+                      month: 'long',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit'
+                    })
+                    : 'Date TBD'}
                 </span>
                 <span className="flex items-center gap-1">
                   <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -362,6 +371,14 @@ export default function DailyResults() {
                   {selectedGame.total_participants} participants
                 </span>
               </div>
+              {previewInfo && previewInfo.totalResults > previewInfo.previewLimit ? (
+                <div className="mt-4 text-sm text-text-muted">
+                  Showing top {previewInfo.previewLimit} of {previewInfo.totalResults} results. Search or go past page {previewInfo.previewPages} to load everything.
+                </div>
+              ) : null}
+              {isLoadingFullResults ? (
+                <div className="mt-3 text-sm text-accent">Loading full results...</div>
+              ) : null}
             </div>
 
             <LeaderboardTable
@@ -371,14 +388,15 @@ export default function DailyResults() {
                 selectedGame.game_type === 'obstacle_course' ||
                 selectedGame.game_type === 'all'
                   ? ['rank', 'username', 'points']
-                : selectedGame.game_type === 'fighter_arena'
-                  ? ['rank', 'username', 'points', 'kills']
-                : selectedGame.game_type === 'team_battle'
-                  ? ['rank', 'username', 'points', 'kills']
-                : selectedGame.game_type === 'snake_escape'
-                  ? ['rank', 'username', 'points', 'survivalTime']
-                  : ['rank', 'username', 'points', 'survivalTime', 'kills']
+                  : selectedGame.game_type === 'fighter_arena'
+                    ? ['rank', 'username', 'points', 'kills']
+                    : selectedGame.game_type === 'team_battle'
+                      ? ['rank', 'username', 'points', 'kills']
+                      : selectedGame.game_type === 'snake_escape'
+                        ? ['rank', 'username', 'points', 'survivalTime']
+                        : ['rank', 'username', 'points', 'survivalTime', 'kills']
               }
+              itemsPerPage={ITEMS_PER_PAGE}
               currentPage={currentPage}
               onPageChange={setCurrentPage}
               trackingSource="daily_results"
@@ -386,7 +404,7 @@ export default function DailyResults() {
           </div>
         ) : (
           <div className="text-center py-20 bg-dark-bg-secondary rounded-card shadow-card-dark border-2 border-dashed border-slate-600 animate-fade-in">
-            <div className="text-6xl mb-4 animate-bounce-slow">🎮</div>
+            <div className="text-6xl mb-4 animate-bounce-slow">dYZr</div>
             <p className="text-2xl font-bold text-text-primary mb-2">No Games Available</p>
             <p className="text-text-muted mb-6">Try selecting a different game type filter</p>
             <div className="flex justify-center gap-2">

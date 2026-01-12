@@ -41,7 +41,28 @@ jobs:
 
       - name: Build website
         working-directory: ./website
+        env:
+          VITE_API_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
         run: npm run build
+
+      - name: Configure R2 credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          aws-region: auto
+
+      - name: Sync API to R2
+        run: |
+          if [ ! -d "./website/public/api" ]; then
+            echo "ERROR: website/public/api not found"
+            ls -la ./website/public || true
+            exit 1
+          fi
+          aws s3 sync ./website/public/api s3://${{ vars.R2_BUCKET }}/api --endpoint-url ${{ vars.R2_ENDPOINT }} --delete
+
+      - name: Remove API from Pages artifact
+        run: rm -rf ./website/dist/api ./website/dist/game_history_web.json ./website/dist/player_statistics_web.json ./website/dist/game_history.json ./website/dist/player_statistics.json
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
