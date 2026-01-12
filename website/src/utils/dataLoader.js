@@ -26,6 +26,8 @@ let cachedTypes = new Map(); // Map of game_type -> type_index
 let cachedPlayerLetters = new Map(); // Map of letter -> player_data
 let cachedPlayerIndex = null;
 let cachedMonthlyLeaderboards = new Map(); // Map of YYYY-MM -> leaderboard_data
+let cachedAllTimeLeaderboard = null;
+let cachedAllTimeLeaderboardPreview = null;
 let cachedPlayerHistoryIndex = null;
 let cachedPlayerHistoryLetters = new Map(); // Map of letter -> player history data
 let cachedGamePreviews = new Map(); // Map of game_id -> preview game data
@@ -491,23 +493,57 @@ export async function getAllPlayerStats() {
  * @param {string} monthKey - Month key in YYYY-MM format
  * @returns {Promise<Object>} Monthly leaderboard data
  */
-async function loadMonthlyLeaderboard(monthKey) {
-  // Check cache first
-  if (cachedMonthlyLeaderboards.has(monthKey)) {
-    return cachedMonthlyLeaderboards.get(monthKey);
+async function loadMonthlyLeaderboard(monthKey, { preview = false } = {}) {
+  const cacheKey = preview ? `${monthKey}_preview` : monthKey;
+  if (cachedMonthlyLeaderboards.has(cacheKey)) {
+    return cachedMonthlyLeaderboards.get(cacheKey);
   }
 
+  const suffix = preview ? "_top" : "";
+
   try {
-    const response = await fetch(`${DATA_BASE_PATH}api/leaderboards/${monthKey}.json`);
+    const response = await fetch(`${DATA_BASE_PATH}api/leaderboards/${monthKey}${suffix}.json`);
     if (!response.ok) {
+      if (preview) {
+        return await loadMonthlyLeaderboard(monthKey, { preview: false });
+      }
       console.warn(`Monthly leaderboard ${monthKey} not found`);
       return null;
     }
     const data = await response.json();
-    cachedMonthlyLeaderboards.set(monthKey, data);
+    cachedMonthlyLeaderboards.set(cacheKey, data);
     return data;
   } catch (err) {
     console.error(`Error loading monthly leaderboard ${monthKey}:`, err);
+    return null;
+  }
+}
+
+async function loadAllTimeLeaderboard({ preview = false } = {}) {
+  const cache = preview ? cachedAllTimeLeaderboardPreview : cachedAllTimeLeaderboard;
+  if (cache) {
+    return cache;
+  }
+
+  const suffix = preview ? "_top" : "";
+  try {
+    const response = await fetch(`${DATA_BASE_PATH}api/leaderboards/all_time${suffix}.json`);
+    if (!response.ok) {
+      if (preview) {
+        console.warn('All-time leaderboard not found');
+        return null;
+      }
+      return await loadAllTimeLeaderboard({ preview: true });
+    }
+    const data = await response.json();
+    if (preview) {
+      cachedAllTimeLeaderboardPreview = data;
+    } else {
+      cachedAllTimeLeaderboard = data;
+    }
+    return data;
+  } catch (err) {
+    console.error('Error loading all-time leaderboard:', err);
     return null;
   }
 }
@@ -520,17 +556,26 @@ async function loadMonthlyLeaderboard(monthKey) {
  * @param {string} gameType - Game type identifier or "all"
  * @returns {Promise<Array>} Array of player rankings for the month
  */
-export async function getMonthlyLeaderboard(year, month, limit = null, gameType = 'all') {
+export async function getMonthlyLeaderboard(year, month, limit = null, gameType = 'all', options = {}) {
+  const { preview = false } = options || {};
   // Build month key (YYYY-MM format)
   const monthKey = `${year}-${String(month).padStart(2, '0')}`;
   const leaderboardKey = gameType === 'all' ? monthKey : `${monthKey}_${gameType}`;
 
   // Load pre-computed monthly leaderboard (single request!)
-  const monthData = await loadMonthlyLeaderboard(leaderboardKey);
+  const monthData = await loadMonthlyLeaderboard(leaderboardKey, { preview });
 
   if (!monthData || !monthData.leaderboard) {
     console.warn(`No pre-computed leaderboard for ${leaderboardKey}`);
-    return [];
+    return {
+      entries: [],
+      meta: {
+        month: monthKey,
+        gameType: gameType,
+        totalPlayers: 0,
+        isPreview: false
+      }
+    };
   }
 
   // Convert compact format to expected format
@@ -552,7 +597,65 @@ export async function getMonthlyLeaderboard(year, month, limit = null, gameType 
   const trimmed = limit === null || limit === undefined ? leaderboard : leaderboard.slice(0, limit);
 
   console.log(`?. Loaded monthly leaderboard ${leaderboardKey}: ${trimmed.length} players (1 request)`);
-  return trimmed;
+  return {
+    entries: trimmed,
+    meta: {
+      month: monthData.month || monthKey,
+      gameType: monthData.game_type || gameType,
+      totalPlayers: monthData.total_players ?? leaderboard.length,
+      isPreview: !!monthData.is_preview,
+      previewLimit: monthData.preview_limit ?? null,
+      totalResults: monthData.total_results ?? monthData.total_players ?? leaderboard.length
+    }
+  };
+}
+
+/**
+ * Get all-time leaderboard (compact file, preview or full).
+ * @param {Object} options
+ * @param {number|null} options.limit - Limit results after mapping
+ * @param {boolean} options.preview - Load preview file when available
+ * @returns {Promise<{entries: Array, meta: Object}>}
+ */
+export async function getAllTimeLeaderboardData({ limit = null, preview = false } = {}) {
+  const data = await loadAllTimeLeaderboard({ preview });
+  if (!data || !data.leaderboard) {
+    return {
+      entries: [],
+      meta: {
+        totalPlayers: 0,
+        isPreview: false
+      }
+    };
+  }
+
+  const leaderboard = data.leaderboard.map((entry) => {
+    const totalPlacement = entry.t || 0;
+    return {
+      username: entry.u,
+      points: entry.p,
+      games: entry.g,
+      wins: entry.w,
+      bestPlacement: entry.b || Infinity,
+      totalKills: entry.k || 0,
+      totalPlacement,
+      top3Finishes: entry.t3 || 0,
+      top10PctFinishes: entry.t10 || 0,
+      avgPlacement: entry.g ? (totalPlacement / entry.g).toFixed(1) : '0.0',
+      rank: entry.r
+    };
+  });
+
+  const trimmed = limit === null || limit === undefined ? leaderboard : leaderboard.slice(0, limit);
+  return {
+    entries: trimmed,
+    meta: {
+      totalPlayers: data.total_players ?? leaderboard.length,
+      isPreview: !!data.is_preview,
+      previewLimit: data.preview_limit ?? null,
+      totalResults: data.total_results ?? data.total_players ?? leaderboard.length
+    }
+  };
 }
 
 
@@ -723,6 +826,8 @@ export function clearCache() {
   cachedPlayerLetters.clear();
   cachedPlayerIndex = null;
   cachedMonthlyLeaderboards.clear();
+  cachedAllTimeLeaderboard = null;
+  cachedAllTimeLeaderboardPreview = null;
   cachedPlayerHistoryIndex = null;
   cachedPlayerHistoryLetters.clear();
   cachedGamePreviews.clear();

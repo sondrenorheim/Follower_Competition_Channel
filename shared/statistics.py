@@ -569,6 +569,8 @@ class PlayerStatistics:
         # Group players by first letter
         players_by_letter = defaultdict(dict)
         player_index = []
+        all_time_leaderboard = []
+        preview_limit = int(getattr(config, "WEB_RESULTS_PREVIEW_LIMIT", 200) or 0)
 
         for username, entry in self.stats.items():
             # Get first letter (lowercase)
@@ -596,12 +598,33 @@ class PlayerStatistics:
 
             players_by_letter[first_letter][username] = compact_entry
 
+            points = stats_list[0] if stats_list else 0
+            games = stats_list[1] if len(stats_list) > 1 else 0
+            best = stats_list[2] if len(stats_list) > 2 else 0
+            total_placement = stats_list[3] if len(stats_list) > 3 else 0
+            wins = stats_list[4] if len(stats_list) > 4 else 0
+            top3 = stats_list[5] if len(stats_list) > 5 else 0
+            top10 = stats_list[6] if len(stats_list) > 6 else 0
+            total_kills = stats_list[11] if len(stats_list) > 11 else 0
+
             # Add to index (just basic info for quick lookups)
             player_index.append({
                 "u": username,  # username
-                "p": stats_list[0] if stats_list else 0,  # total points
-                "g": stats_list[1] if len(stats_list) > 1 else 0,  # games played
+                "p": points,  # total points
+                "g": games,  # games played
                 "l": first_letter  # letter group
+            })
+
+            all_time_leaderboard.append({
+                "u": username,
+                "p": round(points, 1),
+                "g": games,
+                "w": wins,
+                "b": best,
+                "t": total_placement,
+                "k": total_kills,
+                "t3": top3,
+                "t10": top10
             })
 
         # Create players directory
@@ -635,6 +658,40 @@ class PlayerStatistics:
         index_file = os.path.join(players_dir, "index.json")
         with open(index_file, "w", encoding="utf-8") as f:
             json.dump(index_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        # Export all-time leaderboard (compact)
+        leaderboards_dir = os.path.join(base_dir, "leaderboards")
+        os.makedirs(leaderboards_dir, exist_ok=True)
+
+        all_time_leaderboard.sort(key=lambda x: x["p"], reverse=True)
+        for i, entry in enumerate(all_time_leaderboard):
+            entry["r"] = i + 1
+
+        last_updated = self.metadata.get("last_updated") or datetime.now().isoformat()
+        all_time_data = {
+            "scope": "all_time",
+            "lu": last_updated,
+            "total_players": len(all_time_leaderboard),
+            "leaderboard": all_time_leaderboard
+        }
+
+        all_time_file = os.path.join(leaderboards_dir, "all_time.json")
+        with open(all_time_file, "w", encoding="utf-8") as f:
+            json.dump(all_time_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        if preview_limit > 0 and len(all_time_leaderboard) > preview_limit:
+            preview_data = {
+                "scope": "all_time",
+                "lu": last_updated,
+                "total_players": len(all_time_leaderboard),
+                "is_preview": True,
+                "preview_limit": preview_limit,
+                "total_results": len(all_time_leaderboard),
+                "leaderboard": all_time_leaderboard[:preview_limit]
+            }
+            preview_file = os.path.join(leaderboards_dir, "all_time_top.json")
+            with open(preview_file, "w", encoding="utf-8") as f:
+                json.dump(preview_data, f, ensure_ascii=False, separators=(",", ":"))
 
         print(f"Exported partitioned player stats:")
         print(f"   {len(players_by_letter)} letter files -> {players_dir}/")

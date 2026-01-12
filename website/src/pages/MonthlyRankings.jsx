@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { loadIndex, getMonthlyLeaderboard, getAllPlayerStats } from '../utils/dataLoader';
+import { loadIndex, getMonthlyLeaderboard, getAllTimeLeaderboardData } from '../utils/dataLoader';
 import LeaderboardTable from '../components/LeaderboardTable';
 import SearchBar from '../components/SearchBar';
 
@@ -19,40 +19,27 @@ export default function MonthlyRankings() {
   const [selectedStatCategory, setSelectedStatCategory] = useState('points');
   const [gameTypeFilter, setGameTypeFilter] = useState('all'); // 'all' or specific game_type
   const [gameTypes, setGameTypes] = useState([]);
-  const [allTimeCache, setAllTimeCache] = useState(null);
   const [indexReady, setIndexReady] = useState(false);
+  const [previewLimit, setPreviewLimit] = useState(null);
+  const [allTimeMeta, setAllTimeMeta] = useState({
+    totalPlayers: 0,
+    isPreview: false,
+    previewLimit: null,
+    totalResults: 0
+  });
+  const [monthlyMeta, setMonthlyMeta] = useState({
+    totalPlayers: 0,
+    isPreview: false,
+    previewLimit: null,
+    totalResults: 0
+  });
+  const [forceFullAllTime, setForceFullAllTime] = useState(false);
+  const [forceFullMonthly, setForceFullMonthly] = useState(false);
 
   // Current month/year
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
-
-  const buildAllTimeCache = (players) => {
-    const leaderboard = players.map(({ username, stats }) => {
-      const points = stats[0] || 0;
-      const games = stats[1] || 0;
-      const totalPlacement = stats[3] || 0;
-      const wins = stats[4] || 0;
-      const top3 = stats[5] || 0;
-      const top10 = stats[6] || 0;
-      const totalKills = stats[11] || 0;
-      const avgPlacement = games > 0 ? (totalPlacement / games).toFixed(1) : '0.0';
-
-      return {
-        username,
-        points,
-        games,
-        wins,
-        avgPlacement,
-        totalKills,
-        top3Finishes: top3,
-        top10PctFinishes: top10
-      };
-    });
-
-    leaderboard.sort((a, b) => b.points - a.points);
-    return leaderboard;
-  };
 
   // Load available months and game types from the index
   useEffect(() => {
@@ -62,10 +49,12 @@ export default function MonthlyRankings() {
       let shouldStopLoading = true;
       setLoading(true);
       setLoadingProgress(5);
-      setLoadingMessage('Loading index');
+        setLoadingMessage('Loading index');
       try {
         const index = await loadIndex();
         if (!index || !isMounted) return;
+
+        setPreviewLimit(index.results_preview_limit || 200);
 
         const months = (index.available_months || []).map((key) => {
           const [year, month] = key.split('-').map(Number);
@@ -103,15 +92,6 @@ export default function MonthlyRankings() {
         setLoadingProgress(40);
         setLoadingMessage('Index ready');
         shouldStopLoading = false;
-
-        getAllPlayerStats()
-          .then((players) => {
-            if (!isMounted || !players.length) return;
-            setAllTimeCache(buildAllTimeCache(players));
-          })
-          .catch((error) => {
-            console.error('Error loading all-time stats:', error);
-          });
       } catch (error) {
         console.error('Error loading index:', error);
       } finally {
@@ -126,6 +106,16 @@ export default function MonthlyRankings() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!searchQuery) return;
+    if (viewMode === 'monthly' && monthlyMeta.isPreview && !forceFullMonthly) {
+      setForceFullMonthly(true);
+    }
+    if (viewMode !== 'monthly' && allTimeMeta.isPreview && !forceFullAllTime) {
+      setForceFullAllTime(true);
+    }
+  }, [searchQuery, viewMode, monthlyMeta.isPreview, allTimeMeta.isPreview, forceFullMonthly, forceFullAllTime]);
 
   // Load leaderboard data
   useEffect(() => {
@@ -145,25 +135,29 @@ export default function MonthlyRankings() {
           }
           setLoadingProgress(70);
           setLoadingMessage('Loading monthly results');
-          const monthly = await getMonthlyLeaderboard(selectedYear, selectedMonth, null, gameTypeFilter);
+          const { entries, meta } = await getMonthlyLeaderboard(
+            selectedYear,
+            selectedMonth,
+            null,
+            gameTypeFilter,
+            { preview: !forceFullMonthly }
+          );
           if (!isMounted) return;
-          setLeaderboardData(monthly);
+          setLeaderboardData(entries);
+          setMonthlyMeta(meta);
           setLoadingProgress(100);
           setLoadingMessage('Done');
         } else {
-          let base = allTimeCache;
-          if (!base) {
-            setLoadingProgress(70);
-            setLoadingMessage('Loading all-time stats');
-            const players = await getAllPlayerStats();
-            base = buildAllTimeCache(players);
-            if (!isMounted) return;
-            setAllTimeCache(base);
-          }
+          setLoadingProgress(70);
+          setLoadingMessage('Loading all-time stats');
+          const usePreview = viewMode === 'all-time' && !forceFullAllTime;
+          const { entries, meta } = await getAllTimeLeaderboardData({ preview: usePreview });
+          if (!isMounted) return;
+          setAllTimeMeta(meta);
 
           setLoadingProgress(90);
           setLoadingMessage('Sorting results');
-          const data = [...base];
+          const data = [...entries];
           if (viewMode === 'top-stats') {
             data.sort((a, b) => {
               switch (selectedStatCategory) {
@@ -207,7 +201,7 @@ export default function MonthlyRankings() {
     return () => {
       isMounted = false;
     };
-  }, [indexReady, viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, allTimeCache]);
+  }, [indexReady, viewMode, selectedMonth, selectedYear, selectedStatCategory, gameTypeFilter, forceFullMonthly, forceFullAllTime]);
 
   // Keep game type filter limited to monthly view
   useEffect(() => {
@@ -460,6 +454,36 @@ export default function MonthlyRankings() {
               <div className="w-2 h-2 bg-secondary rounded-full animate-pulse" style={{ animationDelay: '200ms' }}></div>
               <div className="w-2 h-2 bg-accent rounded-full animate-pulse" style={{ animationDelay: '400ms' }}></div>
             </div>
+          </div>
+        )}
+
+        {viewMode === 'monthly' && monthlyMeta.isPreview && (
+          <div className="mt-6 bg-dark-bg-secondary border-2 border-slate-700 rounded-card p-6 shadow-card-dark flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="text-text-secondary text-sm">
+              Showing top {monthlyMeta.previewLimit || previewLimit || 200} of{' '}
+              {monthlyMeta.totalResults || monthlyMeta.totalPlayers || filteredData.length} players.
+            </div>
+            <button
+              onClick={() => setForceFullMonthly(true)}
+              className="px-4 py-2 rounded-lg font-bold bg-gradient-to-r from-primary to-secondary text-white shadow-glow-primary hover:scale-105 transition-transform"
+            >
+              Load full monthly results
+            </button>
+          </div>
+        )}
+
+        {viewMode !== 'monthly' && allTimeMeta.isPreview && (
+          <div className="mt-6 bg-dark-bg-secondary border-2 border-slate-700 rounded-card p-6 shadow-card-dark flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="text-text-secondary text-sm">
+              Showing top {allTimeMeta.previewLimit || previewLimit || 200} of{' '}
+              {allTimeMeta.totalResults || allTimeMeta.totalPlayers || filteredData.length} players.
+            </div>
+            <button
+              onClick={() => setForceFullAllTime(true)}
+              className="px-4 py-2 rounded-lg font-bold bg-gradient-to-r from-primary to-secondary text-white shadow-glow-primary hover:scale-105 transition-transform"
+            >
+              Load full all-time results
+            </button>
           </div>
         )}
       </div>

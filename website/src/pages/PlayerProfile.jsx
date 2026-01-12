@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getPlayerStats, getPlayerGameHistory, getGameTypes } from '../utils/dataLoader';
+import { loadIndex, getPlayerStats, getPlayerGameHistory, getGameTypes } from '../utils/dataLoader';
 import { formatPoints, formatDate, getPlacementSuffix, getGameTypeInfo } from '../utils/formatters';
 import GameFilter from '../components/GameFilter';
 
@@ -16,8 +16,10 @@ export default function PlayerProfile() {
   const [gameTypes, setGameTypes] = useState([]);
   const [selectedGameType, setSelectedGameType] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('Starting');
+  const [historyHasMore, setHistoryHasMore] = useState(false);
 
   useEffect(() => {
     async function loadPlayerData() {
@@ -25,18 +27,24 @@ export default function PlayerProfile() {
       setLoadingProgress(10);
       setLoadingMessage('Loading player stats');
       try {
-        const data = await getPlayerStats(username);
-        setLoadingProgress(45);
-        setLoadingMessage('Loading game history');
-        const history = await getPlayerGameHistory(username, null);
+        const index = await loadIndex();
+        const previewLimit = index?.results_preview_limit || 200;
+
+        const [data, history, types] = await Promise.all([
+          getPlayerStats(username),
+          getPlayerGameHistory(username, previewLimit),
+          getGameTypes()
+        ]);
+
         setLoadingProgress(80);
-        setLoadingMessage('Loading game types');
-        const types = await getGameTypes();
+        setLoadingMessage('Finalizing');
 
         setPlayerData(data);
         setAllGameHistory(history);
         setGameHistory(history);
         setGameTypes(types);
+        const totalGames = data?.stats?.[1] || 0;
+        setHistoryHasMore(totalGames > history.length);
         setLoadingProgress(100);
         setLoadingMessage('Done');
       } catch (error) {
@@ -62,55 +70,46 @@ export default function PlayerProfile() {
 
   // Calculate stats from filtered game history (memoized)
   const stats = React.useMemo(() => {
-    if (gameHistory.length === 0) {
-      return {
-        totalPoints: 0,
-        gamesPlayed: 0,
-        bestPlacement: 0,
-        avgPlacement: 0,
-        wins: 0,
-        top3Finishes: 0,
-        top10PctFinishes: 0,
-        totalKills: 0,
-        bestHotStreak: 0,
-        firstEliminations: 0
-      };
-    }
-
-    const totalPoints = gameHistory.reduce((sum, g) => sum + (g.points || 0), 0);
-    const totalKills = gameHistory.reduce((sum, g) => sum + (g.kills || 0), 0);
-    const wins = gameHistory.filter(g => g.placement === 1).length;
-    const top3 = gameHistory.filter(g => g.placement <= 3).length;
-    const bestPlacement = Math.min(...gameHistory.map(g => g.placement || Infinity));
-    const avgPlacement = gameHistory.reduce((sum, g) => sum + (g.placement || 0), 0) / gameHistory.length;
-
-    const top10Pct = gameHistory.filter(g => g.placement <= 40).length;
-    const firstEliminations = gameHistory.filter(g => (g.placement || 0) === 0 || (g.placement || 0) === 1).length;
-
-    let currentStreak = 0;
-    let bestStreak = 0;
-    gameHistory.forEach(g => {
-      if (g.placement <= 40) {
-        currentStreak++;
-        bestStreak = Math.max(bestStreak, currentStreak);
-      } else {
-        currentStreak = 0;
-      }
-    });
+    const statsList = playerData?.stats || [];
+    const totalPoints = statsList[0] || 0;
+    const gamesPlayed = statsList[1] || 0;
+    const bestPlacement = statsList[2] || 0;
+    const totalPlacement = statsList[3] || 0;
+    const wins = statsList[4] || 0;
+    const top3 = statsList[5] || 0;
+    const top10Pct = statsList[6] || 0;
+    const firstEliminations = statsList[8] || 0;
+    const bestHotStreak = statsList[10] || 0;
+    const totalKills = statsList[11] || 0;
+    const avgPlacement = gamesPlayed > 0 ? (totalPlacement / gamesPlayed).toFixed(1) : '0.0';
 
     return {
       totalPoints,
-      gamesPlayed: gameHistory.length,
+      gamesPlayed,
       bestPlacement,
-      avgPlacement: avgPlacement.toFixed(1),
+      avgPlacement,
       wins,
       top3Finishes: top3,
       top10PctFinishes: top10Pct,
       totalKills,
-      bestHotStreak: bestStreak,
+      bestHotStreak,
       firstEliminations
     };
-  }, [gameHistory]);
+  }, [playerData]);
+
+  const loadFullHistory = async () => {
+    if (historyLoading) return;
+    setHistoryLoading(true);
+    try {
+      const fullHistory = await getPlayerGameHistory(username, null);
+      setAllGameHistory(fullHistory);
+      setHistoryHasMore(false);
+    } catch (error) {
+      console.error('Error loading full history:', error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -246,6 +245,20 @@ export default function PlayerProfile() {
         {/* Recent Game History */}
         <div className="bg-white rounded-lg shadow-md p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Game History</h2>
+        {historyHasMore && (
+          <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            <span>
+              Showing the most recent {allGameHistory.length} of {playerData?.stats?.[1] || allGameHistory.length} games.
+            </span>
+            <button
+              onClick={loadFullHistory}
+              disabled={historyLoading}
+              className="px-4 py-2 rounded-md bg-primary text-white font-semibold hover:bg-secondary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {historyLoading ? 'Loading full history...' : 'Load full history'}
+            </button>
+          </div>
+        )}
 
         {gameHistory.length > 0 ? (
           <div className="overflow-x-auto">
