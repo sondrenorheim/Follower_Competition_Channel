@@ -53,6 +53,7 @@ class SnakeEscapeRenderer(RendererTemplate):
         # Additional fonts
         self.font_status = pygame.font.Font(None, 28)
         self.font_small = pygame.font.Font(None, 12)  # Smaller nametag font
+        self.font_prompt = pygame.font.Font(None, 24)
         self.font_promo = pygame.font.Font(None, 24)
         self.promo_text_left = "Join Discord, link in bio"
         self.promo_text_right = "Check your results in bio"
@@ -100,6 +101,12 @@ class SnakeEscapeRenderer(RendererTemplate):
         subtitle_surface = self.font_subtitle.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
         subtitle_rect = subtitle_surface.get_rect(center=(center_x, self.subtitle_y))
         self.screen.blit(subtitle_surface, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_surface = self.font_prompt.render(prompt_text, True, config.COLOR_TEXT)
+            prompt_rect = prompt_surface.get_rect(center=(center_x, subtitle_rect.bottom + 6))
+            self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_day_counter(self, players: List, game_state: dict):
         """Draw the day counter below the arena."""

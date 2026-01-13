@@ -12,10 +12,12 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import time
 import random
 import webbrowser
+from functools import lru_cache
 from pathlib import Path
 
 import config
@@ -31,6 +33,83 @@ def build_video_path(game_mode: str) -> Path:
     """
     filename = config.get_output_video_path(game_mode=game_mode, day_number=config.DAY_NUMBER, test_mode=False)
     return Path(filename)
+
+
+@lru_cache(maxsize=None)
+def load_day_summary(day_number: int) -> dict | None:
+    day_path = Path("website/public/api/days") / f"{day_number}.json"
+    if not day_path.exists():
+        return None
+    try:
+        with day_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Failed to read day summary {day_path}: {e}")
+        return None
+
+
+@lru_cache(maxsize=None)
+def load_game_results(game_id: str) -> dict | None:
+    game_path = Path("website/public/api/games") / f"{game_id}.json"
+    if not game_path.exists():
+        return None
+    try:
+        with game_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Failed to read game results {game_path}: {e}")
+        return None
+
+
+def get_top_usernames_for_game(day_number: int, game_mode: str, limit: int = 10) -> list[str]:
+    day_data = load_day_summary(day_number)
+    if not day_data:
+        return []
+
+    games = [
+        g for g in day_data.get("games", [])
+        if g.get("game_type") == game_mode
+    ]
+    if not games:
+        return []
+
+    game_summary = max(games, key=lambda g: g.get("timestamp", ""))
+    game_id = game_summary.get("game_id")
+    if not game_id:
+        return []
+
+    game_data = load_game_results(game_id)
+    if not game_data:
+        return []
+
+    results = game_data.get("results", []) or []
+    if not results:
+        return []
+
+    sorted_results = sorted(
+        results,
+        key=lambda r: r.get("placement", r.get("rank", 0) or 0)
+    )
+    usernames = []
+    for result in sorted_results:
+        username = result.get("username")
+        if not username:
+            continue
+        usernames.append(username)
+        if len(usernames) >= limit:
+            break
+
+    return usernames
+
+
+def format_top_users_block(usernames: list[str]) -> str:
+    if not usernames:
+        return ""
+    lines = ["", "Top 10 in this race:"]
+    for idx, username in enumerate(usernames, start=1):
+        handle = username if username.startswith("@") else f"@{username}"
+        lines.append(f"{idx}. {handle}")
+    return "\n".join(lines)
 
 
 def load_client(session_file: Path) -> Client:
@@ -78,6 +157,8 @@ def upload_videos(cl: Client, video_paths: list[Path], caption_template: str, de
             continue
         game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
         caption = caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
+        top_users = get_top_usernames_for_game(config.DAY_NUMBER, game_mode, limit=10)
+        caption += format_top_users_block(top_users)
         print(f"▶️ Uploading {video_path} as Reel with caption:\n{caption}")
         media = cl.clip_upload(str(video_path), caption=caption)
         print(f"✅ Uploaded: {video_path.name} -> {media.pk}")
@@ -345,46 +426,56 @@ def parse_args():
         help="Open a browser and wait for manual Instagram login before uploading (instagrapi only).",
     )
     parser.add_argument(
-        "--ig-profile-url",
-        default="",
-        help="Instagram profile URL to open for manual login (optional).",
-    )
-    parser.add_argument(
         "--ig-uploader",
         choices=["instagrapi", "safe"],
         default="instagrapi",
-        help="Instagram uploader backend (default: instagrapi). 'safe' uses browser automation.",
+        help="Instagram uploader backend (default: instagrapi).",
+    )
+    parser.add_argument(
+        "--ig-headless",
+        action="store_true",
+        help="Run safe uploader in headless mode (only when --ig-uploader safe).",
     )
     parser.add_argument(
         "--ig-cookies-file",
         type=Path,
         default=Path("instagram_cookies.json"),
-        help="Path to Instagram cookies for the safe uploader.",
+        help="Path to Instagram cookies JSON for safe uploader (or set IG_COOKIES_FILE).",
     )
     parser.add_argument(
-        "--ig-headless",
-        action="store_true",
-        help="Run the safe Instagram uploader headless.",
+        "--session-file",
+        type=Path,
+        default=Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json"),
+        help="Path to instagrapi session JSON (or set IG_SESSION_FILE env var).",
     )
     parser.add_argument(
-        "--ig-save-cookies",
-        action="store_true",
-        help="Save Instagram cookies before uploading (legacy safe uploader only).",
+        "--tiktok-session-file",
+        type=Path,
+        default=Path(r"C:\Users\SondreNorheim\Documents\tiktok_follower_account_sessionid.json"),
+        help="Path to TikTok session JSON with {'sessionid': '...'} (or set TIKTOK_SESSION_FILE).",
+    )
+    parser.add_argument(
+        "--caption-template",
+        default="Day {day_number} of making my followers battle every day! Follow to enter the battle!\n\n"
+        "Check the link in the bio for your result and overall monthly ranking!\n\n"
+        "#followerbattlegrounds\n\n"
+        "Game: {game_mode} | Day {day_number}",
+        help="Caption template; placeholders: {game_mode}, {day_number}.",
+    )
+    parser.add_argument(
+        "--ig-profile-url",
+        default="",
+        help="Optional Instagram profile URL to open when --wait-for-login is used.",
     )
     parser.add_argument(
         "--ig-export-followers",
         action="store_true",
-        help="Run Account Center export flow before uploads (safe uploader only).",
+        help="Export Instagram follower data via Account Center.",
     )
     parser.add_argument(
         "--ig-export-after-uploads",
         action="store_true",
-        help="Run Account Center export after uploads (requires --ig-export-followers and --ig-uploader safe).",
-    )
-    parser.add_argument(
-        "--export-only",
-        action="store_true",
-        help="Run Account Center export only (no stats push, no uploads). Requires --ig-uploader safe.",
+        help="Run follower export after uploads instead of before.",
     )
     parser.add_argument(
         "--ig-export-profile",
@@ -397,21 +488,9 @@ def parse_args():
         help="Override export date range label (default: config.IG_EXPORT_DATE_RANGE).",
     )
     parser.add_argument(
-        "--session-file",
-        type=Path,
-        default=Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json"),
-        help="Path to instagrapi session JSON (or set IG_SESSION_FILE env var).",
-    )
-    parser.add_argument(
-        "--tiktok-session-file",
-        type=Path,
-        default=Path(r"C:\Users\SondreNorheim\Documents\tiktok_follower_account_sessionid.json"),
-        help="Path to TikTok session JSON with {'sessionid': '...'} (or set TIKTOK_SESSION_FILE env var).",
-    )
-    parser.add_argument(
-        "--caption-template",
-        default="Day {day_number} of making my followers battle every day! Follow to enter the battle 🥊\n\nCheck the link in the bio for your result and overall monthly ranking!\n\n#followerbattlegrounds",
-        help="Caption template; placeholders: {game_mode}, {day_number}.",
+        "--export-only",
+        action="store_true",
+        help="Run Instagram export only (no stats push or uploads).",
     )
     parser.add_argument(
         "--delay-seconds",
@@ -437,6 +516,11 @@ def parse_args():
         help="Optional git commit message for stats push.",
     )
     parser.add_argument(
+        "--skip-stats",
+        action="store_true",
+        help="Skip stats/history push (uploads only).",
+    )
+    parser.add_argument(
         "--skip-youtube",
         action="store_true",
         help="Skip YouTube uploads (only upload to Instagram/TikTok).",
@@ -444,8 +528,8 @@ def parse_args():
     parser.add_argument(
         "--youtube-privacy",
         choices=["private", "unlisted", "public"],
-        default="private",
-        help="YouTube privacy status (default: private).",
+        default="public",
+        help="YouTube privacy status (default: public).",
     )
     parser.add_argument(
         "--youtube-schedule-hours",
@@ -532,11 +616,17 @@ def main():
     game_modes = getattr(config, "ALL_GAME_MODES", [])
     video_paths = [build_video_path(gm) for gm in game_modes]
 
-    print("📦 Pushing stats/history to GitHub...")
-    push_stats(args.push_message)
+    if args.skip_stats:
+        print("⚠️ Skipping stats/history push (--skip-stats).")
+    else:
+        print("📦 Pushing stats/history to GitHub...")
+        push_stats(args.push_message)
 
     if not args.enable_uploads:
-        print("✅ Done (stats pushed only - video upload disabled).")
+        if args.skip_stats:
+            print("✅ Done (stats skipped, video upload disabled).")
+        else:
+            print("✅ Done (stats pushed only - video upload disabled).")
         return
 
     session_path = os.getenv("IG_SESSION_FILE", str(args.session_file))
@@ -610,19 +700,21 @@ def main():
                 print(f"⚠️ Skipping missing video: {video_path}")
                 continue
             game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
-            caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
+            base_caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
+            top_users = get_top_usernames_for_game(config.DAY_NUMBER, game_mode, limit=10)
+            ig_caption = base_caption + format_top_users_block(top_users)
 
             # Instagram upload
             print(f"▶️ IG: Uploading {video_path.name}")
             if args.ig_uploader == "safe":
-                ig_safe.upload_reel(str(video_path), caption, reuse_session=True)
+                ig_safe.upload_reel(str(video_path), ig_caption, reuse_session=True)
             else:
-                upload_instagram(client, video_path, caption)
+                upload_instagram(client, video_path, ig_caption)
 
             # TikTok upload
             if tiktok_session_id:
                 print(f"▶️ TikTok: Uploading {video_path.name}")
-                upload_tiktok(tiktok_session_id, video_path, caption)
+                upload_tiktok(tiktok_session_id, video_path, base_caption)
 
             # YouTube upload
             skip_youtube_modes = set(getattr(config, "YOUTUBE_SKIP_GAME_MODES", []))

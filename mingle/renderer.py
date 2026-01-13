@@ -59,6 +59,7 @@ class MingleRenderer(RendererTemplate):
         subtitle_rect = subtitle_surface.get_rect(center=(center_x, subtitle_y))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
+
     def _draw_day_counter(self, players: List, game_state: dict):
         total_count = len(players)
         day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"

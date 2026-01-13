@@ -68,6 +68,25 @@ class SideChoiceRenderer(RendererTemplate):
                 game_state.get('winner')
             )
 
+    def _draw_title_and_subtitle(self):
+        center_x = self.width // 2
+        title_y = self.game_top - 100
+        subtitle_y = self.game_top - 60
+
+        title_surface = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
+        title_rect = title_surface.get_rect(center=(center_x, title_y))
+        self.screen.blit(title_surface, title_rect)
+
+        subtitle_surface = self.font_subtitle.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
+        subtitle_rect = subtitle_surface.get_rect(center=(center_x, subtitle_y))
+        self.screen.blit(subtitle_surface, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_surface = self.font_small.render(prompt_text, True, config.COLOR_TEXT)
+            prompt_rect = prompt_surface.get_rect(center=(center_x, subtitle_rect.bottom + 6))
+            self.screen.blit(prompt_surface, prompt_rect)
+
     def _draw_game_area(self, players, game_state: dict):
         arena = game_state.get("arena")
         if arena is None:

@@ -13,6 +13,7 @@ from shared import RendererTemplate
 
 class WheelSpinnerRenderer(RendererTemplate):
     GAME_TITLE = "WHEEL SPINNER"
+    GAME_SUBTITLE = "Spinning letters from real follower usernames"
     PLAYER_LABEL = "players"
 
     def __init__(self, screen: pygame.Surface):
@@ -95,6 +96,7 @@ class WheelSpinnerRenderer(RendererTemplate):
         self.rim_highlight_color = getattr(config, "WHEEL_SPINNER_RIM_HIGHLIGHT", (255, 255, 255))
         self.rim_shadow_color = getattr(config, "WHEEL_SPINNER_RIM_SHADOW", (25, 25, 30))
         self.face_border_color = getattr(config, "WHEEL_SPINNER_FACE_BORDER", (20, 20, 20))
+        self.face_border_width = int(getattr(config, "WHEEL_SPINNER_FACE_BORDER_WIDTH", 2))
         self.face_inner_ring_color = getattr(config, "WHEEL_SPINNER_FACE_INNER_RING", (250, 250, 255))
         self.face_inner_ring_shadow = getattr(config, "WHEEL_SPINNER_FACE_INNER_RING_SHADOW", (120, 120, 135))
         self.face_inner_ring_width = int(getattr(config, "WHEEL_SPINNER_FACE_INNER_RING_WIDTH", 4))
@@ -135,6 +137,25 @@ class WheelSpinnerRenderer(RendererTemplate):
 
     def _draw_players(self, players):
         return
+
+    def _draw_title_and_subtitle(self):
+        center_x = self.width // 2
+        title_y = self.game_top - 100
+        subtitle_y = self.game_top - 60
+
+        title_surface = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
+        title_rect = title_surface.get_rect(center=(center_x, title_y))
+        self.screen.blit(title_surface, title_rect)
+
+        subtitle_surface = self.font_subtitle.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
+        subtitle_rect = subtitle_surface.get_rect(center=(center_x, subtitle_y))
+        self.screen.blit(subtitle_surface, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_surface = self.font_small.render(prompt_text, True, config.COLOR_TEXT)
+            prompt_rect = prompt_surface.get_rect(center=(center_x, subtitle_rect.bottom + 4))
+            self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_game_ui(self, players, game_state: dict):
         round_phase = game_state.get("round_phase") or ""
@@ -402,7 +423,8 @@ class WheelSpinnerRenderer(RendererTemplate):
             self._draw_wedge_outline(center, face_radius, seg_start)
             self._draw_option_label(center, face_radius, seg_start, seg_end, option, count)
 
-        pygame.draw.circle(self.screen, self.face_border_color, center, face_radius, 2)
+        if self.face_border_width > 0:
+            pygame.draw.circle(self.screen, self.face_border_color, center, face_radius, self.face_border_width)
         self._draw_face_inner_ring(center, face_radius)
         if self.show_rim_highlights:
             self._draw_rim_highlights(center, radius)

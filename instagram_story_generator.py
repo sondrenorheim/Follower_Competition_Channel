@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import math
+import config
 
 
 def _load_game_history(history_file: str = "game_history.json") -> dict:
@@ -41,7 +42,13 @@ def get_top_3_daily_performers(day_number: int) -> List[Dict]:
     history = _load_game_history()
 
     # Filter games for this day
-    day_games = [g for g in history.get('games', []) if g.get('day_number') == day_number]
+    non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+    day_games = [
+        g for g in history.get('games', [])
+        if g.get('day_number') == day_number
+        and not g.get("non_scoring")
+        and g.get("game_type") not in non_scoring_types
+    ]
 
     if not day_games:
         print(f"WARNING: No games found for day {day_number}")

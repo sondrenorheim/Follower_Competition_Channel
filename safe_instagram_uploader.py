@@ -21,11 +21,13 @@ import argparse
 import json
 import time
 import random
+import re
 from pathlib import Path
 from typing import Optional, Dict, List
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
@@ -99,6 +101,16 @@ class SafeInstagramUploader:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))  # 50-150ms between keystrokes
 
+    def _sanitize_caption(self, text: str) -> str:
+        """Strip non-BMP characters to avoid ChromeDriver send_keys errors."""
+        if not text:
+            return text
+        sanitized = "".join(char for char in text if ord(char) <= 0xFFFF)
+        if sanitized != text:
+            removed = len(text) - len(sanitized)
+            self._log(f"Caption contained {removed} non-BMP characters; stripped for ChromeDriver.", "WARN")
+        return sanitized
+
     def _safe_click(self, element, label: str = "") -> bool:
         try:
             element.click()
@@ -116,6 +128,257 @@ class SafeInstagramUploader:
     def _attempt_cover_selection(self) -> bool:
         self._log("Checking for cover/thumbnail options...")
         try:
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            slider_selectors = [
+                'input[type="range"]',
+                'input[role="slider"]',
+                '//*[@role="slider"]'
+            ]
+
+            def read_slider_state(slider) -> tuple[float | None, float | None]:
+                value = None
+                transform_x = None
+                try:
+                    value_raw = slider.get_attribute("aria-valuenow")
+                    if value_raw is not None:
+                        value = float(value_raw)
+                except Exception:
+                    value = None
+
+                try:
+                    style = slider.get_attribute("style") or ""
+                    match = re.search(r"translate3d\\(([-0-9.]+)px", style)
+                    if match:
+                        transform_x = float(match.group(1))
+                except Exception:
+                    transform_x = None
+
+                return value, transform_x
+
+            def slider_moved(before: tuple[float | None, float | None], after: tuple[float | None, float | None]) -> bool:
+                before_val, before_x = before
+                after_val, after_x = after
+                if before_val is not None and after_val is not None and abs(after_val - before_val) > 0.01:
+                    return True
+                if before_x is not None and after_x is not None and abs(after_x - before_x) > 0.5:
+                    return True
+                return False
+
+            def find_slider():
+                for slider_sel in slider_selectors:
+                    try:
+                        if slider_sel.startswith('//'):
+                            sliders = self.driver.find_elements(By.XPATH, slider_sel)
+                        else:
+                            sliders = self.driver.find_elements(By.CSS_SELECTOR, slider_sel)
+                        for candidate in sliders:
+                            try:
+                                if not candidate.is_displayed():
+                                    continue
+                            except Exception:
+                                pass
+                            size = candidate.size or {}
+                            if size.get("width", 0) > 0 and size.get("height", 0) > 0:
+                                return candidate
+                    except Exception:
+                        continue
+                return None
+
+            def drag_slider_to_middle(slider) -> bool:
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                        slider,
+                    )
+                except Exception:
+                    pass
+
+                before_state = read_slider_state(slider)
+                actions = ActionChains(self.driver)
+                rect = slider.rect or {}
+                width = float(rect.get("width", 0) or 0)
+                height = float(rect.get("height", 0) or 0)
+                if width <= 0 or height <= 0:
+                    self._log("Slider rect unavailable, clicking as fallback", "WARN")
+                    actions.move_to_element(slider).click().perform()
+                    return False
+
+                track_rect = self.driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    const elRect = el.getBoundingClientRect();
+                    let parent = el.parentElement;
+                    while (parent) {
+                        const r = parent.getBoundingClientRect();
+                        if (r.width > elRect.width + 10 && r.height >= elRect.height) {
+                            return {x: r.x, y: r.y, width: r.width, height: r.height};
+                        }
+                        parent = parent.parentElement;
+                    }
+                    return null;
+                    """,
+                    slider,
+                )
+
+                rect_x = float(rect.get("x", rect.get("left", 0)) or 0)
+                rect_y = float(rect.get("y", rect.get("top", 0)) or 0)
+                center_x = rect_x + width / 2
+                center_y = rect_y + height / 2
+                offset_x = int(width * 0.5)
+                current_val, current_transform = before_state
+                if track_rect and track_rect.get("width", 0):
+                    track_x = float(track_rect.get("x", track_rect.get("left", 0)) or 0)
+                    track_width = float(track_rect.get("width", 0) or 0)
+                    target_x = track_x + (track_width * 0.5)
+                    offset_x = int(target_x - center_x)
+                    if current_transform is not None:
+                        offset_x = int((track_width * 0.5) - current_transform)
+
+                steps = 5
+                step_offset = offset_x / steps if steps else offset_x
+                actions.move_to_element_with_offset(slider, int(width / 2), int(height / 2))
+                actions.click_and_hold()
+                for _ in range(steps):
+                    actions.move_by_offset(step_offset, 0)
+                actions.release()
+                actions.perform()
+
+                after_state = read_slider_state(slider)
+                if slider_moved(before_state, after_state):
+                    return True
+
+                try:
+                    if track_rect and track_rect.get("width", 0):
+                        track_x = float(track_rect.get("x", track_rect.get("left", 0)) or 0)
+                        track_y = float(track_rect.get("y", track_rect.get("top", 0)) or 0)
+                        track_width = float(track_rect.get("width", 0) or 0)
+                        track_height = float(track_rect.get("height", 0) or 0)
+                        start_x = track_x + 2
+                        start_y = track_y + (track_height / 2)
+                        target_x = track_x + (track_width * 0.5)
+                        target_y = start_y
+                    else:
+                        start_x = center_x
+                        start_y = center_y
+                        target_x = center_x + offset_x
+                        target_y = center_y
+
+                    self._log("Attempting JS drag on cover track...")
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const sx = arguments[1];
+                        const sy = arguments[2];
+                        const ex = arguments[3];
+                        const ey = arguments[4];
+                        function fire(type, x, y, target) {
+                            const evt = new PointerEvent(type, {
+                                bubbles: true,
+                                cancelable: true,
+                                clientX: x,
+                                clientY: y,
+                                pointerType: 'mouse',
+                                buttons: 1
+                            });
+                            target.dispatchEvent(evt);
+                        }
+                        const startTarget = document.elementFromPoint(sx, sy) || el;
+                        const endTarget = document.elementFromPoint(ex, ey) || el;
+                        fire('pointerdown', sx, sy, startTarget);
+                        fire('pointermove', ex, ey, endTarget);
+                        fire('pointerup', ex, ey, endTarget);
+                        startTarget.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, clientX: sx, clientY: sy}));
+                        endTarget.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: ex, clientY: ey}));
+                        endTarget.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, clientX: ex, clientY: ey}));
+                        """,
+                        slider,
+                        float(start_x),
+                        float(start_y),
+                        float(target_x),
+                        float(target_y),
+                    )
+                    after_state = read_slider_state(slider)
+                    if slider_moved(before_state, after_state):
+                        return True
+                except Exception as js_error:
+                    self._log(f"JS drag failed: {js_error}", "WARN")
+
+                if track_rect and track_rect.get("width", 0):
+                    try:
+                        track_x = float(track_rect.get("x", track_rect.get("left", 0)) or 0)
+                        track_y = float(track_rect.get("y", track_rect.get("top", 0)) or 0)
+                        track_width = float(track_rect.get("width", 0) or 0)
+                        track_height = float(track_rect.get("height", 0) or 0)
+                        click_x = track_x + (track_width * 0.5)
+                        click_y = track_y + (track_height / 2)
+                        self._log("Attempting JS click on cover track midpoint...")
+                        self.driver.execute_script(
+                            """
+                            const x = arguments[0];
+                            const y = arguments[1];
+                            const target = document.elementFromPoint(x, y);
+                            if (target) {
+                                target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, clientX: x, clientY: y}));
+                                target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, clientX: x, clientY: y}));
+                                target.click();
+                            }
+                            """,
+                            float(click_x),
+                            float(click_y),
+                        )
+                        after_state = read_slider_state(slider)
+                        if slider_moved(before_state, after_state):
+                            return True
+                    except Exception as click_error:
+                        self._log(f"Track midpoint click failed: {click_error}", "WARN")
+
+                return False
+
+            def adjust_slider() -> tuple[bool, bool]:
+                self._log("Looking for thumbnail slider...")
+                slider = find_slider()
+                if not slider:
+                    self._log("No slider found, using default frame")
+                    return False, False
+
+                try:
+                    if drag_slider_to_middle(slider):
+                        self._human_delay(1, 2)
+                        self._log("Selected middle frame of video for thumbnail")
+                        return True, True
+                except Exception as slider_error:
+                    self._log(f"Could not drag slider: {slider_error}", "WARN")
+
+                try:
+                    self.driver.execute_script("arguments[0].focus();", slider)
+                    slider.click()
+                    self._human_delay(0.2, 0.4)
+                    try:
+                        min_val = float(slider.get_attribute("aria-valuemin") or 0)
+                        max_val = float(slider.get_attribute("aria-valuemax") or 100)
+                        current_val = float(slider.get_attribute("aria-valuenow") or 0)
+                        target_val = (min_val + max_val) / 2
+                        step_count = int(abs(target_val - current_val))
+                    except Exception:
+                        step_count = 50
+
+                    step_count = max(1, min(120, step_count))
+                    step_key = Keys.ARROW_RIGHT
+                    before_state = read_slider_state(slider)
+                    for _ in range(step_count):
+                        slider.send_keys(step_key)
+                    self._human_delay(0.4, 0.8)
+                    after_state = read_slider_state(slider)
+                    if slider_moved(before_state, after_state):
+                        self._log("Selected middle frame of video for thumbnail (keys)")
+                        return True, True
+                    self._log("Slider key adjustment had no effect", "WARN")
+                    return True, False
+                except Exception as key_error:
+                    self._log(f"Slider key adjustment failed: {key_error}", "WARN")
+                    return True, False
+
             # Look for "Add cover" or "Edit cover" button
             cover_selectors = [
                 "//button[contains(text(), 'Add cover')]",
@@ -136,45 +399,9 @@ class SafeInstagramUploader:
                         continue
                     self._human_delay(2, 3)
 
-                    # Try to find and drag the thumbnail slider to the middle
-                    self._log("Looking for thumbnail slider...")
-                    try:
-                        from selenium.webdriver.common.action_chains import ActionChains
-
-                        # Look for slider/range input
-                        slider_selectors = [
-                            'input[type="range"]',
-                            'input[role="slider"]',
-                            '//*[@role="slider"]'
-                        ]
-
-                        slider = None
-                        for slider_sel in slider_selectors:
-                            try:
-                                if slider_sel.startswith('//'):
-                                    slider = self.driver.find_element(By.XPATH, slider_sel)
-                                else:
-                                    slider = self.driver.find_element(By.CSS_SELECTOR, slider_sel)
-                                self._log("Found slider!")
-                                break
-                            except NoSuchElementException:
-                                continue
-
-                        if slider:
-                            # Move to center of slider element
-                            actions = ActionChains(self.driver)
-                            actions.move_to_element(slider).perform()
-                            self._human_delay(0.5, 1)
-
-                            # Click at the center of the slider
-                            actions.click().perform()
-                            self._log("Selected middle frame of video for thumbnail")
-                            self._human_delay(1, 2)
-                        else:
-                            self._log("No slider found, using default frame")
-
-                    except Exception as slider_error:
-                        self._log(f"Could not adjust slider: {slider_error}")
+                    found_slider, moved = adjust_slider()
+                    if found_slider and not moved:
+                        self._log("Cover slider found but could not move", "WARN")
 
                     # Close cover selector if there's a done/save button
                     try:
@@ -206,7 +433,14 @@ class SafeInstagramUploader:
                     continue
 
             if not cover_button:
-                self._log("No cover selection option - using default thumbnail")
+                self._log("No cover selection option - trying slider directly")
+                found_slider, moved = adjust_slider()
+                if moved:
+                    return True
+                if found_slider:
+                    self._log("Cover slider found but could not move - using default thumbnail", "WARN")
+                else:
+                    self._log("No slider found after cover check - using default thumbnail")
             return False
 
         except Exception as e:
@@ -379,6 +613,7 @@ class SafeInstagramUploader:
             self._log(f"Video not found: {video_path}", "ERROR")
             return False
 
+        caption = self._sanitize_caption(caption)
         self._log(f"Video file: {video_path.name}")
         self._log(f"Video size: {video_path.stat().st_size / 1024 / 1024:.1f} MB")
         self._log(f"Caption: {caption[:50]}..." if len(caption) > 50 else f"Caption: {caption}")

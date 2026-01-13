@@ -162,6 +162,11 @@ class PlatformerRenderer:
         subtitle_center = (config.SCREEN_WIDTH // 2, 100)
         self._draw_text_with_shadow(subtitle_text, self.font_subtitle, (0, 0, 0), subtitle_center, shadow_offset=2)
 
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_center = (config.SCREEN_WIDTH // 2, subtitle_center[1] + 26)
+            self._draw_text_with_shadow(prompt_text, self.font_small, (0, 0, 0), prompt_center, shadow_offset=1)
+
     def _draw_game_area_border(self):
         """Draw enhanced border with shadow and bevel effect"""
         border_rect = pygame.Rect(

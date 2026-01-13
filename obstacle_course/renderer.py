@@ -429,14 +429,20 @@ class ObstacleCourseRenderer:
         # Draw title above track (just above the top track wall)
         title_text = "OBSTACLE COURSE RACE"
         title_surface = self.font_title.render(title_text, True, (0, 0, 0))
-        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 80))
+        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 70))
         self.screen.blit(title_surface, title_rect)
 
         # Draw subtitle above track
         subtitle_text = "Making my followers battle every day"
         subtitle_surface = self.font_subtitle.render(subtitle_text, True, (0, 0, 0))
-        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 115))
+        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 105))
         self.screen.blit(subtitle_surface, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_surface = self.font_promo.render(prompt_text, True, (0, 0, 0))
+            prompt_rect = prompt_surface.get_rect(center=(config.SCREEN_WIDTH // 2, subtitle_rect.bottom + 6))
+            self.screen.blit(prompt_surface, prompt_rect)
 
         # Draw day counter right below the track (close to bottom barrier)
         day_text = f"Day {config.DAY_NUMBER}: {total_racers} racers"

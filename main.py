@@ -14,6 +14,12 @@ import math
 import time
 import sys
 import os
+import socket
+import subprocess
+import shutil
+import urllib.request
+import json
+from pathlib import Path
 from typing import List
 import shared.api as shared_api
 
@@ -48,6 +54,7 @@ from shared import (
 from battle_royale import Follower, Arena, Renderer
 
 _DEFAULT_FOLLOWER_IMPORT_FILE = getattr(config, "FOLLOWER_IMPORT_FILE", "")
+_LOG_HANDLES = []
 
 
 def _get_follower_import_file(game_mode: str) -> str:
@@ -57,6 +64,129 @@ def _get_follower_import_file(game_mode: str) -> str:
         if override:
             return override
     return _DEFAULT_FOLLOWER_IMPORT_FILE
+
+
+def _http_get_json(url: str, timeout: float = 0.5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            if response.status != 200:
+                return None
+            data = response.read()
+        return json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _is_port_open(host: str, port: int, timeout: float = 0.3) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _start_process_in_new_console(
+    command: list[str],
+    cwd: str,
+    hidden: bool = False,
+    log_path: Path | None = None,
+    env: dict | None = None,
+):
+    try:
+        stdout_target = None
+        stderr_target = None
+        if hidden and log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = open(log_path, "a", encoding="utf-8")
+            _LOG_HANDLES.append(log_file)
+            stdout_target = log_file
+            stderr_target = log_file
+
+        if os.name == "nt":
+            if hidden:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            else:
+                flags = subprocess.CREATE_NEW_CONSOLE
+            subprocess.Popen(
+                command,
+                cwd=cwd,
+                creationflags=flags,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                env=env,
+            )
+        else:
+            subprocess.Popen(
+                command,
+                cwd=cwd,
+                start_new_session=True,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                env=env,
+            )
+        return True
+    except Exception as exc:
+        print(f"Warning: Failed to start process {command}: {exc}")
+        return False
+
+
+def _ensure_webhook_services():
+    if not getattr(config, "AUTO_START_WEBHOOK_SERVICES", False):
+        return
+
+    base_dir = Path(__file__).resolve().parent
+    log_dir = Path(getattr(config, "WEBHOOK_SERVICE_LOG_DIR", "logs/webhook_services"))
+    hidden = bool(getattr(config, "WEBHOOK_SERVICE_HEADLESS", False))
+
+    webhook_port = int(getattr(config, "WEBHOOK_SERVER_PORT", 5000))
+    webhook_ok = False
+    if _is_port_open("127.0.0.1", webhook_port):
+        status = _http_get_json(f"http://127.0.0.1:{webhook_port}/")
+        webhook_ok = isinstance(status, dict)
+
+    if not webhook_ok:
+        script_name = getattr(config, "WEBHOOK_SERVER_SCRIPT", "instagram_webhook.py")
+        script_path = base_dir / script_name
+        if script_path.exists():
+            print("Webhook server not running. Starting instagram_webhook.py...")
+            webhook_env = None
+            if hidden:
+                webhook_env = dict(os.environ)
+                webhook_env["WEBHOOK_DEBUG"] = "0"
+                webhook_env["WEBHOOK_USE_RELOADER"] = "0"
+                webhook_env["PYTHONUNBUFFERED"] = "1"
+            _start_process_in_new_console(
+                [sys.executable, str(script_path)],
+                str(base_dir),
+                hidden=hidden,
+                log_path=log_dir / "instagram_webhook.log",
+                env=webhook_env,
+            )
+        else:
+            print(f"Warning: Webhook script not found at {script_path}")
+
+    ngrok_port = int(getattr(config, "NGROK_API_PORT", 4040))
+    ngrok_ok = False
+    if _is_port_open("127.0.0.1", ngrok_port):
+        tunnels = _http_get_json(f"http://127.0.0.1:{ngrok_port}/api/tunnels")
+        if isinstance(tunnels, dict) and tunnels.get("tunnels"):
+            ngrok_ok = True
+
+    if not ngrok_ok:
+        ngrok_path = getattr(config, "NGROK_PATH", "ngrok")
+        ngrok_bin = shutil.which(ngrok_path) or ngrok_path
+        ngrok_http_port = str(getattr(config, "NGROK_HTTP_PORT", 5000))
+        ngrok_log_mode = str(getattr(config, "NGROK_LOG_MODE", "")).strip()
+        print("ngrok not running. Starting ngrok tunnel...")
+        ngrok_command = [ngrok_bin, "http", ngrok_http_port]
+        if ngrok_log_mode:
+            ngrok_command.append(f"--log={ngrok_log_mode}")
+        _start_process_in_new_console(
+            ngrok_command,
+            str(base_dir),
+            hidden=hidden,
+            log_path=log_dir / "ngrok.log",
+        )
 
 
 class FollowerBattleRoyale:
@@ -821,6 +951,8 @@ def main():
     Selects game mode based on config.GAME_MODE
     """
     try:
+        _ensure_webhook_services()
+
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
 

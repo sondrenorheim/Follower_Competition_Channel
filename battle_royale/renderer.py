@@ -415,14 +415,21 @@ class Renderer:
         # "BATTLE ROYALE" title - positioned above subtitle
         title_font = pygame.font.Font(None, 56)
         title_text = title_font.render("BATTLE ROYALE", True, config.COLOR_TEXT)
-        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 50))
+        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70))
         self.screen.blit(title_text, title_rect)
 
         # "Making my followers battle every day" - right above the circle
         subtitle_font = pygame.font.Font(None, 32)
         subtitle_text = subtitle_font.render("Making my followers battle every day", True, config.COLOR_TEXT)
-        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 15))
+        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 35))
         self.screen.blit(subtitle_text, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_font = pygame.font.Font(None, 24)
+            prompt_surface = prompt_font.render(prompt_text, True, config.COLOR_TEXT)
+            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, subtitle_rect.bottom + 6))
+            self.screen.blit(prompt_surface, prompt_rect)
 
         # === BELOW CIRCLE: "Day X: X followers" and stats ===
         day_number = game_state.get("day_number", getattr(config, 'DAY_NUMBER', 1))

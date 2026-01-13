@@ -388,7 +388,6 @@ class VideoRecorder:
             # Audio file paths (cached WAV files)
             audio_files = {
                 'background': 'assets/sydney_tour_music.wav',
-                'countdown': self.countdown_audio_path,
             }
             base_dir = Path(__file__).resolve().parents[1]
             background_path = Path(audio_files['background'])
@@ -396,10 +395,12 @@ class VideoRecorder:
                 background_path = base_dir / background_path
             audio_files['background'] = str(background_path)
 
-            countdown_path = Path(audio_files['countdown'])
-            if not countdown_path.is_absolute():
-                countdown_path = base_dir / countdown_path
-            audio_files['countdown'] = str(countdown_path)
+            countdown_path = None
+            if self.countdown_audio_path:
+                countdown_path = Path(self.countdown_audio_path)
+                if not countdown_path.is_absolute():
+                    countdown_path = base_dir / countdown_path
+                countdown_path = str(countdown_path)
 
             # 1. Add background music (trimmed from beginning to sync ending)
             include_background = getattr(self, "include_background_music", True)
@@ -496,9 +497,9 @@ class VideoRecorder:
                 mixed_audio = mixed_audio.overlay(segment_audio, position=start_ms)
 
             # 3. Add countdown audio at the correct position (when countdown actually starts)
-            if os.path.exists(audio_files['countdown']):
+            if countdown_path and os.path.isfile(countdown_path):
                 print(f"   Adding countdown audio...")
-                countdown_audio = AudioSegment.from_wav(audio_files['countdown'])
+                countdown_audio = AudioSegment.from_wav(countdown_path)
                 countdown_audio = countdown_audio + 3  # Boost volume slightly
 
                 # Calculate countdown start position in milliseconds

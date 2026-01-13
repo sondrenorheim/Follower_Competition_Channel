@@ -616,6 +616,16 @@ class SpleefRenderer:
             font=self.font_small
         )
 
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_w, prompt_h = self._measure_text(draw, prompt_text, self.font_small)
+            draw.text(
+                (self.width // 2 - prompt_w // 2, top + 16 + title_h + 4 + subtitle_h + 4),
+                prompt_text,
+                fill=(170, 190, 230),
+                font=self.font_small
+            )
+
         # Stat cards
         cards_y = bottom - card_height - 12
         card_width = (self.width - (padding * 2) - card_spacing) // 2

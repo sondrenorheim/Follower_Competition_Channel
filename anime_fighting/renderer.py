@@ -15,6 +15,7 @@ import os
 from typing import List, Tuple, Optional
 import pygame
 
+import config
 from .camera_fx import (
     draw_particles, draw_afterimages, draw_hitfields, draw_projectiles, clamp
 )
@@ -208,6 +209,9 @@ class AnimeFightingRenderer:
         finals_wins = match_state.get("finals_wins")
         finals_game = match_state.get("finals_game")
 
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        prompt_y = None
+
         if is_finals and finals_wins:
             # GRAND FINALS header
             title_text = "GRAND FINALS"
@@ -233,6 +237,7 @@ class AnimeFightingRenderer:
             text = self.font_large.render(timer_text, True, (255, 255, 255))
             text_rect = text.get_rect(center=(self.width // 2, y_pos + 105))
             self.screen.blit(text, text_rect)
+            prompt_y = text_rect.bottom + 10
         else:
             # Standard match header
             # Round name (e.g., "Finals", "Semifinals")
@@ -254,6 +259,12 @@ class AnimeFightingRenderer:
             text = self.font_large.render(timer_text, True, (255, 255, 255))
             text_rect = text.get_rect(center=(self.width // 2, y_pos + 85))
             self.screen.blit(text, text_rect)
+            prompt_y = text_rect.bottom + 10
+
+        if prompt_text and prompt_y is not None:
+            prompt_surface = self.font_tiny.render(prompt_text, True, (200, 200, 210))
+            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, prompt_y))
+            self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_fighter_bars(self, fighter1, fighter2):
         """

@@ -59,7 +59,7 @@ class GameHistory:
 
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, indent=2, ensure_ascii=False)
+                json.dump(self.history, f, ensure_ascii=False, separators=(',', ':'))
             print(f"Game history saved ({len(self.history['games'])} total games)")
         except Exception as e:
             print(f"Error saving game history: {e}")
@@ -87,6 +87,7 @@ class GameHistory:
             Dict mapping month keys (YYYY-MM) to metadata about that month's leaderboard
         """
         from collections import defaultdict
+        preview_limit = int(getattr(config, "WEB_RESULTS_PREVIEW_LIMIT", 200) or 0)
 
         # Aggregate stats by month (all games) and by game type
         def stats_bucket():
@@ -171,6 +172,20 @@ class GameHistory:
             with open(leaderboards_dir / filename, 'w', encoding='utf-8') as f:
                 json.dump(month_data, f, ensure_ascii=False, separators=(',', ':'))
 
+            if preview_limit > 0 and len(leaderboard) > preview_limit:
+                preview_filename = f"{month_key}_top.json" if not game_type else f"{month_key}_{game_type}_top.json"
+                preview_data = {
+                    "month": month_key,
+                    "game_type": game_type or "all",
+                    "total_players": len(leaderboard),
+                    "is_preview": True,
+                    "preview_limit": preview_limit,
+                    "total_results": len(leaderboard),
+                    "leaderboard": leaderboard[:preview_limit]
+                }
+                with open(leaderboards_dir / preview_filename, 'w', encoding='utf-8') as f:
+                    json.dump(preview_data, f, ensure_ascii=False, separators=(',', ':'))
+
         # Write monthly leaderboard files
         monthly_stats = {}
 
@@ -207,6 +222,9 @@ class GameHistory:
         base_path = Path(base_dir)
         base_path.mkdir(parents=True, exist_ok=True)
 
+        preview_limit = int(getattr(config, "WEB_RESULTS_PREVIEW_LIMIT", 200) or 0)
+        non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+
         # Create directory structure
         games_dir = base_path / "games"
         days_dir = base_path / "days"
@@ -237,6 +255,25 @@ class GameHistory:
             game_file = games_dir / f"{game_id}.json"
             with open(game_file, 'w', encoding='utf-8') as f:
                 json.dump(game, f, ensure_ascii=False, separators=(',', ':'))
+
+            if preview_limit > 0:
+                results = game.get("results") or []
+                preview_game = {
+                    "game_id": game_id,
+                    "game_type": game.get("game_type"),
+                    "game_display_name": game.get("game_display_name"),
+                    "day_number": game.get("day_number"),
+                    "timestamp": game.get("timestamp"),
+                    "total_participants": game.get("total_participants"),
+                    "results": results[:preview_limit],
+                    "non_scoring": game.get("non_scoring", False),
+                    "is_preview": True,
+                    "preview_limit": preview_limit,
+                    "total_results": len(results)
+                }
+                preview_file = games_dir / f"{game_id}_top.json"
+                with open(preview_file, 'w', encoding='utf-8') as f:
+                    json.dump(preview_game, f, ensure_ascii=False, separators=(',', ':'))
 
             # Organize for aggregation
             if day is not None:
@@ -271,6 +308,69 @@ class GameHistory:
 
             with open(day_file, 'w', encoding='utf-8') as f:
                 json.dump(day_summary, f, ensure_ascii=False, separators=(',', ':'))
+
+            scoring_games = [
+                g for g in day_games
+                if not g.get("non_scoring") and g.get("game_type") not in non_scoring_types
+            ]
+            aggregated = {}
+            for game in scoring_games:
+                for result in game.get("results", []):
+                    username = result.get("username")
+                    if not username:
+                        continue
+                    entry = aggregated.setdefault(username, {
+                        "username": username,
+                        "points": 0,
+                        "kills": 0,
+                        "survival_time": 0,
+                        "appearances": 0
+                    })
+                    entry["points"] += result.get("points", 0) or 0
+                    entry["kills"] += result.get("kills", 0) or 0
+                    entry["survival_time"] += result.get("survival_time", 0) or 0
+                    entry["appearances"] += 1
+
+            aggregated_results = sorted(
+                aggregated.values(),
+                key=lambda x: x.get("points", 0),
+                reverse=True
+            )
+            total_participants = len(aggregated_results)
+            timestamp = max(
+                (g.get("timestamp") for g in scoring_games if g.get("timestamp")),
+                default=None
+            )
+
+            aggregate_game = {
+                "game_id": f"all_day_{day_num}",
+                "game_type": "all",
+                "game_display_name": "All Games",
+                "day_number": day_num,
+                "timestamp": timestamp,
+                "total_participants": total_participants,
+                "results": aggregated_results
+            }
+            aggregate_file = days_dir / f"{day_num}_aggregate.json"
+            with open(aggregate_file, 'w', encoding='utf-8') as f:
+                json.dump(aggregate_game, f, ensure_ascii=False, separators=(',', ':'))
+
+            if preview_limit > 0:
+                aggregate_preview = {
+                    "game_id": aggregate_game["game_id"],
+                    "game_type": aggregate_game["game_type"],
+                    "game_display_name": aggregate_game["game_display_name"],
+                    "day_number": aggregate_game["day_number"],
+                    "timestamp": aggregate_game["timestamp"],
+                    "total_participants": total_participants,
+                    "results": aggregated_results[:preview_limit],
+                    "is_preview": True,
+                    "preview_limit": preview_limit,
+                    "total_results": total_participants
+                }
+                aggregate_preview_file = days_dir / f"{day_num}_aggregate_top.json"
+                with open(aggregate_preview_file, 'w', encoding='utf-8') as f:
+                    json.dump(aggregate_preview, f, ensure_ascii=False, separators=(',', ':'))
 
             game_types = list(set(g.get("game_type") for g in day_games if g.get("game_type")))
             total_participants = len(set(
@@ -407,6 +507,7 @@ class GameHistory:
             "total_games": len(self.history.get("games", [])),
             "total_days": len(all_days),
             "total_followers": total_followers,
+            "results_preview_limit": preview_limit,
             "available_days": sorted(all_days),
             "days_metadata": day_metadata,
             "game_types": sorted(all_types),

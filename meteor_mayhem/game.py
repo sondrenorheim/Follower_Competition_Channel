@@ -857,7 +857,6 @@ class MeteorMayhemGame:
 
         title_text = self.font_title.render("METEOR MAYHEM", True, config.COLOR_TEXT)
         title_rect = title_text.get_rect(center=(self.width // 2, int(arena_top - 50)))
-        self.screen.blit(title_text, title_rect)
 
         subtitle_text = self.font_subtitle.render(
             "Dodge the meteors - last follower standing wins",
@@ -865,7 +864,29 @@ class MeteorMayhemGame:
             config.COLOR_TEXT
         )
         subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, int(arena_top - 15)))
-        self.screen.blit(subtitle_text, subtitle_rect)
+
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_surface = self.font_stats.render(prompt_text, True, config.COLOR_TEXT)
+            spacing = 6
+            prompt_y = subtitle_rect.bottom + spacing
+            max_prompt_y = arena_top - spacing - (prompt_surface.get_height() // 2)
+            if prompt_y > max_prompt_y:
+                shift = prompt_y - max_prompt_y
+                top_margin = 8
+                max_shift = max(0, subtitle_rect.top - top_margin)
+                if shift > 0 and max_shift > 0:
+                    shift = min(shift, max_shift)
+                    title_rect.centery -= int(shift)
+                    subtitle_rect.centery -= int(shift)
+                    prompt_y = subtitle_rect.bottom + spacing
+            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, int(prompt_y)))
+            self.screen.blit(title_text, title_rect)
+            self.screen.blit(subtitle_text, subtitle_rect)
+            self.screen.blit(prompt_surface, prompt_rect)
+        else:
+            self.screen.blit(title_text, title_rect)
+            self.screen.blit(subtitle_text, subtitle_rect)
 
         day_number = getattr(config, 'DAY_NUMBER', 1)
         day_text = self.font_day.render(f"Day {day_number}: {total} followers", True, config.COLOR_TEXT)

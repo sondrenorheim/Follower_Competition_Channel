@@ -848,9 +848,11 @@ class MingleGame(GameTemplate):
         self.intermission_segment_start = None
 
     def _get_recording_timestamp(self) -> float:
+        if getattr(self.recorder, "recording", False):
+            return self.recorder.get_video_duration()
         if getattr(self.recorder, "start_time", None) is not None:
             return max(0.0, time.time() - self.recorder.start_time)
-        return self.recorder.get_video_duration()
+        return 0.0
 
     def _apply_collisions(self):
         alive_players = [p for p in self.players if p.alive]

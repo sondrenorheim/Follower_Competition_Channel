@@ -420,7 +420,11 @@ class WheelSpinnerGame(GameTemplate):
             if progress > tail_start:
                 tail_progress = (progress - tail_start) / tail_fraction
                 progress = tail_start + (tail_progress ** self.tail_power) * tail_fraction
-        return 1.0 - pow(1.0 - progress, self.spin_ease_power)
+        rate = max(0.1, self.spin_ease_power)
+        denom = 1.0 - pow(2.0, -rate)
+        if denom <= 0.0:
+            return progress
+        return (1.0 - pow(2.0, -rate * progress)) / denom
 
     def _lerp(self, start: float, end: float, t: float) -> float:
         return start + (end - start) * t

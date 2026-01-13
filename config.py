@@ -28,17 +28,18 @@ SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO
 # Maximum delta time cap - prevents huge jumps when system lags
 MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 
-
-ALL_GAME_MODES = ["platformer_race", "heads_or_tails", "gorillas_vs_followers", "meteor_mayhem", "fighter_arena", "battle_royale"]
-# ALL_GAME_MODES = [ "battle_royale", "fighter_arena"]
+ALL_GAME_MODES = ["snake_escape", "fighter_arena", "obstacle_course", "meteor_mayhem", "gorillas_vs_followers", "platformer_race", "mingle", "heads_or_tails", "wheel_spinner"]
+# ALL_GAME_MODES = [ "wheel_spinner"]
 NON_SCORING_GAME_TYPES = ["mingle"]
 YOUTUBE_SKIP_GAME_MODES = ["mingle"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
-GAME_MODE = "wheel_spinner" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "ALL"
-TEST_MODE = True
+GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "ALL"
+TEST_MODE = False
 EXPORT_VIDEO = True
-DAY_NUMBER = 50  # Increment this each time you record a new video
+DAY_NUMBER = 53  # Increment this each time you record a new video
+COMMENT_RESULT_PROMPT_TEXT = 'Comment "RESULT" to see how you did'
+WEB_RESULTS_PREVIEW_LIMIT = 200  # Top N results to include in web preview files
 
 # Profile picture settings:
 # - DOWNLOAD_PROFILE_PICTURES: Legacy flag for downloading during game run (slow, not recommended)
@@ -48,14 +49,26 @@ DAY_NUMBER = 50  # Increment this each time you record a new video
 #   1. Run download_all_profile_pics.py once to cache all profile pictures
 #   2. Set LOAD_PROFILE_PICTURES = True to use cached images
 #   3. Games will load instantly from disk cache
-DOWNLOAD_PROFILE_PICTURES = False  # Deprecated - use download_all_profile_pics.py instead
-LOAD_PROFILE_PICTURES = False  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
+DOWNLOAD_PROFILE_PICTURES = True  # Deprecated - use download_all_profile_pics.py instead
+LOAD_PROFILE_PICTURES = True  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
 HEADLESS_MODE = False
 SHOW_NAMETAGS = False
 
+# ===== WEBHOOK SERVICE AUTOSTART =====
+# When True, main.py will check the webhook server + ngrok and start them if missing.
+AUTO_START_WEBHOOK_SERVICES = True
+WEBHOOK_SERVER_SCRIPT = "instagram_webhook.py"
+WEBHOOK_SERVER_PORT = 5000
+NGROK_HTTP_PORT = 5000
+NGROK_API_PORT = 4040
+NGROK_PATH = "ngrok"
+NGROK_LOG_MODE = "stdout"
+WEBHOOK_SERVICE_HEADLESS = True
+WEBHOOK_SERVICE_LOG_DIR = "logs/webhook_services"
+
 # Minimal test players - when True, use generated test users instead of real followers
 TEST_MINIMAL_PLAYERS = False # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 5000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
+TEST_MINIMAL_PLAYER_COUNT = 1000  # Number of test users to generate (minimum 100-200 recommended for Battle Royale)
 # Control whether stats auto-push after each game (set False to review then push manually)
 AUTO_PUSH_STATS = False
 # Control whether video files are included in auto-push (set False to only push stats data)
@@ -667,12 +680,12 @@ WHEEL_SPINNER_RADIUS = 220
 WHEEL_SPINNER_CENTER_Y_OFFSET = 0
 WHEEL_SPINNER_START_ANGLE = 0.0
 WHEEL_SPINNER_WINDUP_DURATION = 0.9
-WHEEL_SPINNER_SPIN_DURATION = 4.0
+WHEEL_SPINNER_SPIN_DURATION = 5.5
 WHEEL_SPINNER_RESULT_DURATION = 2.6
 WHEEL_SPINNER_WINDUP_ANGLE_DEG = 18.0
 WHEEL_SPINNER_SPIN_TURNS_MIN = 4
 WHEEL_SPINNER_SPIN_TURNS_MAX = 7
-WHEEL_SPINNER_SPIN_EASE_POWER = 2.0
+WHEEL_SPINNER_SPIN_EASE_POWER = 8.0
 WHEEL_SPINNER_TAIL_FRACTION = 0.0
 WHEEL_SPINNER_TAIL_POWER = 4.0
 WHEEL_SPINNER_OPTION_TEXT_SIZE = 26
@@ -730,6 +743,7 @@ WHEEL_SPINNER_RIM_COLOR = (54, 54, 64)
 WHEEL_SPINNER_RIM_HIGHLIGHT = (255, 255, 255)
 WHEEL_SPINNER_RIM_SHADOW = (25, 25, 30)
 WHEEL_SPINNER_FACE_BORDER = (20, 20, 20)
+WHEEL_SPINNER_FACE_BORDER_WIDTH = 0
 WHEEL_SPINNER_FACE_INNER_RING = (250, 250, 255)
 WHEEL_SPINNER_FACE_INNER_RING_SHADOW = (120, 120, 135)
 WHEEL_SPINNER_FACE_INNER_RING_WIDTH = 0

@@ -350,6 +350,13 @@ class TeamBattleRenderer:
         subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 20))
         self.screen.blit(subtitle_text, subtitle_rect)
 
+        prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
+        if prompt_text:
+            prompt_font = pygame.font.Font(None, 24)
+            prompt_surface = prompt_font.render(prompt_text, True, config.COLOR_TEXT)
+            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, subtitle_rect.bottom + 6))
+            self.screen.blit(prompt_surface, prompt_rect)
+
         # Day and stats below arena (no background)
         day_number = game_state.get("day_number", getattr(config, 'DAY_NUMBER', 1))
         day_font = pygame.font.Font(None, 36)
