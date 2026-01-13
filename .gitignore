@@ -63,6 +63,7 @@ website/public/game_history_web.json
 
 # Followers export dumps (keep local only)
 Followers/exports/
+TiktokAutoUploader/
 
 # Config with real credentials (optional - uncomment if you want to prevent committing credentials)
 # config.py
