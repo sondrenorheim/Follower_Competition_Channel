@@ -251,7 +251,7 @@ export default function DailyResults() {
   if (loading) {
     return (
       <div className="flex flex-col justify-center items-center min-h-screen bg-dark-bg-primary">
-        <div className="text-6xl animate-bounce-slow mb-4">dY?+</div>
+        <div className="text-6xl animate-bounce-slow mb-4"></div>
         <div className="text-2xl font-bold text-primary animate-pulse">Loading Games...</div>
         <div className="mt-4 flex gap-2">
           <div className="w-3 h-3 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
@@ -299,7 +299,6 @@ export default function DailyResults() {
             {/* Day/Episode Selector */}
             <div className="group">
               <label htmlFor="day-selector" className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
-                <span>dY".</span>
                 <span>Day</span>
               </label>
               <div className="relative">
@@ -334,7 +333,6 @@ export default function DailyResults() {
             {/* Search Bar */}
             <div>
               <label className="block text-sm font-bold text-text-primary mb-2 flex items-center gap-2">
-                <span>dY"?</span>
                 <span>Search Players</span>
               </label>
               <SearchBar value={searchQuery} onChange={setSearchQuery} trackingSource="daily_results" />
