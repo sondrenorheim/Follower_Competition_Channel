@@ -25,6 +25,7 @@ export default function DailyResults() {
   const [indexLoaded, setIndexLoaded] = useState(false);
   const [isLoadingFullResults, setIsLoadingFullResults] = useState(false);
   const initialLoadRef = useRef(true);
+  const fullResultsLoadingRef = useRef(false);
 
   // Load index + metadata on mount
   useEffect(() => {
@@ -185,33 +186,34 @@ export default function DailyResults() {
     };
   }, [selectedGame]);
 
+  const loadFullResults = React.useCallback(async () => {
+    if (!selectedGame || !selectedGame._isPreview) return;
+    if (fullResultsLoadingRef.current) return;
+
+    fullResultsLoadingRef.current = true;
+    setIsLoadingFullResults(true);
+    try {
+      const fullGame = selectedGame.game_type === 'all'
+        ? await loadDayAggregate(selectedGame.day_number, { preview: false })
+        : await loadGame(selectedGame.game_id);
+      if (fullGame) {
+        setSelectedGame(fullGame);
+      }
+    } finally {
+      fullResultsLoadingRef.current = false;
+      setIsLoadingFullResults(false);
+    }
+  }, [selectedGame]);
+
   useEffect(() => {
     if (!selectedGame || !selectedGame._isPreview || !previewInfo) return;
 
     const needsFullResults = searchQuery.trim().length > 0 ||
       (previewInfo.previewPages > 0 && currentPage >= previewInfo.previewPages);
-    if (!needsFullResults || isLoadingFullResults) return;
-
-    let cancelled = false;
-
-    async function loadFullResults() {
-      setIsLoadingFullResults(true);
-      const fullGame = selectedGame.game_type === 'all'
-        ? await loadDayAggregate(selectedGame.day_number, { preview: false })
-        : await loadGame(selectedGame.game_id);
-      if (!cancelled && fullGame) {
-        setSelectedGame(fullGame);
-      }
-      if (!cancelled) {
-        setIsLoadingFullResults(false);
-      }
-    }
+    if (!needsFullResults) return;
 
     loadFullResults();
-    return () => {
-      cancelled = true;
-    };
-  }, [searchQuery, currentPage, selectedGame, previewInfo, isLoadingFullResults]);
+  }, [searchQuery, currentPage, selectedGame, previewInfo, loadFullResults]);
 
   // Sort all results and calculate ranks once per selection, then filter by search
   const rankedResults = React.useMemo(() => {
@@ -371,7 +373,7 @@ export default function DailyResults() {
               </div>
               {previewInfo && previewInfo.totalResults > previewInfo.previewLimit ? (
                 <div className="mt-4 text-sm text-text-muted">
-                  Showing top {previewInfo.previewLimit} of {previewInfo.totalResults} results. Search or go past page {previewInfo.previewPages} to load everything.
+                  Showing top {previewInfo.previewLimit} of {previewInfo.totalResults} results. Search or go to page {previewInfo.previewPages} to load everything.
                 </div>
               ) : null}
               {isLoadingFullResults ? (
