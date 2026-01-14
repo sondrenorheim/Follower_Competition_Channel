@@ -8,11 +8,18 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+try:
+    import config
+    DEFAULT_FOLLOWER_FILE = getattr(config, "FOLLOWER_IMPORT_FILE", "Followers/all_followers_fresh.json")
+except Exception:
+    DEFAULT_FOLLOWER_FILE = "Followers/all_followers_fresh.json"
+
 # Paths
 # Path to latest Instagram export to merge in
 NEW_EXPORT_DIR = r"C:\Users\SondreNorheim\Downloads\instagram-followerbattlegrounds-2025-12-19-5HTOPliS\connections\followers_and_following"
-EXISTING_FILE = "Followers/all_followers_fresh.json"
-BACKUP_FILE = f"Followers/all_followers_fresh_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+EXISTING_FILE = DEFAULT_FOLLOWER_FILE
+_base_name = Path(EXISTING_FILE).stem
+BACKUP_FILE = f"Followers/{_base_name}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
 
 def convert_instagram_entry(entry):
@@ -41,7 +48,8 @@ def convert_instagram_entry(entry):
 
 def append_from_export_dir(export_dir, existing_file=EXISTING_FILE, backup_file=None):
     if not backup_file:
-        backup_file = f"Followers/all_followers_fresh_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        backup_base = Path(existing_file).stem
+        backup_file = f"Followers/{backup_base}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
     print("=" * 60)
     print("  APPEND NEW FOLLOWERS (PRESERVES EXISTING DATA)")

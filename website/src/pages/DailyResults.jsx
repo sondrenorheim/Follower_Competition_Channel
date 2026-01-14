@@ -205,6 +205,16 @@ export default function DailyResults() {
     }
   }, [selectedGame]);
 
+  const handlePageChange = React.useCallback((page) => {
+    setCurrentPage(page);
+    if (!selectedGame || !selectedGame._isPreview || !previewInfo) {
+      return;
+    }
+    if (previewInfo.previewPages > 0 && page >= previewInfo.previewPages) {
+      loadFullResults();
+    }
+  }, [selectedGame, previewInfo, loadFullResults]);
+
   useEffect(() => {
     if (!selectedGame || !selectedGame._isPreview || !previewInfo) return;
 
@@ -398,7 +408,7 @@ export default function DailyResults() {
               }
               itemsPerPage={ITEMS_PER_PAGE}
               currentPage={currentPage}
-              onPageChange={setCurrentPage}
+              onPageChange={handlePageChange}
               trackingSource="daily_results"
             />
           </div>
