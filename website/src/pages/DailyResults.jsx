@@ -189,7 +189,7 @@ export default function DailyResults() {
     if (!selectedGame || !selectedGame._isPreview || !previewInfo) return;
 
     const needsFullResults = searchQuery.trim().length > 0 ||
-      (previewInfo.previewPages > 0 && currentPage > previewInfo.previewPages);
+      (previewInfo.previewPages > 0 && currentPage >= previewInfo.previewPages);
     if (!needsFullResults || isLoadingFullResults) return;
 
     let cancelled = false;

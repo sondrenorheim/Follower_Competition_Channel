@@ -508,7 +508,7 @@ export default function MediaKit() {
             <SocialLink
               platform="TikTok"
               handle="@followerbattlegrounds"
-              url="https://tiktok.com/@followerbattlegrounds"
+              url="https://www.tiktok.com/@followerbattlegro"
               icon={<TikTokIcon className="w-full h-full" />}
             />
             <SocialLink
@@ -626,7 +626,7 @@ export default function MediaKit() {
               <InstagramIcon className="w-6 h-6 text-text-primary" />
             </a>
             <a
-              href="https://tiktok.com/@followerbattlegrounds"
+              href="https://www.tiktok.com/@followerbattlegro"
               target="_blank"
               rel="noopener noreferrer"
               className="bg-dark-bg-secondary hover:bg-dark-surface border border-dark-surface hover:border-primary/50 rounded-full p-4 transition-all duration-300 hover:scale-110"

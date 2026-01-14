@@ -37,7 +37,7 @@ YOUTUBE_SKIP_GAME_MODES = ["mingle"]
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "ALL"
 TEST_MODE = False
 EXPORT_VIDEO = True
-DAY_NUMBER = 53  # Increment this each time you record a new video
+DAY_NUMBER = 54  # Increment this each time you record a new video
 COMMENT_RESULT_PROMPT_TEXT = 'Comment "RESULT" to see how you did'
 WEB_RESULTS_PREVIEW_LIMIT = 200  # Top N results to include in web preview files
 
@@ -204,7 +204,7 @@ VIDEO_FPS = 30  # Export FPS (can be lower than game FPS for smaller file)
 # Streaming mode - write frames directly to disk (prevents memory errors for long videos)
 VIDEO_STREAMING_MODE = True  # True = low memory (unlimited length), False = high quality (limited length)
 
-FOLLOWER_IMPORT_FILE = "Followers/all_followers_fresh.json"
+FOLLOWER_IMPORT_FILE = "Followers/new_followers_fresh.json"
 # Per-game import overrides (keys = game_mode). Example: {"mingle": "Followers/discord_followers.json"}
 FOLLOWER_IMPORT_FILE_BY_MODE = {
     "mingle": "Followers/discord_followers.json",
