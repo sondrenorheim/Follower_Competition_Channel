@@ -3,6 +3,7 @@ Follower Battlegrounds Discord Bot
 Serves game stats and player data via slash commands
 """
 
+import atexit
 import discord
 from discord import app_commands
 import requests
@@ -34,6 +35,23 @@ GLOBAL_RATE_LIMIT_PER_MINUTE = 100
 
 # Discord username links file
 DISCORD_LINKS_FILE = Path(__file__).parent / "discord_links.json"
+PID_FILE = Path(__file__).parent / "discord_bot.pid"
+
+
+def _write_pid_file():
+    try:
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_pid_file():
+    try:
+        PID_FILE.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:
+        pass
 
 class DiscordLinks:
     """Manages Discord username to Instagram username mappings"""
@@ -405,8 +423,8 @@ async def link_command(interaction: discord.Interaction, instagram_username: str
 
     if not can_change:
         await interaction.followup.send(
-            f"❌ You can only change your linked username once per month.\n\n"
-            f"⏰ You can change again in **{days_remaining} days**.\n\n"
+            f"You can only change your linked username once per month.\n\n"
+            f"You can change again in **{days_remaining} days**.\n\n"
             f"This prevents abuse and protects other users' privacy.",
             ephemeral=True
         )
@@ -418,7 +436,7 @@ async def link_command(interaction: discord.Interaction, instagram_username: str
 
     if not stats:
         await interaction.followup.send(
-            f"❌ Instagram username not found: **{instagram_username}**\n\n"
+            f"Instagram username not found: **{instagram_username}**\n\n"
             f"Make sure you've participated in at least one game first!",
             ephemeral=True
         )
@@ -432,17 +450,17 @@ async def link_command(interaction: discord.Interaction, instagram_username: str
 
     if is_update:
         await interaction.followup.send(
-            f"✅ Successfully updated your linked Instagram username to: **{instagram_username}**\n\n"
+            f"Successfully updated your linked Instagram username to: **{instagram_username}**\n\n"
             f"Now others can use `/player {discord_display_name}` to see your stats!\n"
-            f"⚠️ You won't be able to change this again for 30 days.",
+            f"You won't be able to change this again for 30 days.",
             ephemeral=True
         )
     else:
         await interaction.followup.send(
-            f"✅ Successfully linked your Discord account to Instagram username: **{instagram_username}**\n\n"
+            f"Successfully linked your Discord account to Instagram username: **{instagram_username}**\n\n"
             f"Now others can use `/player {discord_display_name}` to see your stats!\n"
             f"Your stats will be displayed with your Discord username.\n\n"
-            f"⚠️ You can only change this once per month to prevent abuse.",
+            f"You can only change this once per month to prevent abuse.",
             ephemeral=True
         )
 
@@ -454,13 +472,13 @@ async def unlink_command(interaction: discord.Interaction):
 
     if discord_links.unlink_user(discord_user_id):
         await interaction.response.send_message(
-            f"✅ Successfully unlinked your Discord account.\n\n"
+            f"Successfully unlinked your Discord account.\n\n"
             f"Your Instagram username is no longer connected to Discord.",
             ephemeral=True
         )
     else:
         await interaction.response.send_message(
-            f"❌ You don't have a linked Instagram account.\n\n"
+            f"You don't have a linked Instagram account.\n\n"
             f"Use `/link <instagram_username>` to link your account first.",
             ephemeral=True
         )
@@ -472,14 +490,14 @@ async def day_command(interaction: discord.Interaction, day: int):
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -492,7 +510,7 @@ async def day_command(interaction: discord.Interaction, day: int):
 
     if not cache.index:
         await interaction.followup.send(
-            "❌ Could not fetch game data. Please try again later.",
+            "Could not fetch game data. Please try again later.",
             ephemeral=True
         )
         return
@@ -502,7 +520,7 @@ async def day_command(interaction: discord.Interaction, day: int):
 
     if not games:
         await interaction.followup.send(
-            f"❌ No games found for Day {day}.",
+            f"No games found for Day {day}.",
             ephemeral=True
         )
         return
@@ -535,19 +553,19 @@ async def day_command(interaction: discord.Interaction, day: int):
 
     # Create embed
     embed = discord.Embed(
-        title=f"📊 Day {day} Stats",
+        title=f"Day {day} Stats",
         description=f"**{len(games)} games played** across {len(game_types)} game modes",
         color=discord.Color.blue()
     )
 
     embed.add_field(
-        name="👥 Participants",
+        name="Participants",
         value=format_number(len(total_participants)),
         inline=True
     )
 
     embed.add_field(
-        name="🎮 Games",
+        name="Games",
         value=f"{len(games)}",
         inline=True
     )
@@ -559,7 +577,7 @@ async def day_command(interaction: discord.Interaction, day: int):
             for i, p in enumerate(top_players)
         ])
         embed.add_field(
-            name="🏆 Top Players",
+            name="Top Players",
             value=top_text,
             inline=False
         )
@@ -570,7 +588,7 @@ async def day_command(interaction: discord.Interaction, day: int):
         game_types_text = game_types_text[:97] + "..."
 
     embed.add_field(
-        name="🎯 Game Modes",
+        name="Game Modes",
         value=game_types_text,
         inline=False
     )
@@ -586,14 +604,14 @@ async def player_command(interaction: discord.Interaction, username: str):
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -606,7 +624,7 @@ async def player_command(interaction: discord.Interaction, username: str):
 
     if not cache.player_index:
         await interaction.followup.send(
-            "❌ Could not fetch player data. Please try again later.",
+            "Could not fetch player data. Please try again later.",
             ephemeral=True
         )
         return
@@ -619,32 +637,32 @@ async def player_command(interaction: discord.Interaction, username: str):
 
     if not stats:
         await interaction.followup.send(
-            f"❌ Player `{username}` not found.",
+            f"Player `{username}` not found.",
             ephemeral=True
         )
         return
 
     # Create embed with display name (Discord username if linked)
     embed = discord.Embed(
-        title=f"📊 {display_name}",
+        title=f"{display_name}",
         color=discord.Color.gold()
     )
 
     # Basic stats
     embed.add_field(
-        name="🎮 Games Played",
+        name="Games Played",
         value=format_number(stats.get('games_played', 0)),
         inline=True
     )
 
     embed.add_field(
-        name="💰 Total Points",
+        name="Total Points",
         value=format_number(stats.get('total_points', 0)),
         inline=True
     )
 
     embed.add_field(
-        name="📈 Avg Points",
+        name="Avg Points",
         value=format_number(stats.get('average_points', 0)),
         inline=True
     )
@@ -652,7 +670,7 @@ async def player_command(interaction: discord.Interaction, username: str):
     # Best placement
     if 'best_placement' in stats:
         embed.add_field(
-            name="🏆 Best Placement",
+            name="Best Placement",
             value=f"#{stats['best_placement']}",
             inline=True
         )
@@ -660,14 +678,14 @@ async def player_command(interaction: discord.Interaction, username: str):
     # Kills and damage
     if 'total_kills' in stats:
         embed.add_field(
-            name="💀 Total Kills",
+            name="Total Kills",
             value=format_number(stats['total_kills']),
             inline=True
         )
 
     if 'total_damage' in stats:
         embed.add_field(
-            name="⚔️ Total Damage",
+            name="Total Damage",
             value=format_number(stats['total_damage']),
             inline=True
         )
@@ -677,7 +695,7 @@ async def player_command(interaction: discord.Interaction, username: str):
         wins = stats.get('wins', 0)
         win_rate = (wins / stats['games_played']) * 100
         embed.add_field(
-            name="🎯 Win Rate",
+            name="Win Rate",
             value=f"{win_rate:.1f}%",
             inline=True
         )
@@ -693,14 +711,14 @@ async def latest_command(interaction: discord.Interaction):
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -713,7 +731,7 @@ async def latest_command(interaction: discord.Interaction):
 
     if not cache.index:
         await interaction.followup.send(
-            "❌ Could not fetch game data. Please try again later.",
+            "Could not fetch game data. Please try again later.",
             ephemeral=True
         )
         return
@@ -723,7 +741,7 @@ async def latest_command(interaction: discord.Interaction):
 
     if latest_day is None:
         await interaction.followup.send(
-            "❌ No games found.",
+            "No games found.",
             ephemeral=True
         )
         return
@@ -745,19 +763,19 @@ async def latest_command(interaction: discord.Interaction):
 
     # Create embed
     embed = discord.Embed(
-        title=f"📊 Latest Day - Day {latest_day}",
+        title=f"Latest Day - Day {latest_day}",
         description=f"**{len(games)} games played** across {len(game_types)} game modes",
         color=discord.Color.green()
     )
 
     embed.add_field(
-        name="👥 Participants",
+        name="Participants",
         value=format_number(len(total_participants)),
         inline=True
     )
 
     embed.add_field(
-        name="🎮 Games",
+        name="Games",
         value=f"{len(games)}",
         inline=True
     )
@@ -768,13 +786,13 @@ async def latest_command(interaction: discord.Interaction):
         game_types_text = game_types_text[:97] + "..."
 
     embed.add_field(
-        name="🎯 Game Modes",
+        name="Game Modes",
         value=game_types_text,
         inline=False
     )
 
     embed.add_field(
-        name="💡 Tip",
+        name="Tip",
         value=f"Use `/day {latest_day}` to see top players!",
         inline=False
     )
@@ -790,14 +808,14 @@ async def today_command(interaction: discord.Interaction):
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -807,7 +825,7 @@ async def today_command(interaction: discord.Interaction):
 
     if not cache.index:
         await interaction.followup.send(
-            "❌ Could not fetch game data. Please try again later.",
+            "Could not fetch game data. Please try again later.",
             ephemeral=True
         )
         return
@@ -816,7 +834,7 @@ async def today_command(interaction: discord.Interaction):
     latest_day = get_latest_day()
     if latest_day is None:
         await interaction.followup.send(
-            "❌ No games found.",
+            "No games found.",
             ephemeral=True
         )
         return
@@ -824,7 +842,7 @@ async def today_command(interaction: discord.Interaction):
     games = await get_games_for_day(latest_day)
     if not games:
         await interaction.followup.send(
-            f"❌ No games found for today.",
+            f"No games found for today.",
             ephemeral=True
         )
         return
@@ -847,7 +865,7 @@ async def today_command(interaction: discord.Interaction):
 
     # Create embed
     embed = discord.Embed(
-        title=f"🏆 Top 10 Players Today (Day {latest_day})",
+        title=f"Top 10 Players Today (Day {latest_day})",
         description=f"{len(games)} games played",
         color=discord.Color.gold()
     )
@@ -873,14 +891,14 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -896,7 +914,7 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
 
     if not cache.index:
         await interaction.followup.send(
-            "❌ Could not fetch game data. Please try again later.",
+            "Could not fetch game data. Please try again later.",
             ephemeral=True
         )
         return
@@ -934,7 +952,7 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
 
     if not player_stats:
         await interaction.followup.send(
-            f"❌ No games found for game type: **{game_type}**\n\nAvailable types: battle_royale, fighter_arena, platformer_race, obstacle_course, snake_escape, team_battle, gorillas_vs_followers",
+            f"No games found for game type: **{game_type}**\n\nAvailable types: battle_royale, fighter_arena, platformer_race, obstacle_course, snake_escape, team_battle, gorillas_vs_followers",
             ephemeral=True
         )
         return
@@ -949,7 +967,7 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
     # Create embed
     game_display = game_type.replace('_', ' ').title()
     embed = discord.Embed(
-        title=f"🎮 Top 10 Players - {game_display}",
+        title=f"Top 10 Players - {game_display}",
         description=f"All-time leaderboard for {game_display}",
         color=discord.Color.purple()
     )
@@ -975,14 +993,14 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -1000,21 +1018,21 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
 
     if not stats1:
         await interaction.followup.send(
-            f"❌ Player not found: **{player1}**",
+            f"Player not found: **{player1}**",
             ephemeral=True
         )
         return
 
     if not stats2:
         await interaction.followup.send(
-            f"❌ Player not found: **{player2}**",
+            f"Player not found: **{player2}**",
             ephemeral=True
         )
         return
 
     # Create comparison embed with display names
     embed = discord.Embed(
-        title=f"⚔️ Player Comparison",
+        title=f"Player Comparison",
         description=f"**{display_name1}** vs **{display_name2}**",
         color=discord.Color.red()
     )
@@ -1022,10 +1040,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Total Points
     p1_points = stats1.get('total_points', 0)
     p2_points = stats2.get('total_points', 0)
-    winner1 = "🏆" if p1_points > p2_points else ""
-    winner2 = "🏆" if p2_points > p1_points else ""
+    winner1 = "" if p1_points > p2_points else ""
+    winner2 = "" if p2_points > p1_points else ""
     embed.add_field(
-        name="💰 Total Points",
+        name="Total Points",
         value=f"{winner1} {format_number(p1_points)} vs {format_number(p2_points)} {winner2}",
         inline=False
     )
@@ -1034,7 +1052,7 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     p1_games = stats1.get('games_played', 0)
     p2_games = stats2.get('games_played', 0)
     embed.add_field(
-        name="🎮 Games Played",
+        name="Games Played",
         value=f"{p1_games} vs {p2_games}",
         inline=True
     )
@@ -1042,10 +1060,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Wins
     p1_wins = stats1.get('wins', 0)
     p2_wins = stats2.get('wins', 0)
-    winner1 = "🏆" if p1_wins > p2_wins else ""
-    winner2 = "🏆" if p2_wins > p1_wins else ""
+    winner1 = "" if p1_wins > p2_wins else ""
+    winner2 = "" if p2_wins > p1_wins else ""
     embed.add_field(
-        name="🥇 Wins",
+        name="Wins",
         value=f"{winner1} {p1_wins} vs {p2_wins} {winner2}",
         inline=True
     )
@@ -1053,10 +1071,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Win Rate
     p1_winrate = (p1_wins / p1_games * 100) if p1_games > 0 else 0
     p2_winrate = (p2_wins / p2_games * 100) if p2_games > 0 else 0
-    winner1 = "🏆" if p1_winrate > p2_winrate else ""
-    winner2 = "🏆" if p2_winrate > p1_winrate else ""
+    winner1 = "" if p1_winrate > p2_winrate else ""
+    winner2 = "" if p2_winrate > p1_winrate else ""
     embed.add_field(
-        name="🎯 Win Rate",
+        name="Win Rate",
         value=f"{winner1} {p1_winrate:.1f}% vs {p2_winrate:.1f}% {winner2}",
         inline=True
     )
@@ -1064,10 +1082,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Best Placement
     p1_best = stats1.get('best_placement', 999)
     p2_best = stats2.get('best_placement', 999)
-    winner1 = "🏆" if p1_best < p2_best else ""
-    winner2 = "🏆" if p2_best < p1_best else ""
+    winner1 = "" if p1_best < p2_best else ""
+    winner2 = "" if p2_best < p1_best else ""
     embed.add_field(
-        name="🏆 Best Placement",
+        name="Best Placement",
         value=f"{winner1} #{p1_best} vs #{p2_best} {winner2}",
         inline=True
     )
@@ -1075,10 +1093,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Total Kills
     p1_kills = stats1.get('total_kills', 0)
     p2_kills = stats2.get('total_kills', 0)
-    winner1 = "🏆" if p1_kills > p2_kills else ""
-    winner2 = "🏆" if p2_kills > p1_kills else ""
+    winner1 = "" if p1_kills > p2_kills else ""
+    winner2 = "" if p2_kills > p1_kills else ""
     embed.add_field(
-        name="💀 Total Kills",
+        name="Total Kills",
         value=f"{winner1} {format_number(p1_kills)} vs {format_number(p2_kills)} {winner2}",
         inline=True
     )
@@ -1086,10 +1104,10 @@ async def compare_command(interaction: discord.Interaction, player1: str, player
     # Total Damage
     p1_damage = stats1.get('total_damage', 0)
     p2_damage = stats2.get('total_damage', 0)
-    winner1 = "🏆" if p1_damage > p2_damage else ""
-    winner2 = "🏆" if p2_damage > p1_damage else ""
+    winner1 = "" if p1_damage > p2_damage else ""
+    winner2 = "" if p2_damage > p1_damage else ""
     embed.add_field(
-        name="⚔️ Total Damage",
+        name="Total Damage",
         value=f"{winner1} {format_number(p1_damage)} vs {format_number(p2_damage)} {winner2}",
         inline=True
     )
@@ -1104,14 +1122,14 @@ async def monthly_command(interaction: discord.Interaction, year: int, month: in
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -1119,7 +1137,7 @@ async def monthly_command(interaction: discord.Interaction, year: int, month: in
     # Validate month
     if month < 1 or month > 12:
         await interaction.response.send_message(
-            "❌ Month must be between 1 and 12.",
+            "Month must be between 1 and 12.",
             ephemeral=True
         )
         return
@@ -1129,7 +1147,7 @@ async def monthly_command(interaction: discord.Interaction, year: int, month: in
 
     if not cache.index:
         await interaction.followup.send(
-            "❌ Could not fetch game data. Please try again later.",
+            "Could not fetch game data. Please try again later.",
             ephemeral=True
         )
         return
@@ -1174,7 +1192,7 @@ async def monthly_command(interaction: discord.Interaction, year: int, month: in
     if not player_stats:
         month_name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
         await interaction.followup.send(
-            f"❌ No games found for {month_name} {year}.",
+            f"No games found for {month_name} {year}.",
             ephemeral=True
         )
         return
@@ -1190,7 +1208,7 @@ async def monthly_command(interaction: discord.Interaction, year: int, month: in
     month_name = ['January', 'February', 'March', 'April', 'May', 'June',
                   'July', 'August', 'September', 'October', 'November', 'December'][month-1]
     embed = discord.Embed(
-        title=f"📅 Top 10 Players - {month_name} {year}",
+        title=f"Top 10 Players - {month_name} {year}",
         description=f"Monthly leaderboard",
         color=discord.Color.blue()
     )
@@ -1216,14 +1234,14 @@ async def alltime_command(interaction: discord.Interaction):
     # Rate limiting
     if not rate_limiter.check_user_limit(interaction.user.id):
         await interaction.response.send_message(
-            "⏱️ You're using commands too quickly! Please wait a moment.",
+            "You're using commands too quickly! Please wait a moment.",
             ephemeral=True
         )
         return
 
     if not rate_limiter.check_global_limit():
         await interaction.response.send_message(
-            "⏱️ The bot is receiving too many requests. Please try again in a moment.",
+            "The bot is receiving too many requests. Please try again in a moment.",
             ephemeral=True
         )
         return
@@ -1233,7 +1251,7 @@ async def alltime_command(interaction: discord.Interaction):
 
     if not cache.player_index:
         await interaction.followup.send(
-            "❌ Could not fetch player data. Please try again later.",
+            "Could not fetch player data. Please try again later.",
             ephemeral=True
         )
         return
@@ -1243,14 +1261,14 @@ async def alltime_command(interaction: discord.Interaction):
 
     if not players:
         await interaction.followup.send(
-            "❌ No player data available.",
+            "No player data available.",
             ephemeral=True
         )
         return
 
     # Create embed
     embed = discord.Embed(
-        title=f"👑 Top 10 All-Time Players",
+        title=f"Top 10 All-Time Players",
         description=f"Total of {cache.player_index.get('total_players', 0):,} players",
         color=discord.Color.gold()
     )
@@ -1310,16 +1328,18 @@ async def cache_refresh_task():
         try:
             await cache.update()
         except Exception as e:
-            print(f"❌ Error in cache refresh task: {e}")
+            print(f"Error in cache refresh task: {e}")
 
 def main():
     """Main entry point"""
     if not DISCORD_TOKEN:
-        print("❌ DISCORD_TOKEN not found in environment variables!")
+        print("DISCORD_TOKEN not found in environment variables!")
         print("Please create a .env file with your Discord bot token.")
         return
 
-    print("🤖 Starting Follower Battlegrounds Discord Bot...")
+    print("Starting Follower Battlegrounds Discord Bot...")
+    _write_pid_file()
+    atexit.register(_clear_pid_file)
     client.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
+import sys
 import time
 import random
 import webbrowser
@@ -24,6 +26,122 @@ import config
 from shared import auto_push, statistics, game_history
 from instagrapi import Client
 from shared import statistics, game_history
+
+_LOG_HANDLES = []
+
+
+def _pid_is_running(pid: int) -> bool:
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return str(pid) in result.stdout
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _start_process_in_new_console(
+    command: list[str],
+    cwd: str,
+    hidden: bool = False,
+    log_path: Path | None = None,
+    env: dict | None = None,
+):
+    try:
+        stdout_target = None
+        stderr_target = None
+        if hidden and log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = open(log_path, "a", encoding="utf-8")
+            _LOG_HANDLES.append(log_file)
+            stdout_target = log_file
+            stderr_target = log_file
+
+        if os.name == "nt":
+            if hidden:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            else:
+                flags = subprocess.CREATE_NEW_CONSOLE
+            subprocess.Popen(
+                command,
+                cwd=cwd,
+                creationflags=flags,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                env=env,
+            )
+        else:
+            subprocess.Popen(
+                command,
+                cwd=cwd,
+                start_new_session=True,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                env=env,
+            )
+        return True
+    except Exception as exc:
+        print(f"Warning: Failed to start process {command}: {exc}")
+        return False
+
+
+def _ensure_discord_bot():
+    if not getattr(config, "AUTO_START_DISCORD_BOT", False):
+        return
+
+    base_dir = Path(__file__).resolve().parent
+    log_dir = Path(getattr(config, "DISCORD_BOT_LOG_DIR", "logs/discord_bot"))
+    hidden = bool(getattr(
+        config,
+        "DISCORD_BOT_HEADLESS",
+        getattr(config, "WEBHOOK_SERVICE_HEADLESS", False),
+    ))
+
+    script_name = getattr(config, "DISCORD_BOT_SCRIPT", "discord_bot/bot.py")
+    script_path = base_dir / script_name
+    if not script_path.exists():
+        print(f"Warning: Discord bot script not found at {script_path}")
+        return
+
+    pid_path = Path(getattr(config, "DISCORD_BOT_PID_FILE", "discord_bot/discord_bot.pid"))
+    if not pid_path.is_absolute():
+        pid_path = base_dir / pid_path
+
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            pid = None
+        if pid and _pid_is_running(pid):
+            return
+        try:
+            pid_path.unlink()
+        except Exception:
+            pass
+
+    print("Discord bot not running. Starting discord_bot/bot.py...")
+    bot_env = None
+    if hidden:
+        bot_env = dict(os.environ)
+        bot_env["PYTHONUNBUFFERED"] = "1"
+    _start_process_in_new_console(
+        [sys.executable, str(script_path)],
+        str(base_dir),
+        hidden=hidden,
+        log_path=log_dir / "discord_bot.log",
+        env=bot_env,
+    )
 
 
 def build_video_path(game_mode: str) -> Path:
@@ -587,6 +705,7 @@ def run_ig_export(ig_persistent, args):
 
 def main():
     args = parse_args()
+    _ensure_discord_bot()
     if args.ig_export_after_uploads and not args.ig_export_followers:
         args.ig_export_followers = True
 

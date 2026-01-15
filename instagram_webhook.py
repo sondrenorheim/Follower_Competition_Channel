@@ -84,6 +84,8 @@ GAME_MODE_ALIASES = {
     "meteor_mayhem": "meteor_mayhem",
     "anime fighting": "anime_fighting",
     "anime_fighting": "anime_fighting",
+    "maze rush": "maze_rush",
+    "maze_rush": "maze_rush",
 }
 
 GAME_DISPLAY_NAMES = {
@@ -100,6 +102,7 @@ GAME_DISPLAY_NAMES = {
     "gorillas_vs_followers": "Gorillas vs Followers",
     "meteor_mayhem": "Meteor Mayhem",
     "anime_fighting": "Anime Fighting",
+    "maze_rush": "Maze Rush",
 }
 
 DATA_ROOT = BASE_DIR / "website" / "public" / "api"

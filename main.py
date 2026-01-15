@@ -85,6 +85,27 @@ def _is_port_open(host: str, port: int, timeout: float = 0.3) -> bool:
         return False
 
 
+def _pid_is_running(pid: int) -> bool:
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return str(pid) in result.stdout
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
 def _start_process_in_new_console(
     command: list[str],
     cwd: str,
@@ -187,6 +208,54 @@ def _ensure_webhook_services():
             hidden=hidden,
             log_path=log_dir / "ngrok.log",
         )
+
+
+def _ensure_discord_bot():
+    if not getattr(config, "AUTO_START_DISCORD_BOT", False):
+        return
+
+    base_dir = Path(__file__).resolve().parent
+    log_dir = Path(getattr(config, "DISCORD_BOT_LOG_DIR", "logs/discord_bot"))
+    hidden = bool(getattr(
+        config,
+        "DISCORD_BOT_HEADLESS",
+        getattr(config, "WEBHOOK_SERVICE_HEADLESS", False),
+    ))
+
+    script_name = getattr(config, "DISCORD_BOT_SCRIPT", "discord_bot/bot.py")
+    script_path = base_dir / script_name
+    if not script_path.exists():
+        print(f"Warning: Discord bot script not found at {script_path}")
+        return
+
+    pid_path = Path(getattr(config, "DISCORD_BOT_PID_FILE", "discord_bot/discord_bot.pid"))
+    if not pid_path.is_absolute():
+        pid_path = base_dir / pid_path
+
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            pid = None
+        if pid and _pid_is_running(pid):
+            return
+        try:
+            pid_path.unlink()
+        except Exception:
+            pass
+
+    print("Discord bot not running. Starting discord_bot/bot.py...")
+    bot_env = None
+    if hidden:
+        bot_env = dict(os.environ)
+        bot_env["PYTHONUNBUFFERED"] = "1"
+    _start_process_in_new_console(
+        [sys.executable, str(script_path)],
+        str(base_dir),
+        hidden=hidden,
+        log_path=log_dir / "discord_bot.log",
+        env=bot_env,
+    )
 
 
 class FollowerBattleRoyale:
@@ -870,6 +939,10 @@ def _create_game_instance(game_mode: str):
         from fighter_arena import FighterBattleArena
         print("Starting Fighter Arena mode...")
         return FighterBattleArena()
+    elif game_mode == "maze_rush":
+        from maze_rush import MazeRushGame
+        print("Starting Maze Rush mode...")
+        return MazeRushGame()
     elif game_mode == "anime_fighting":
         from anime_fighting import AnimeFightingGame
         print("Starting Anime Fighting mode...")
@@ -952,6 +1025,7 @@ def main():
     """
     try:
         _ensure_webhook_services()
+        _ensure_discord_bot()
 
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
