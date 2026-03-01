@@ -124,3 +124,15 @@ Followers/missing_profile_pics/missing_profile_pics_001.json
 Followers/missing_profile_pics/missing_profile_pics_002.json
 Followers/missing_profile_pics/missing_profile_pics_003.json
 Followers/missing_profile_pics/missing_profile_pics_004.json
+
+# Local temp/recovery JSON dumps (not for remote)
+/tmp_*.json
+/tmp_*_games.json
+/tmp_*_game_history.json
+/tmp_backup_day_*_games.json
+/tmp_recovered_day_*_games.json
+/tmp_stash1_day_*_games.json
+/tmp_stash1_game_history.json
+/game_history_backup_*.json
+/game_history_recovered.json
+/day_*_games.json
