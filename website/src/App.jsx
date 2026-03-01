@@ -6,6 +6,8 @@ import MonthlyRankings from './pages/MonthlyRankings';
 import PlayerProfile from './pages/PlayerProfile';
 import MediaKit from './pages/MediaKit';
 import Privacy from './pages/Privacy';
+import HallOfFame from './pages/HallOfFame';
+import MemberClub from './pages/MemberClub';
 
 function AppContent() {
   const location = useLocation();
@@ -26,6 +28,8 @@ function AppContent() {
       <Routes>
         <Route path="/" element={<DailyResults />} />
         <Route path="/monthly" element={<MonthlyRankings />} />
+        <Route path="/hall-of-fame" element={<HallOfFame />} />
+        <Route path="/member-club" element={<MemberClub />} />
         <Route path="/player/:username" element={<PlayerProfile />} />
         <Route path="/mediakit" element={<MediaKit />} />
         <Route path="/privacy" element={<Privacy />} />
