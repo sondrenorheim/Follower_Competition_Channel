@@ -7,9 +7,12 @@ Includes HP bars, rectangular arena, and combat effects
 import pygame
 import math
 import os
+import time
 from typing import List, Tuple, Optional
 from PIL import Image
 import config
+from shared.avatar_initials import draw_avatar_initials
+from shared.club_panel import draw_club_panel
 from .fighter import Fighter
 from .arena import FighterArena
 
@@ -37,6 +40,9 @@ class FighterRenderer:
         self.font_large = pygame.font.Font(None, 48)
         self.font_huge = pygame.font.Font(None, 72)
         self.font_promo = pygame.font.Font(None, 24)
+        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
+        self.font_club_panel = pygame.font.Font(None, club_text_size)
+        self._club_panel_bottom = None
         self.promo_text_left = "Join Discord, link in bio"
         self.promo_text_right = "Check your results in bio"
         self.discord_logo = None
@@ -46,6 +52,9 @@ class FighterRenderer:
         # Cache for fighter surfaces - stores (surface, radius) tuples
         self.fighter_surfaces = {}
         self.cached_radius = {}
+        self.fighter_display_surfaces = {}
+        self.cached_display_radius = {}
+        self._club_glow_cache = {}
 
         # Animation state
         self.show_podium = False
@@ -81,7 +90,10 @@ class FighterRenderer:
         self._draw_arena(arena)
 
         # Draw fighters with HP bars
-        self._draw_fighters(fighters)
+        alive_count = game_state.get("alive_count")
+        if alive_count is None:
+            alive_count = sum(1 for f in fighters if f.alive)
+        self._draw_fighters(fighters, alive_count=alive_count)
 
         # Draw particles
         if particle_system:
@@ -137,7 +149,7 @@ class FighterRenderer:
             3  # Border width
         )
 
-    def _draw_fighters(self, fighters: List[Fighter]):
+    def _draw_fighters(self, fighters: List[Fighter], alive_count: int = None):
         """
         Draw all fighters with their avatars and HP bars
 
@@ -145,42 +157,107 @@ class FighterRenderer:
             fighters: List of all fighters
         """
         # Count alive fighters to determine if we should show HP bars
-        alive_count = sum(1 for f in fighters if f.alive)
+        if alive_count is None:
+            alive_count = sum(1 for f in fighters if f.alive)
         show_hp_bars = alive_count <= 200
+        show_nametags = alive_count <= config.NAMETAG_MAX_ALIVE_FIGHTER_ARENA
+        fade_cutoff = time.time() - float(getattr(config, "FADE_DURATION", 0.5))
+        display_size = int(config.FOLLOWER_RADIUS * 2)
 
+        club_fighters = []
         for fighter in fighters:
             # Skip if completely faded out
-            if not fighter.alive and not fighter.is_fading():
+            if not fighter.alive and fighter.elimination_time < fade_cutoff:
                 continue
+            if getattr(fighter, "is_club_member", False):
+                club_fighters.append(fighter)
+                continue
+            self._draw_single_fighter(
+                fighter,
+                display_size=display_size,
+                show_hp_bars=show_hp_bars,
+                show_nametags=show_nametags,
+                fade_cutoff=fade_cutoff,
+            )
 
-            # Get or create fighter surface
-            surface = self._get_fighter_surface(fighter)
+        for fighter in club_fighters:
+            self._draw_club_glow(fighter, display_size)
+            self._draw_single_fighter(
+                fighter,
+                display_size=display_size,
+                show_hp_bars=show_hp_bars,
+                show_nametags=show_nametags,
+                fade_cutoff=fade_cutoff,
+            )
 
-            # Apply alpha for fade out
-            if fighter.alpha < 255:
-                surface = surface.copy()
-                surface.set_alpha(fighter.alpha)
+    def _draw_single_fighter(
+        self,
+        fighter: Fighter,
+        display_size: int,
+        show_hp_bars: bool,
+        show_nametags: bool,
+        fade_cutoff: float,
+    ) -> None:
+        # Get or create fighter display surface.
+        display_surface = self._get_fighter_display_surface(fighter, display_size)
+        if fighter.alpha < 255:
+            display_surface = display_surface.copy()
+            display_surface.set_alpha(fighter.alpha)
 
-            # Draw fighter (scale down high-res surface to display size)
-            pos = fighter.get_position()
-            display_size = int(config.FOLLOWER_RADIUS * 2)
+        pos = fighter.get_position()
 
-            # If surface is higher resolution, scale it down for display
-            if surface.get_width() != display_size:
-                display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
-            else:
-                display_surface = surface
+        rect = display_surface.get_rect(center=(int(pos[0]), int(pos[1])))
+        self.screen.blit(display_surface, rect)
 
-            rect = display_surface.get_rect(center=(int(pos[0]), int(pos[1])))
-            self.screen.blit(display_surface, rect)
+        # Draw HP bar above fighter (only if <= 1000 fighters alive)
+        if show_hp_bars and (fighter.alive or fighter.is_fading()):
+            self._draw_hp_bar(fighter)
 
-            # Draw HP bar above fighter (only if <= 1000 fighters alive)
-            if show_hp_bars and (fighter.alive or fighter.is_fading()):
-                self._draw_hp_bar(fighter)
+        # Draw nametag below fighter (same threshold as HP bars)
+        if show_nametags and (fighter.alive or fighter.elimination_time >= fade_cutoff):
+            self._draw_fighter_name(fighter)
 
-            # Draw nametag below fighter (same threshold as HP bars)
-            if alive_count <= config.NAMETAG_MAX_ALIVE_FIGHTER_ARENA and (fighter.alive or fighter.is_fading()):
-                self._draw_fighter_name(fighter)
+    def _draw_club_glow(self, fighter: Fighter, display_size: int) -> None:
+        size = max(1, int(display_size))
+        radius = max(1, size // 2)
+        color = getattr(config, "CLUB_GLOW_COLOR", (255, 240, 190))
+        alpha = int(getattr(config, "CLUB_GLOW_ALPHA", 180))
+        layers = int(getattr(config, "CLUB_GLOW_LAYERS", 3))
+        padding = int(getattr(config, "CLUB_GLOW_PADDING", 3))
+
+        cache_key = (radius, color, alpha, layers, padding)
+        surface = self._club_glow_cache.get(cache_key)
+        if surface is None:
+            glow_radius = radius + padding + layers
+            size_px = glow_radius * 2 + 4
+            surface = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
+            center = (size_px // 2, size_px // 2)
+
+            base_radius = radius + padding
+            for i in range(max(1, layers)):
+                layer_alpha = int(alpha * (1.0 - (i / max(1, layers))))
+                ring_radius = base_radius + i
+                pygame.draw.circle(
+                    surface,
+                    (*color, layer_alpha),
+                    center,
+                    ring_radius,
+                    width=2,
+                )
+
+            inner_alpha = min(255, alpha + 40)
+            pygame.draw.circle(
+                surface,
+                (*color, inner_alpha),
+                center,
+                radius + 1,
+                width=2,
+            )
+
+            self._club_glow_cache[cache_key] = surface
+
+        rect = surface.get_rect(center=(int(fighter.x), int(fighter.y)))
+        self.screen.blit(surface, rect)
 
     def _get_fighter_surface(self, fighter: Fighter) -> pygame.Surface:
         """
@@ -220,7 +297,8 @@ class FighterRenderer:
 
         # Only render profile pictures when radius is large enough to see them
         # This saves massive rendering overhead with 40k players at small sizes
-        show_profile_pic = config.FOLLOWER_RADIUS >= config.PROFILE_PICTURE_MIN_RADIUS
+        is_club_member = getattr(fighter, "is_club_member", False)
+        show_profile_pic = is_club_member or config.FOLLOWER_RADIUS >= config.PROFILE_PICTURE_MIN_RADIUS
 
         # Draw avatar circle
         if fighter.avatar_image and show_profile_pic:
@@ -233,6 +311,12 @@ class FighterRenderer:
                 fighter.color,
                 (render_radius, render_radius),
                 render_radius - int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier)
+            )
+            draw_avatar_initials(
+                surface,
+                fighter.username,
+                center=(render_radius, render_radius),
+                diameter=render_size,
             )
 
         # Draw white border
@@ -250,6 +334,36 @@ class FighterRenderer:
         self.cached_radius[cache_key] = config.FOLLOWER_RADIUS
         fighter.surface_needs_update = False
 
+        return surface
+
+    def _get_fighter_display_surface(self, fighter: Fighter, display_size: int) -> pygame.Surface:
+        """
+        Get or create cached display-size fighter surface.
+        """
+        cache_key = (fighter.id, fighter.username)
+        cache_valid = (
+            cache_key in self.fighter_display_surfaces and
+            not fighter.surface_needs_update and
+            cache_key in self.cached_display_radius and
+            abs(self.cached_display_radius[cache_key] - config.FOLLOWER_RADIUS) < 0.01
+        )
+        if cache_valid:
+            return self.fighter_display_surfaces[cache_key]
+
+        source_surface = self._get_fighter_surface(fighter)
+        if source_surface.get_width() != display_size:
+            display_surface = pygame.transform.smoothscale(source_surface, (display_size, display_size))
+        else:
+            display_surface = source_surface
+
+        self.fighter_display_surfaces[cache_key] = display_surface
+        self.cached_display_radius[cache_key] = config.FOLLOWER_RADIUS
+        return display_surface
+
+    def _get_club_panel_avatar(self, fighter: Fighter, size: int) -> pygame.Surface:
+        surface = self._get_fighter_display_surface(fighter, int(size))
+        if surface.get_width() != size:
+            surface = pygame.transform.smoothscale(surface, (int(size), int(size)))
         return surface
 
     def _draw_circular_image(self, surface: pygame.Surface,
@@ -374,11 +488,17 @@ class FighterRenderer:
             fighters: List of all fighters
             game_state: Game state dictionary
         """
-        alive_count = sum(1 for f in fighters if f.alive)
-        total_count = len(fighters)
+        alive_count = game_state.get("alive_count")
+        if alive_count is None:
+            alive_count = sum(1 for f in fighters if f.alive)
+        total_count = game_state.get("total_count", len(fighters))
 
         # Get arena for positioning
-        arena_rect = config.FIGHTER_ARENA_RECT
+        arena_rect = getattr(
+            config,
+            "FIGHTER_ARENA_MODE_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", config.FIGHTER_ARENA_RECT),
+        )
         arena_top = arena_rect[1]
         arena_bottom = arena_rect[1] + arena_rect[3]
 
@@ -398,23 +518,29 @@ class FighterRenderer:
         if prompt_text:
             prompt_font = pygame.font.Font(None, 24)
             prompt_surface = prompt_font.render(prompt_text, True, config.COLOR_TEXT)
-            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, subtitle_rect.bottom + 6))
+            prompt_margin = int(getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8))
+            prompt_y = max(int(arena_top - prompt_margin), subtitle_rect.bottom + 6)
+            prompt_rect = prompt_surface.get_rect(center=(self.width // 2, prompt_y))
             self.screen.blit(prompt_surface, prompt_rect)
 
         # === BELOW ARENA: Day and stats ===
         day_number = game_state.get("day_number", getattr(config, 'DAY_NUMBER', 1))
-        day_font = pygame.font.Font(None, 36)
+        day_font_size = int(getattr(config, "MAZE_RUSH_DAY_COUNTER_FONT_SIZE", 32))
+        day_font = pygame.font.Font(None, day_font_size)
         day_text = day_font.render(f"Day {day_number}: {total_count} fighters", True, config.COLOR_TEXT)
-        day_rect = day_text.get_rect(center=(self.width // 2, arena_bottom + 25))
+        day_offset = int(getattr(config, "MAZE_RUSH_DAY_COUNTER_OFFSET", 14))
+        day_rect = day_text.get_rect(center=(self.width // 2, arena_bottom + day_offset))
         self.screen.blit(day_text, day_rect)
 
         # Alive stat
         stats_font = pygame.font.Font(None, 28)
         alive_text = stats_font.render(f"Alive: {alive_count}/{total_count}", True, config.COLOR_TEXT)
-        alive_rect = alive_text.get_rect(center=(self.width // 2, arena_bottom + 55))
+        alive_y = day_rect.bottom + 22
+        alive_rect = alive_text.get_rect(center=(self.width // 2, alive_y))
         self.screen.blit(alive_text, alive_rect)
 
         # Speed indicator during export fast-forward segment
+        last_bottom = alive_rect.bottom
         if game_state.get("speedup_active"):
             speed_factor = float(game_state.get("speedup_factor", 1.0))
             if abs(speed_factor - round(speed_factor)) < 0.01:
@@ -424,7 +550,8 @@ class FighterRenderer:
             speed_label = "16X SPEED"
             speed_font = pygame.font.Font(None, 60)
             speed_text = speed_font.render(speed_label, True, (255, 255, 255))
-            speed_y = min(arena_bottom + 95, self.height - 40)
+            speed_base = max(arena_bottom + 95, alive_y + 40)
+            speed_y = min(speed_base, self.height - 40)
             speed_rect = speed_text.get_rect(center=(self.width // 2, speed_y))
 
             outline = speed_font.render(speed_label, True, (0, 0, 0))
@@ -433,6 +560,18 @@ class FighterRenderer:
                 self.screen.blit(outline, outline_rect)
 
             self.screen.blit(speed_text, speed_rect)
+            last_bottom = max(last_bottom, speed_rect.bottom)
+
+        panel_rect = draw_club_panel(
+            self.screen,
+            game_state.get("club_spotlight"),
+            anchor_y=last_bottom,
+            font=self.font_club_panel,
+            get_avatar_surface=self._get_club_panel_avatar,
+            glow_cache=self._club_glow_cache,
+        )
+        if panel_rect is not None:
+            self._club_panel_bottom = panel_rect.bottom
 
     def _draw_promo_overlay(self):
         """Draw promo pills in the bottom banner area."""
@@ -908,6 +1047,9 @@ class FighterRenderer:
     def reset(self):
         """Reset renderer state"""
         self.fighter_surfaces.clear()
+        self.cached_radius.clear()
+        self.fighter_display_surfaces.clear()
+        self.cached_display_radius.clear()
         self.show_podium = False
         self.podium_animation_progress = 0
         self.winners = []

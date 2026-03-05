@@ -11,6 +11,8 @@ from .racer import Racer
 from .course import ObstacleCourse
 from .camera import ObstacleCourseCamera
 from fighter_arena import FighterRenderer  # Reuse for racer avatars
+from shared.avatar_initials import draw_avatar_initials
+from shared.club_panel import draw_club_panel
 
 
 class ObstacleCourseRenderer:
@@ -34,6 +36,9 @@ class ObstacleCourseRenderer:
         self.font_subtitle = pygame.font.Font(None, 32)   # For subtitle
         self.font_day = pygame.font.Font(None, 36)        # For day counter
         self.font_promo = pygame.font.Font(None, 24)
+        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
+        self.font_club_panel = pygame.font.Font(None, club_text_size)
+        self._club_panel_bottom = None
         self.promo_text_left = "Join Discord, link in bio"
         self.promo_text_right = "Check your results in bio"
         self.discord_logo = None
@@ -42,6 +47,19 @@ class ObstacleCourseRenderer:
 
         # Reuse fighter renderer for high-res avatar rendering
         self.fighter_renderer = FighterRenderer(screen)
+        self._club_glow_cache = {}
+        self._club_spotlight = None
+        self._zone_surface_cache = {}
+        self._track_surface = None
+        self._track_surface_width = 0
+        self._track_signature = None
+
+        self._display_size = int(config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2)
+        self._visibility_margin = int(getattr(config, "OBSTACLE_COURSE_VISIBILITY_MARGIN", 100))
+        self._density_render_enabled = bool(getattr(config, "OBSTACLE_COURSE_DENSITY_RENDER_ENABLED", True))
+        self._density_render_threshold = int(getattr(config, "OBSTACLE_COURSE_DENSITY_RENDER_THRESHOLD", 2500))
+        self._density_cell_size = max(4, int(getattr(config, "OBSTACLE_COURSE_RENDER_CELL_SIZE", 18)))
+        self._density_max_per_cell = max(1, int(getattr(config, "OBSTACLE_COURSE_RENDER_MAX_PER_CELL", 1)))
 
     def render_frame(self, racers: List[Racer], course: ObstacleCourse,
                     camera: ObstacleCourseCamera, game_state: dict):
@@ -54,6 +72,8 @@ class ObstacleCourseRenderer:
             camera: Camera object
             game_state: Dictionary with game state info
         """
+        self._club_spotlight = game_state.get("club_spotlight")
+
         # Clear screen
         self.screen.fill(config.COLOR_BACKGROUND)
 
@@ -76,9 +96,45 @@ class ObstacleCourseRenderer:
         self._draw_promo_overlay()
 
     def _draw_track(self, course: ObstacleCourse, camera: ObstacleCourseCamera):
-        """Draw the track with continuous curved barriers and checkered lines (horizontal)"""
-        # Draw continuous barrier lines that follow the track curves
-        # Build lists of top and bottom barrier points for ALL waypoints
+        """Draw the track with continuous curved barriers and checkered lines (horizontal)."""
+        self._ensure_track_surface(course)
+        if self._track_surface is None:
+            return
+
+        camera_x = int(camera.camera_x)
+        src_x = max(0, camera_x)
+        dst_x = 0
+        if camera_x < 0:
+            dst_x = -camera_x
+
+        max_src_width = self._track_surface_width - src_x
+        if max_src_width <= 0:
+            return
+
+        blit_width = min(self.width - dst_x, max_src_width)
+        if blit_width <= 0:
+            return
+
+        src_rect = pygame.Rect(src_x, 0, blit_width, self.height)
+        self.screen.blit(self._track_surface, (dst_x, 0), src_rect)
+
+    def _ensure_track_surface(self, course: ObstacleCourse):
+        """Build a static world-space track surface once and reuse it each frame."""
+        if not course.waypoints:
+            self._track_surface = None
+            self._track_surface_width = 0
+            self._track_signature = None
+            return
+
+        signature = (len(course.waypoints), course.start_line, course.finish_line, int(course.width))
+        if self._track_surface is not None and self._track_signature == signature:
+            return
+
+        max_world_x = int(max(course.finish_line[0], course.waypoints[-1][0])) + self.width + 200
+        self._track_surface_width = max(self.width, max_world_x)
+        self._track_surface = pygame.Surface((self._track_surface_width, self.height), pygame.SRCALPHA)
+        self._track_signature = signature
+
         top_barrier_points = []
         bottom_barrier_points = []
         top_barrier_outer = []
@@ -90,13 +146,12 @@ class ObstacleCourseRenderer:
             # Get track bounds at this waypoint
             track_top, track_bottom = course.get_track_bounds_at_x(waypoint[0])
 
-            # Convert to screen coordinates - inner edge (track side)
-            top_screen = camera.world_to_screen((waypoint[0], track_top))
-            bottom_screen = camera.world_to_screen((waypoint[0], track_bottom))
+            # Draw in world-space (y is effectively 1:1 with screen-space for this game).
+            top_screen = (int(waypoint[0]), int(track_top))
+            bottom_screen = (int(waypoint[0]), int(track_bottom))
 
-            # Outer edge of barrier
-            top_outer = camera.world_to_screen((waypoint[0], track_top - barrier_thickness))
-            bottom_outer = camera.world_to_screen((waypoint[0], track_bottom + barrier_thickness))
+            top_outer = (int(waypoint[0]), int(track_top - barrier_thickness))
+            bottom_outer = (int(waypoint[0]), int(track_bottom + barrier_thickness))
 
             top_barrier_points.append(top_screen)
             bottom_barrier_points.append(bottom_screen)
@@ -106,27 +161,21 @@ class ObstacleCourseRenderer:
         # Draw thick barriers with stripe pattern
         if len(top_barrier_points) >= 2:
             # Draw top barrier as polygon (filled thick barrier)
-            self._draw_striped_barrier(top_barrier_outer, top_barrier_points, barrier_thickness)
+            self._draw_striped_barrier(top_barrier_outer, top_barrier_points, barrier_thickness, self._track_surface)
             # Draw bottom barrier
-            self._draw_striped_barrier(bottom_barrier_points, bottom_barrier_outer, barrier_thickness)
+            self._draw_striped_barrier(bottom_barrier_points, bottom_barrier_outer, barrier_thickness, self._track_surface)
 
         # Draw checkered starting line (vertical for horizontal track, within track bounds)
-        start_screen = camera.world_to_screen(course.start_line)
-        if -50 <= start_screen[0] <= config.SCREEN_WIDTH + 50:
-            start_top, start_bottom = course.get_track_bounds_at_x(course.start_line[0])
-            start_top_screen = camera.world_to_screen((course.start_line[0], start_top))[1]
-            start_bottom_screen = camera.world_to_screen((course.start_line[0], start_bottom))[1]
-            self._draw_checkered_line_vertical(start_screen[0], start_top_screen, start_bottom_screen, (255, 0, 0), (255, 255, 255))
+        start_x = int(course.start_line[0])
+        start_top, start_bottom = course.get_track_bounds_at_x(course.start_line[0])
+        self._draw_checkered_line_vertical(start_x, int(start_top), int(start_bottom), (255, 0, 0), (255, 255, 255), self._track_surface)
 
         # Draw checkered finish line (vertical for horizontal track, within track bounds)
-        finish_screen = camera.world_to_screen(course.finish_line)
-        if -50 <= finish_screen[0] <= config.SCREEN_WIDTH + 50:
-            finish_top, finish_bottom = course.get_track_bounds_at_x(course.finish_line[0])
-            finish_top_screen = camera.world_to_screen((course.finish_line[0], finish_top))[1]
-            finish_bottom_screen = camera.world_to_screen((course.finish_line[0], finish_bottom))[1]
-            self._draw_checkered_line_vertical(finish_screen[0], finish_top_screen, finish_bottom_screen, (255, 0, 0), (255, 255, 255))
+        finish_x = int(course.finish_line[0])
+        finish_top, finish_bottom = course.get_track_bounds_at_x(course.finish_line[0])
+        self._draw_checkered_line_vertical(finish_x, int(finish_top), int(finish_bottom), (255, 0, 0), (255, 255, 255), self._track_surface)
 
-    def _draw_striped_barrier(self, outer_points, inner_points, thickness):
+    def _draw_striped_barrier(self, outer_points, inner_points, thickness, target_surface: pygame.Surface):
         """Draw a thick barrier with checkered square pattern"""
         if len(outer_points) < 2 or len(inner_points) < 2:
             return
@@ -145,7 +194,7 @@ class ObstacleCourseRenderer:
             polygon_points = [p1_outer, p2_outer, p2_inner, p1_inner]
             try:
                 # Draw base color
-                pygame.draw.polygon(self.screen, color2, polygon_points)
+                pygame.draw.polygon(target_surface, color2, polygon_points)
             except:
                 pass
 
@@ -197,19 +246,27 @@ class ObstacleCourseRenderer:
 
                     # Draw blue square
                     try:
-                        pygame.draw.polygon(self.screen, color1, [q1_outer, q2_outer, q2_inner, q1_inner])
+                        pygame.draw.polygon(target_surface, color1, [q1_outer, q2_outer, q2_inner, q1_inner])
                     except:
                         pass
 
         # Draw border outline
         try:
-            pygame.draw.lines(self.screen, (30, 30, 30), False, outer_points, 2)
-            pygame.draw.lines(self.screen, (30, 30, 30), False, inner_points, 2)
+            pygame.draw.lines(target_surface, (30, 30, 30), False, outer_points, 2)
+            pygame.draw.lines(target_surface, (30, 30, 30), False, inner_points, 2)
         except:
             pass
 
 
-    def _draw_checkered_line_vertical(self, x_pos: int, y_top: int, y_bottom: int, color1: tuple, color2: tuple):
+    def _draw_checkered_line_vertical(
+        self,
+        x_pos: int,
+        y_top: int,
+        y_bottom: int,
+        color1: tuple,
+        color2: tuple,
+        target_surface: pygame.Surface,
+    ):
         """
         Draw a vertical checkered pattern line (like a race finish line) within track bounds
 
@@ -233,7 +290,7 @@ class ObstacleCourseRenderer:
             square_height = min(square_size, int(y_bottom) - y)
 
             rect = pygame.Rect(int(x_pos - line_width // 2), y, line_width, square_height)
-            pygame.draw.rect(self.screen, color, rect)
+            pygame.draw.rect(target_surface, color, rect)
 
             y += square_size
             i += 1
@@ -297,36 +354,33 @@ class ObstacleCourseRenderer:
     def _draw_zone(self, zone, camera):
         """Draw a speed boost or slow zone"""
         screen_pos = camera.world_to_screen((zone.x, zone.y))
+        width = max(1, int(zone.width))
+        height = max(1, int(zone.height))
+        is_boost = hasattr(zone, "boost_multiplier")
+        cache_key = (type(zone).__name__, width, height, tuple(zone.color), is_boost)
 
-        # Draw semi-transparent zone
-        zone_surface = pygame.Surface((int(zone.width), int(zone.height)), pygame.SRCALPHA)
-        zone_color = (*zone.color, 150)  # Add alpha
-        zone_surface.fill(zone_color)
+        zone_surface = self._zone_surface_cache.get(cache_key)
+        if zone_surface is None:
+            zone_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+            zone_surface.fill((*zone.color, 150))
+            pygame.draw.rect(zone_surface, zone.color, zone_surface.get_rect(), 2)
+            if is_boost:
+                self._draw_arrows(zone_surface, width, height, (100, 255, 100))
+            else:
+                self._draw_mud_pattern(zone_surface, width, height)
+            self._zone_surface_cache[cache_key] = zone_surface
 
         self.screen.blit(zone_surface, screen_pos)
 
-        # Draw border
-        rect = pygame.Rect(screen_pos[0], screen_pos[1], zone.width, zone.height)
-        pygame.draw.rect(self.screen, zone.color, rect, 2)
-
-        # Draw arrows or pattern to indicate effect
-        if hasattr(zone, 'boost_multiplier'):  # Speed boost
-            # Draw forward arrows
-            self._draw_arrows(screen_pos, zone.width, zone.height, (100, 255, 100))
-        else:  # Slow zone
-            # Draw wavy lines for mud
-            self._draw_mud_pattern(screen_pos, zone.width, zone.height)
-
-    def _draw_arrows(self, pos, width, height, color):
+    def _draw_arrows(self, target_surface: pygame.Surface, width: int, height: int, color):
         """Draw forward-pointing arrows inside a zone"""
-        import math
         arrow_spacing = 25
         arrow_size = 8
 
         for y_offset in range(15, int(height) - 10, arrow_spacing):
             for x_offset in range(15, int(width) - 10, arrow_spacing):
-                cx = pos[0] + x_offset
-                cy = pos[1] + y_offset
+                cx = x_offset
+                cy = y_offset
 
                 # Draw simple arrow pointing right
                 points = [
@@ -334,19 +388,19 @@ class ObstacleCourseRenderer:
                     (cx + arrow_size, cy),
                     (cx - arrow_size, cy + arrow_size // 2)
                 ]
-                pygame.draw.polygon(self.screen, color, points)
+                pygame.draw.polygon(target_surface, color, points)
 
-    def _draw_mud_pattern(self, pos, width, height):
+    def _draw_mud_pattern(self, target_surface: pygame.Surface, width: int, height: int):
         """Draw mud/slow zone pattern"""
         import math
         # Draw wavy horizontal lines
         for y_offset in range(10, int(height) - 5, 15):
             points = []
             for x in range(0, int(width), 5):
-                wave_y = pos[1] + y_offset + math.sin(x * 0.2) * 3
-                points.append((pos[0] + x, wave_y))
+                wave_y = y_offset + math.sin(x * 0.2) * 3
+                points.append((x, wave_y))
             if len(points) > 1:
-                pygame.draw.lines(self.screen, (100, 70, 30), False, points, 2)
+                pygame.draw.lines(target_surface, (100, 70, 30), False, points, 2)
 
     def _draw_crusher(self, crusher, camera):
         """Draw a crusher/piston obstacle"""
@@ -370,49 +424,129 @@ class ObstacleCourseRenderer:
                 pygame.draw.rect(self.screen, (200, 200, 50), stripe_rect)
 
     def _draw_racers(self, racers: List[Racer], camera: ObstacleCourseCamera):
-        """Draw all visible racers"""
+        """Draw all visible racers with lightweight culling for high-count overlap."""
+        margin = self._visibility_margin
+        left = camera.camera_x - margin
+        right = camera.camera_x + self.width + margin
+        half_h = self.height / 2
+        top = camera.camera_y - half_h - margin
+        bottom = camera.camera_y + half_h + margin
+
+        use_density_limit = self._density_render_enabled and len(racers) >= self._density_render_threshold
+        cell_counts = {} if use_density_limit else None
+
+        club_racers = []
         for racer in racers:
             if not racer.alive and not racer.is_fading():
                 continue
 
-            if camera.is_visible((racer.x, racer.y)):
-                # Get racer surface (reuse fighter renderer)
-                surface = self.fighter_renderer._get_fighter_surface(racer)
+            rx = racer.x
+            ry = racer.y
+            if rx < left or rx > right or ry < top or ry > bottom:
+                continue
 
-                # Apply fade if needed
-                if racer.alpha < 255:
-                    surface = surface.copy()
-                    surface.set_alpha(racer.alpha)
+            screen_x = int(rx - camera.camera_x)
+            screen_y = int(ry - camera.camera_y + half_h)
+            screen_pos = (screen_x, screen_y)
 
-                # Convert to screen coordinates
-                screen_pos = camera.world_to_screen((racer.x, racer.y))
+            if getattr(racer, "is_club_member", False):
+                club_racers.append((racer, screen_pos))
+                continue
 
-                # Scale down high-res surface for display
-                display_size = int(config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2)
-                if surface.get_width() != display_size:
-                    display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
-                else:
-                    display_surface = surface
+            if cell_counts is not None:
+                cell_key = (screen_x // self._density_cell_size, screen_y // self._density_cell_size)
+                count = cell_counts.get(cell_key, 0)
+                if count >= self._density_max_per_cell:
+                    continue
+                cell_counts[cell_key] = count + 1
 
-                # Draw
-                rect = display_surface.get_rect(center=screen_pos)
-                self.screen.blit(display_surface, rect)
+            self._draw_single_racer(racer, camera, screen_pos=screen_pos)
 
-                # Draw username nametag (always visible for constant-size game)
-                if config.SHOW_NAMETAGS:
-                    username = racer.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
-                    text_x = int(screen_pos[0])
-                    text_y = int(screen_pos[1] + config.OBSTACLE_COURSE_FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)
+        for racer, screen_pos in club_racers:
+            self._draw_club_glow(screen_pos, int(config.OBSTACLE_COURSE_FOLLOWER_RADIUS * 2))
+            self._draw_single_racer(racer, camera, screen_pos=screen_pos)
 
-                    text_surface = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
-                    text_rect = text_surface.get_rect(center=(text_x, text_y))
+    def _draw_single_racer(self, racer: Racer, camera: ObstacleCourseCamera, screen_pos: Tuple[int, int] = None):
+        # Get already-cached display-size surface from fighter renderer.
+        surface = self.fighter_renderer._get_fighter_display_surface(racer, self._display_size)
 
-                    # Outline using config
-                    outline_surface = self.font_small.render(username, True, config.NAMETAG_OUTLINE_COLOR)
-                    for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        self.screen.blit(outline_surface, text_rect.move(dx, dy))
+        # Apply fade if needed
+        if racer.alpha < 255:
+            surface = surface.copy()
+            surface.set_alpha(racer.alpha)
 
-                    self.screen.blit(text_surface, text_rect)
+        # Convert to screen coordinates
+        if screen_pos is None:
+            screen_pos = camera.world_to_screen((racer.x, racer.y))
+
+        # Draw
+        rect = surface.get_rect(center=screen_pos)
+        self.screen.blit(surface, rect)
+
+        # Draw username nametag (always visible for constant-size game)
+        if config.SHOW_NAMETAGS:
+            username = racer.username[:config.NAMETAG_MAX_USERNAME_LENGTH]
+            text_x = int(screen_pos[0])
+            text_y = int(screen_pos[1] + config.OBSTACLE_COURSE_FOLLOWER_RADIUS + config.NAMETAG_VERTICAL_OFFSET)
+
+            text_surface = self.font_small.render(username, True, config.NAMETAG_TEXT_COLOR)
+            text_rect = text_surface.get_rect(center=(text_x, text_y))
+
+            # Outline using config
+            outline_surface = self.font_small.render(username, True, config.NAMETAG_OUTLINE_COLOR)
+            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                self.screen.blit(outline_surface, text_rect.move(dx, dy))
+
+            self.screen.blit(text_surface, text_rect)
+
+    def _get_club_panel_avatar(self, racer: Racer, size: int) -> pygame.Surface:
+        surface = self.fighter_renderer._get_fighter_display_surface(racer, int(size))
+        target = int(size)
+        if surface.get_width() != target:
+            surface = pygame.transform.smoothscale(surface, (target, target))
+        return surface
+
+    def _draw_club_glow(self, screen_pos: Tuple[int, int], display_size: int):
+        size = max(1, int(display_size))
+        radius = max(1, size // 2)
+        color = getattr(config, "CLUB_GLOW_COLOR", (255, 240, 190))
+        alpha = int(getattr(config, "CLUB_GLOW_ALPHA", 180))
+        layers = int(getattr(config, "CLUB_GLOW_LAYERS", 3))
+        padding = int(getattr(config, "CLUB_GLOW_PADDING", 3))
+
+        cache_key = (radius, color, alpha, layers, padding)
+        surface = self._club_glow_cache.get(cache_key)
+        if surface is None:
+            glow_radius = radius + padding + layers
+            size_px = glow_radius * 2 + 4
+            surface = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
+            center = (size_px // 2, size_px // 2)
+
+            base_radius = radius + padding
+            for i in range(max(1, layers)):
+                layer_alpha = int(alpha * (1.0 - (i / max(1, layers))))
+                ring_radius = base_radius + i
+                pygame.draw.circle(
+                    surface,
+                    (*color, layer_alpha),
+                    center,
+                    ring_radius,
+                    width=2,
+                )
+
+            inner_alpha = min(255, alpha + 40)
+            pygame.draw.circle(
+                surface,
+                (*color, inner_alpha),
+                center,
+                radius + 1,
+                width=2,
+            )
+
+            self._club_glow_cache[cache_key] = surface
+
+        rect = surface.get_rect(center=(int(screen_pos[0]), int(screen_pos[1])))
+        self.screen.blit(surface, rect)
 
     def _draw_title_and_day(self, total_racers: int):
         """
@@ -421,34 +555,51 @@ class ObstacleCourseRenderer:
         Args:
             total_racers: Total number of racers in the game
         """
-        # Calculate track top position (approximate, based on screen center)
-        # Track is roughly centered vertically, so we can use screen height
-        track_top = 80  # Approximate top of visible track area
-        track_bottom = config.SCREEN_HEIGHT - 80  # Approximate bottom
+        arena_rect = getattr(config, "MAZE_RUSH_ARENA_RECT", config.FIGHTER_ARENA_RECT)
+        arena_top = int(arena_rect[1])
+        arena_bottom = int(arena_rect[1] + arena_rect[3])
 
-        # Draw title above track (just above the top track wall)
+        # Draw title above track.
         title_text = "OBSTACLE COURSE RACE"
         title_surface = self.font_title.render(title_text, True, (0, 0, 0))
-        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 70))
+        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 70))
         self.screen.blit(title_surface, title_rect)
 
-        # Draw subtitle above track
+        # Draw subtitle above track.
         subtitle_text = "Making my followers battle every day"
         subtitle_surface = self.font_subtitle.render(subtitle_text, True, (0, 0, 0))
-        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_top + 105))
+        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 40))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
         if prompt_text:
             prompt_surface = self.font_promo.render(prompt_text, True, (0, 0, 0))
-            prompt_rect = prompt_surface.get_rect(center=(config.SCREEN_WIDTH // 2, subtitle_rect.bottom + 6))
+            prompt_margin = int(getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8))
+            prompt_y = max(int(arena_top - prompt_margin), subtitle_rect.bottom + 6)
+            prompt_rect = prompt_surface.get_rect(center=(config.SCREEN_WIDTH // 2, prompt_y))
             self.screen.blit(prompt_surface, prompt_rect)
 
-        # Draw day counter right below the track (close to bottom barrier)
+        # Draw day counter below the track.
         day_text = f"Day {config.DAY_NUMBER}: {total_racers} racers"
-        day_surface = self.font_day.render(day_text, True, (0, 0, 0))
-        day_rect = day_surface.get_rect(center=(config.SCREEN_WIDTH // 2, track_bottom - 120))
+        day_font_size = int(getattr(config, "MAZE_RUSH_DAY_COUNTER_FONT_SIZE", 32))
+        day_font = pygame.font.Font(None, day_font_size)
+        day_surface = day_font.render(day_text, True, (0, 0, 0))
+        day_offset = int(getattr(config, "MAZE_RUSH_DAY_COUNTER_OFFSET", 14))
+        day_rect = day_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_bottom + day_offset))
         self.screen.blit(day_surface, day_rect)
+
+        anchor_y = day_rect.bottom
+        panel_rect = draw_club_panel(
+            self.screen,
+            self._club_spotlight,
+            anchor_y=anchor_y,
+            font=self.font_club_panel,
+            get_avatar_surface=self._get_club_panel_avatar,
+            glow_cache=self._club_glow_cache,
+        )
+        if panel_rect is not None:
+            anchor_y = panel_rect.bottom
+        self._club_panel_bottom = anchor_y
 
     def _draw_ui(self, game_state: dict):
         """Draw UI elements"""
@@ -898,6 +1049,12 @@ class ObstacleCourseRenderer:
         else:
             # Fallback to colored circle
             pygame.draw.circle(avatar_surface, winner.color, (avatar_size // 2, avatar_size // 2), avatar_size // 2)
+            draw_avatar_initials(
+                avatar_surface,
+                winner.username,
+                center=(avatar_size // 2, avatar_size // 2),
+                diameter=avatar_size,
+            )
 
         # Draw white border around avatar
         pygame.draw.circle(avatar_surface, (255, 255, 255), (avatar_size // 2, avatar_size // 2), avatar_size // 2, 4)

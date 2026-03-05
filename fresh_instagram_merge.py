@@ -7,8 +7,41 @@ import os
 from pathlib import Path
 
 # Paths
-INSTAGRAM_EXPORT_DIR = r"C:\Users\SondreNorheim\Documents\Follower_Competition_Channel\Followers\instagram-followerbattlegrounds-2025-12-13-dg9RzcMr\connections\followers_and_following"
-OUTPUT_FILE = "Followers/all_followers_fresh.json"
+ROOT = Path(__file__).resolve().parent
+FOLLOWERS_DIR = ROOT / "Followers"
+DEFAULT_EXPORT_DIR = (
+    FOLLOWERS_DIR
+    / "instagram-followerbattlegrounds-2025-12-13-dg9RzcMr"
+    / "connections"
+    / "followers_and_following"
+)
+OUTPUT_FILE = FOLLOWERS_DIR / "all_followers_fresh.json"
+
+
+def resolve_export_dir() -> Path:
+    env_dir = os.getenv("INSTAGRAM_EXPORT_DIR")
+    if env_dir:
+        candidate = Path(env_dir).expanduser()
+        if not candidate.is_absolute():
+            candidate = (ROOT / candidate).resolve()
+        if candidate.exists():
+            return candidate
+        print(f"Warning: INSTAGRAM_EXPORT_DIR not found: {candidate}")
+
+    if DEFAULT_EXPORT_DIR.exists():
+        return DEFAULT_EXPORT_DIR
+
+    export_roots = sorted(
+        (path for path in FOLLOWERS_DIR.glob("instagram-followerbattlegrounds-*") if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for export_root in export_roots:
+        candidate = export_root / "connections" / "followers_and_following"
+        if candidate.exists():
+            return candidate
+
+    return DEFAULT_EXPORT_DIR
 
 def convert_instagram_entry(entry):
     """Convert Instagram export format to our format"""
@@ -41,16 +74,19 @@ def main():
     # Read all Instagram export files
     all_followers = {}  # Use dict to deduplicate by username
 
+    export_dir = resolve_export_dir()
+    print(f"Using export directory: {export_dir}")
+
     export_files = ['followers_1.json', 'followers_2.json', 'followers_3.json']
 
     for fname in export_files:
-        fpath = os.path.join(INSTAGRAM_EXPORT_DIR, fname)
-        if not os.path.exists(fpath):
+        fpath = export_dir / fname
+        if not fpath.exists():
             print(f"Warning: {fname} not found")
             continue
 
         print(f"\nProcessing {fname}...")
-        with open(fpath, 'r', encoding='utf-8') as f:
+        with fpath.open('r', encoding='utf-8') as f:
             data = json.load(f)
 
         print(f"  Entries in file: {len(data):,}")
@@ -74,8 +110,8 @@ def main():
     print(f"{'='*60}")
 
     # Save
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with OUTPUT_FILE.open('w', encoding='utf-8') as f:
         json.dump(followers_list, f, indent=2, ensure_ascii=False)
 
     print(f"\nSaved to: {OUTPUT_FILE}")

@@ -8,9 +8,10 @@ from pathlib import Path
 from instagrapi import Client
 
 USERNAME = "followerbattlegrounds"
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 # Default session file location (same as post_run_publish.py expects)
-DEFAULT_SESSION_PATH = Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json")
+DEFAULT_SESSION_PATH = PROJECT_ROOT / "sessions" / "session_followerbattlegrounds.json"
 
 def create_session(session_file: Path = DEFAULT_SESSION_PATH):
     """Create a new Instagram session and save it to file."""

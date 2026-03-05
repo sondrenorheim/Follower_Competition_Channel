@@ -15,7 +15,7 @@ class SnakeEscapeArena(ArenaTemplate):
     Uses a 500x500 square arena centered on screen.
     """
 
-    # Arena dimensions - square arena
+    # Arena dimensions default to square; final rect can be overridden from config.
     WIDTH = 500
     HEIGHT = 500
 
@@ -25,22 +25,36 @@ class SnakeEscapeArena(ArenaTemplate):
 
     def __init__(self):
         """Initialize the arena with centered positioning."""
-        # Override positioning to center vertically on screen
-        self.left = (config.SCREEN_WIDTH - self.WIDTH) // 2
-        self.top = (config.SCREEN_HEIGHT - self.HEIGHT) // 2  # Center vertically
-        self.right = self.left + self.WIDTH
-        self.bottom = self.top + self.HEIGHT
+        arena_rect = getattr(config, "SNAKE_ESCAPE_ARENA_RECT", None)
+        if arena_rect is None:
+            arena_rect = getattr(
+                config,
+                "MAZE_RUSH_ARENA_RECT",
+                (
+                    (config.SCREEN_WIDTH - self.WIDTH) // 2,
+                    (config.SCREEN_HEIGHT - self.HEIGHT) // 2,
+                    self.WIDTH,
+                    self.HEIGHT,
+                ),
+            )
+
+        x, y, w, h = arena_rect
+
+        self.left = float(x)
+        self.top = float(y)
+        self.right = self.left + float(w)
+        self.bottom = self.top + float(h)
 
         # Center point
-        self.center_x = self.left + self.WIDTH // 2
-        self.center_y = self.top + self.HEIGHT // 2
+        self.center_x = self.left + (float(w) / 2.0)
+        self.center_y = self.top + (float(h) / 2.0)
 
         # Current dimensions (for shrinking arenas)
-        self.current_width = self.WIDTH
-        self.current_height = self.HEIGHT
+        self.current_width = float(w)
+        self.current_height = float(h)
 
         # For circular arenas
-        self.initial_radius = self.WIDTH // 2
+        self.initial_radius = min(self.current_width, self.current_height) / 2.0
         self.current_radius = self.initial_radius
 
         # Game-specific initialization

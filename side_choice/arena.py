@@ -18,6 +18,23 @@ class SideChoiceArena(ArenaTemplate):
 
     def __init__(self):
         super().__init__()
+        arena_rect = getattr(
+            config,
+            "SIDE_CHOICE_ARENA_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", None),
+        )
+        if arena_rect is not None:
+            x, y, w, h = arena_rect
+            self.left = float(x)
+            self.top = float(y)
+            self.right = self.left + float(w)
+            self.bottom = self.top + float(h)
+            self.center_x = (self.left + self.right) / 2.0
+            self.center_y = (self.top + self.bottom) / 2.0
+            self.current_width = float(w)
+            self.current_height = float(h)
+            self.initial_radius = min(self.current_width, self.current_height) / 2.0
+            self.current_radius = self.initial_radius
         self.orientation = str(getattr(config, "SIDE_CHOICE_ORIENTATION", "vertical")).lower()
         self._update_split()
 

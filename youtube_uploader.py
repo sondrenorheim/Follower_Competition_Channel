@@ -39,8 +39,42 @@ if sys.platform == 'win32':
 # CONFIG - Using same credentials as movie pipeline
 # ==========================================================
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-CLIENT_SECRET_PATH = r"C:\Users\SondreNorheim\Downloads\client_secret_895049337311-gvm2rt0c0hpe80drohlsgg569f3dhfd8.apps.googleusercontent.com.json"
-TOKEN_PATH = Path(r"C:\Users\SondreNorheim\Documents\Video_Editor_Script\youtube_token.json")
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_CLIENT_SECRET_PATH = PROJECT_ROOT / "secrets" / "youtube_client_secret.json"
+DEFAULT_TOKEN_PATH = PROJECT_ROOT / "secrets" / "youtube_token.json"
+LEGACY_CLIENT_SECRET_PATH = Path(
+    r"C:\Users\SondreNorheim\Downloads\client_secret_895049337311-gvm2rt0c0hpe80drohlsgg569f3dhfd8.apps.googleusercontent.com.json"
+)
+LEGACY_TOKEN_PATH = Path(r"C:\Users\SondreNorheim\Documents\Video_Editor_Script\youtube_token.json")
+
+
+def _resolve_path(env_var: str, default_path: Path, legacy_path: Path | None = None) -> Path:
+    candidates: list[Path] = []
+    env_value = os.getenv(env_var, "").strip()
+    if env_value:
+        env_path = Path(env_value).expanduser()
+        if not env_path.is_absolute():
+            env_path = (PROJECT_ROOT / env_path).resolve()
+        candidates.append(env_path)
+    candidates.append(default_path)
+    if legacy_path is not None:
+        candidates.append(legacy_path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+CLIENT_SECRET_PATH = _resolve_path(
+    "YOUTUBE_CLIENT_SECRET",
+    DEFAULT_CLIENT_SECRET_PATH,
+    LEGACY_CLIENT_SECRET_PATH,
+)
+TOKEN_PATH = _resolve_path(
+    "YOUTUBE_TOKEN_PATH",
+    DEFAULT_TOKEN_PATH,
+    LEGACY_TOKEN_PATH,
+)
 
 # Game mode display names
 GAME_NAMES = {
@@ -53,6 +87,8 @@ GAME_NAMES = {
     "spleef": "Spleef",
     "anime_fighting": "Anime Fighting",
     "gorillas_vs_followers": "Gorillas vs Followers",
+    "mini_golf": "Mini Golf",
+    "followers_io": "Followers.io",
 }
 
 # ==========================================================
@@ -61,6 +97,14 @@ GAME_NAMES = {
 def authenticate_youtube():
     """Authenticate YouTube once and reuse stored credentials safely."""
     creds = None
+
+    if not CLIENT_SECRET_PATH.exists():
+        raise FileNotFoundError(
+            f"YouTube client secret not found: {CLIENT_SECRET_PATH}. "
+            "Set YOUTUBE_CLIENT_SECRET or place it in secrets/youtube_client_secret.json."
+        )
+
+    TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     if TOKEN_PATH.exists():
         try:
@@ -76,7 +120,7 @@ def authenticate_youtube():
             creds.refresh(Request())
         else:
             print("🔐 Launching browser for Google sign-in...")
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_PATH, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
 
         with open(TOKEN_PATH, "wb") as token:

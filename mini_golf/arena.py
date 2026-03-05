@@ -1,7 +1,7 @@
 import config
 
 
-class MazeRushArena:
+class MiniGolfArena:
     def __init__(self):
         self.x, self.y, self.width, self.height = getattr(
             config,

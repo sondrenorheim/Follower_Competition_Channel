@@ -18,16 +18,120 @@ import subprocess
 import sys
 import time
 import random
+import re
+import threading
 import webbrowser
 from functools import lru_cache
 from pathlib import Path
 
 import config
+import requests
 from shared import auto_push, statistics, game_history
 from instagrapi import Client
 from shared import statistics, game_history
+try:
+    from shared.facebook_media_map import remember_mapping as remember_facebook_media_mapping
+except Exception:
+    remember_facebook_media_mapping = None
+try:
+    from shared.youtube_media_map import remember_mapping as remember_youtube_media_mapping
+except Exception:
+    remember_youtube_media_mapping = None
+try:
+    from shared.video_variant_builder import (
+        ensure_non_ig_join_variant,
+        get_last_non_ig_variant_build_info,
+    )
+except Exception:
+    ensure_non_ig_join_variant = None
+    get_last_non_ig_variant_build_info = None
 
 _LOG_HANDLES = []
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_IG_SESSION_FILE = PROJECT_ROOT / "sessions" / "session_followerbattlegrounds.json"
+DEFAULT_TIKTOK_SESSION_FILE = PROJECT_ROOT / "tiktok_follower_account_sessionid.json"
+_YOUTUBE_COMMENT_LIBS = None
+_YOUTUBE_COMMENT_LIBS_FAILED = False
+_YOUTUBE_COMMENT_CLIENT = None
+_YOUTUBE_COMMENT_CLIENT_LOCK = threading.Lock()
+
+
+def _configure_utf8_output():
+    for stream in (sys.stdout, sys.stderr):
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_configure_utf8_output()
+
+
+def _normalize_smb_mode(game_mode: str | None):
+    try:
+        from super_follower_bros_shared.levels import normalize_smb_mode
+    except Exception:
+        return None
+    return normalize_smb_mode(game_mode)
+
+
+def _is_smb_mode(game_mode: str | None) -> bool:
+    return _normalize_smb_mode(game_mode) is not None
+
+
+def _is_jetpack_mode(game_mode: str | None) -> bool:
+    return str(game_mode or "").strip().lower() == "jetpack_followers"
+
+
+def _is_crossy_mode(game_mode: str | None) -> bool:
+    return str(game_mode or "").strip().lower() == "crossy_followers"
+
+
+def _display_day_for_mode(game_mode: str, actual_day_number: int) -> int:
+    try:
+        day_value = int(actual_day_number)
+    except Exception:
+        day_value = int(getattr(config, "DAY_NUMBER", 0) or 0)
+
+    if _is_smb_mode(game_mode):
+        offset = int(getattr(config, "SUPER_FOLLOWER_BROS_DAY_OFFSET", 71) or 71)
+        return max(1, day_value - offset)
+
+    if _is_jetpack_mode(game_mode):
+        offset = int(
+            getattr(
+                config,
+                "JETPACK_FOLLOWERS_DAY_OFFSET",
+                getattr(config, "SUPER_FOLLOWER_BROS_DAY_OFFSET", 71),
+            ) or 0
+        )
+        return max(1, day_value - offset)
+
+    if _is_crossy_mode(game_mode):
+        offset = int(
+            getattr(
+                config,
+                "CROSSY_FOLLOWERS_DAY_OFFSET",
+                getattr(
+                    config,
+                    "JETPACK_FOLLOWERS_DAY_OFFSET",
+                    getattr(config, "SUPER_FOLLOWER_BROS_DAY_OFFSET", 71),
+                ),
+            ) or 0
+        )
+        return max(1, day_value - offset)
+
+    return day_value
+
+
+def _is_mode_in_skip_list(game_mode: str, skip_modes) -> bool:
+    mode_set = set(skip_modes or [])
+    if game_mode in mode_set:
+        return True
+    if _is_smb_mode(game_mode):
+        return "super_follower_bros" in mode_set or "super_follower_bros_1_2" in mode_set
+    return False
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -144,13 +248,120 @@ def _ensure_discord_bot():
     )
 
 
-def build_video_path(game_mode: str) -> Path:
+def build_video_path(game_mode: str, day_number: int | None = None) -> Path:
     """
     Build the expected video output path for a game mode using the config helper.
     Assumes TEST_MODE was False when videos were generated.
     """
-    filename = config.get_output_video_path(game_mode=game_mode, day_number=config.DAY_NUMBER, test_mode=False)
+    filename = config.get_output_video_path(game_mode=game_mode, day_number=day_number, test_mode=False)
     return Path(filename)
+
+
+def build_non_ig_variant_video_path(game_mode: str, day_number: int | None = None) -> Path:
+    if hasattr(config, "get_non_ig_variant_video_path"):
+        filename = config.get_non_ig_variant_video_path(
+            game_mode=game_mode,
+            day_number=day_number,
+            test_mode=False,
+        )
+        return Path(filename)
+    base_path = build_video_path(game_mode=game_mode, day_number=day_number)
+    suffix = str(getattr(config, "NON_IG_VARIANT_SUFFIX", "_non_ig_join") or "_non_ig_join")
+    return base_path.with_name(f"{base_path.stem}{suffix}{base_path.suffix}")
+
+
+def _resolve_non_ig_route_platforms() -> set[str]:
+    raw = getattr(config, "NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS", ["facebook", "tiktok", "youtube"])
+    values: list[str]
+    if isinstance(raw, str):
+        values = [part.strip().lower() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(part).strip().lower() for part in raw]
+    else:
+        values = []
+    return {value for value in values if value}
+
+
+def _resolve_non_ig_variant_enabled() -> bool:
+    return _parse_bool(getattr(config, "NON_IG_VARIANT_ENABLED", True), True)
+
+
+def _resolve_non_ig_generate_on_upload_if_missing() -> bool:
+    return _parse_bool(
+        getattr(config, "NON_IG_VARIANT_GENERATE_ON_UPLOAD_IF_MISSING", True),
+        True,
+    )
+
+
+def resolve_platform_video_path(
+    base_video_path: Path,
+    platform: str,
+    game_mode: str,
+    day_number: int | None,
+) -> Path | None:
+    normalized_platform = str(platform or "").strip().lower()
+    route_platforms = _resolve_non_ig_route_platforms()
+    if not _resolve_non_ig_variant_enabled() or normalized_platform not in route_platforms:
+        return base_video_path
+
+    variant_video_path = build_non_ig_variant_video_path(game_mode=game_mode, day_number=day_number)
+
+    base_mtime = None
+    try:
+        base_mtime = base_video_path.stat().st_mtime
+    except Exception:
+        base_mtime = None
+
+    try:
+        if variant_video_path.exists():
+            variant_mtime = variant_video_path.stat().st_mtime
+            if base_mtime is None or variant_mtime >= base_mtime:
+                print(f"Using non-IG variant for {normalized_platform}: {variant_video_path}")
+                return variant_video_path
+    except Exception:
+        pass
+
+    if _resolve_non_ig_generate_on_upload_if_missing() and ensure_non_ig_join_variant is not None:
+        try:
+            resolved_path = ensure_non_ig_join_variant(base_video_path, variant_video_path)
+            if resolved_path == variant_video_path and variant_video_path.exists():
+                message = f"Generated non-IG JOIN variant: {variant_video_path}"
+                if get_last_non_ig_variant_build_info is not None:
+                    info = get_last_non_ig_variant_build_info() or {}
+                    top_y = info.get("top_y")
+                    mode = str(info.get("placement_mode") or "").strip()
+                    if top_y is not None:
+                        if mode:
+                            message += f" (top_y={top_y}, mode={mode})"
+                        else:
+                            message += f" (top_y={top_y})"
+                print(message)
+                print(f"Using non-IG variant for {normalized_platform}: {variant_video_path}")
+                return variant_video_path
+        except Exception as exc:
+            print(f"[WARN] Failed to generate non-IG variant for {normalized_platform}: {exc}")
+
+    print(
+        f"[WARN] Missing non-IG variant for {normalized_platform}: {variant_video_path}. "
+        "Skipping upload for this platform (no base fallback)."
+    )
+    return None
+
+
+def wait_for_video(path: Path, max_seconds: int, poll_seconds: int) -> bool:
+    """Wait for a video file to appear on disk."""
+    if path.exists():
+        return True
+    if max_seconds == 0:
+        return False
+    start = time.time()
+    while True:
+        elapsed = time.time() - start
+        if max_seconds > 0 and elapsed >= max_seconds:
+            return False
+        time.sleep(max(1, poll_seconds))
+        if path.exists():
+            return True
 
 
 @lru_cache(maxsize=None)
@@ -177,6 +388,41 @@ def load_game_results(game_id: str) -> dict | None:
     except Exception as e:
         print(f"Failed to read game results {game_path}: {e}")
         return None
+
+
+def _load_partitioned_games(base_dir: str = "website/public/api") -> list[dict]:
+    try:
+        games_dir = Path(base_dir) / "games"
+        if not games_dir.exists():
+            return []
+        games = []
+        for path in games_dir.glob("*.json"):
+            if path.name.endswith("_top.json"):
+                continue
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data.get("game_id"):
+                    games.append(data)
+            except Exception:
+                continue
+        return games
+    except Exception:
+        return []
+
+
+def _merge_games(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged = {g.get("game_id"): g for g in primary if isinstance(g, dict) and g.get("game_id")}
+    for game in secondary:
+        if not isinstance(game, dict):
+            continue
+        game_id = game.get("game_id")
+        if not game_id:
+            continue
+        existing = merged.get(game_id)
+        if existing is None or len(game.get("results", []) or []) > len(existing.get("results", []) or []):
+            merged[game_id] = game
+    return list(merged.values())
 
 
 def get_top_usernames_for_game(day_number: int, game_mode: str, limit: int = 10) -> list[str]:
@@ -268,37 +514,47 @@ def wait_for_manual_login(profile_url: str):
     input("Log in and navigate to your profile page, then press Enter to continue...")
 
 
-def upload_videos(cl: Client, video_paths: list[Path], caption_template: str, delay_seconds: int):
+def upload_videos(
+    cl: Client,
+    video_paths: list[Path],
+    caption_template: str,
+    delay_seconds: int,
+    day_number: int | None = None,
+):
     for idx, video_path in enumerate(video_paths):
         if not video_path.exists():
-            print(f"⚠️ Skipping missing video: {video_path}")
+            print(f"[WARN] Skipping missing video: {video_path}")
             continue
         game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
-        caption = caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
-        top_users = get_top_usernames_for_game(config.DAY_NUMBER, game_mode, limit=10)
-        caption += format_top_users_block(top_users)
-        print(f"▶️ Uploading {video_path} as Reel with caption:\n{caption}")
+        actual_day_number = int(day_number) if day_number is not None else int(getattr(config, "DAY_NUMBER", 0))
+        day_value = _display_day_for_mode(game_mode, actual_day_number)
+        caption = caption_template.format(game_mode=game_mode, day_number=day_value)
+        skip_top10_modes = set(getattr(config, "TOP10_SKIP_GAME_MODES", []))
+        if not _is_mode_in_skip_list(game_mode, skip_top10_modes):
+            top_users = get_top_usernames_for_game(actual_day_number, game_mode, limit=10)
+            caption += format_top_users_block(top_users)
+        print(f"[INFO] Uploading {video_path} as Reel with caption:\n{caption}")
         media = cl.clip_upload(str(video_path), caption=caption)
-        print(f"✅ Uploaded: {video_path.name} -> {media.pk}")
+        print(f"[OK] Uploaded: {video_path.name} -> {media.pk}")
 
         # Delay handled after TikTok upload
 def upload_instagram(cl: Client, video_path: Path, caption: str) -> bool:
     try:
         media = cl.clip_upload(str(video_path), caption=caption)
-        print(f"✅ IG uploaded: {video_path.name} -> {media.pk}")
+        print(f"[OK] IG uploaded: {video_path.name} -> {media.pk}")
         return True
     except Exception as e:
-        print(f"⚠️ IG upload failed for {video_path.name}: {e}")
+        print(f"[WARN] IG upload failed for {video_path.name}: {e}")
         # One retry after longer delay (avoid automation detection)
         try:
             retry_delay = random.randint(30, 60)  # 30-60 seconds
             print(f"   Waiting {retry_delay}s before retry...")
             time.sleep(retry_delay)
             media = cl.clip_upload(str(video_path), caption=caption)
-            print(f"✅ IG uploaded on retry: {video_path.name} -> {media.pk}")
+            print(f"[OK] IG uploaded on retry: {video_path.name} -> {media.pk}")
             return True
         except Exception as e2:
-            print(f"❌ IG upload retry failed for {video_path.name}: {e2}")
+            print(f"[ERROR] IG upload retry failed for {video_path.name}: {e2}")
             return False
 
 
@@ -313,14 +569,163 @@ def save_instagram_cookies(cookies_file: Path) -> bool:
     return True
 
 
-def upload_instagram_safe(video_path: Path, caption: str, cookies_file: Path, headless: bool) -> bool:
+def upload_instagram_safe(
+    video_path: Path,
+    caption: str,
+    cookies_file: Path,
+    headless: bool,
+    game_mode: str | None = None,
+) -> bool:
     try:
         from safe_instagram_uploader import SafeInstagramUploader
     except Exception as e:
         print(f"IG safe uploader unavailable: {e}")
         return False
     uploader = SafeInstagramUploader(cookies_file=str(cookies_file), headless=headless)
-    return uploader.upload_reel(str(video_path), caption)
+    return uploader.upload_reel(str(video_path), caption, game_mode=game_mode)
+
+
+def upload_facebook_page_video(
+    video_path: Path,
+    caption: str,
+    page_id: str,
+    access_token: str,
+    api_version: str = "v18.0",
+    game_mode: str | None = None,
+    day_number: int | None = None,
+) -> dict | None:
+    if not page_id:
+        print("[WARN] FB upload skipped: missing Facebook Page ID.")
+        return None
+    if not access_token:
+        print("[WARN] FB upload skipped: missing Facebook Page access token.")
+        return None
+    if not video_path.exists():
+        print(f"[WARN] FB upload skipped: missing video {video_path}")
+        return None
+
+    version = str(api_version or "v18.0").strip().lstrip("/")
+    endpoint = f"https://graph-video.facebook.com/{version}/{page_id}/videos"
+    join_prompt_mode = _resolve_facebook_join_prompt_mode()
+    join_prompt_text = _resolve_facebook_join_prompt_text()
+    title = (caption.splitlines()[0].strip() if caption else "") or video_path.stem
+    description = str(caption or "")
+    if join_prompt_text and join_prompt_mode in {"title", "both"}:
+        # Facebook feed cards often ignore the video title; keep CTA visible in description too.
+        if join_prompt_text.lower() not in description.lower():
+            description = f"{join_prompt_text}\n\n{description}".strip()
+    if join_prompt_text and join_prompt_mode in {"title", "both"}:
+        title = join_prompt_text
+    if len(title) > 250:
+        title = title[:250]
+
+    payload = {
+        "description": description,
+        "title": title,
+        "published": "true",
+        "access_token": access_token,
+    }
+
+    try:
+        with video_path.open("rb") as source_file:
+            response = requests.post(
+                endpoint,
+                data=payload,
+                files={"source": (video_path.name, source_file, "video/mp4")},
+                timeout=(30, 1800),
+            )
+    except Exception as e:
+        print(f"[ERROR] FB upload request failed for {video_path.name}: {e}")
+        return None
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {"raw": response.text[:500]}
+
+    if not response.ok:
+        print(f"[ERROR] FB upload failed for {video_path.name}: HTTP {response.status_code} {body}")
+        return None
+
+    video_id = str(body.get("id") or body.get("video_id") or "").strip()
+    post_id = str(body.get("post_id") or "").strip()
+    metadata = fetch_facebook_object_metadata(video_id or post_id, access_token, api_version=version)
+    if metadata:
+        post_id = post_id or str(metadata.get("post_id") or "").strip()
+    permalink = str(body.get("permalink_url") or metadata.get("permalink_url") or "").strip()
+
+    if video_id or post_id:
+        print(f"[OK] FB uploaded: {video_path.name} -> {video_id or post_id}")
+    else:
+        print(f"[OK] FB upload response for {video_path.name}: {body}")
+
+    if join_prompt_text and join_prompt_mode in {"comment", "both"}:
+        def _build_comment_targets() -> list[str]:
+            values: list[str] = []
+            for candidate in (
+                post_id,
+                video_id,
+                str(body.get("id") or "").strip(),
+                str(body.get("post_id") or "").strip(),
+            ):
+                candidate = str(candidate or "").strip()
+                if candidate and candidate not in values:
+                    values.append(candidate)
+            # Graph APIs sometimes return short post ids; include page-scoped fallback.
+            expanded = list(values)
+            for candidate in values:
+                if "_" not in candidate and page_id:
+                    expanded_id = f"{page_id}_{candidate}"
+                    if expanded_id not in expanded:
+                        expanded.append(expanded_id)
+            return expanded
+
+        cta_posted = False
+        for attempt_index, delay_seconds in enumerate((0.0, 2.0, 5.0), start=1):
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+            # Re-fetch metadata in case post id appears shortly after upload finalize.
+            refreshed = fetch_facebook_object_metadata(video_id or post_id, access_token, api_version=version)
+            if refreshed:
+                post_id = post_id or str(refreshed.get("post_id") or "").strip()
+            targets = _build_comment_targets()
+            for target_id in targets:
+                if post_facebook_comment(target_id, join_prompt_text, access_token, api_version=version):
+                    print(f"[OK] FB JOIN CTA comment posted on {target_id} (attempt {attempt_index})")
+                    cta_posted = True
+                    break
+            if cta_posted:
+                break
+        if not cta_posted:
+            print("[WARN] FB JOIN CTA comment could not be posted on any upload target.")
+
+    if game_mode and day_number and remember_facebook_media_mapping is not None:
+        try:
+            map_extra = {
+                "permalink": permalink,
+                "caption_excerpt": str(caption or "")[:240],
+                "video_filename": video_path.name,
+            }
+            mapping_result = remember_facebook_media_mapping(
+                _resolve_facebook_media_map_path(),
+                video_id=video_id or None,
+                post_id=post_id or None,
+                game_type=str(game_mode),
+                day_number=int(day_number),
+                source="fb_upload",
+                extra=map_extra,
+            )
+            print(f"[OK] FB mapping persisted ({len(mapping_result.get('keys', []))} keys)")
+        except Exception as exc:
+            print(f"[WARN] Failed to persist FB media mapping: {exc}")
+
+    return {
+        "ok": True,
+        "video_id": video_id,
+        "post_id": post_id,
+        "permalink": permalink,
+        "raw": body,
+    }
 
 
 def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "SingingNarrator", schedule_hours: int = 0):
@@ -332,18 +737,18 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
     cli_script = uploader_dir / "cli.py"
 
     if not cli_script.exists():
-        print(f"❌ TiktokAutoUploader not found at: {uploader_dir}")
+        print(f"[ERROR] TiktokAutoUploader not found at: {uploader_dir}")
         print("   Install it or update the path in post_run_publish.py")
         return False
 
     if not video_path.exists():
-        print(f"⚠️ Skipping missing video for TikTok: {video_path}")
+        print(f"[WARN] Skipping missing video for TikTok: {video_path}")
         return False
 
     # Check if cookie file exists
     cookie_path = uploader_dir / "CookiesDir" / f"tiktok_session-{username}.cookie"
     if not cookie_path.exists():
-        print(f"❌ TikTok cookie not found: {cookie_path}")
+        print(f"[ERROR] TikTok cookie not found: {cookie_path}")
         print(f"   Run the TiktokAutoUploader authentication for user '{username}' first")
         return False
 
@@ -360,9 +765,9 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
     temp_video_path = videos_dir / video_path.name
     try:
         shutil.copy2(video_path, temp_video_path)
-        print(f"📋 Copied video to TikTok uploader folder")
+        print(f"[INFO] Copied video to TikTok uploader folder")
     except Exception as e:
-        print(f"❌ Failed to copy video: {e}")
+        print(f"[ERROR] Failed to copy video: {e}")
         return False
 
     # Use just the filename (not full path) since it's now in VideosDirPath
@@ -376,7 +781,7 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
         "-st", str(schedule_time)
     ]
 
-    print(f"▶️ Uploading to TikTok{schedule_msg}...")
+    print(f"[INFO] Uploading to TikTok{schedule_msg}...")
 
     try:
         import subprocess
@@ -384,6 +789,8 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,  # 5 minute timeout
             cwd=str(uploader_dir)  # Run from uploader directory
         )
@@ -401,14 +808,14 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
             pass
 
         if result.returncode == 0:
-            print(f"✅ TikTok upload successful!")
+            print(f"[OK] TikTok upload successful!")
             return True
         else:
-            print(f"❌ TikTok upload failed (exit code: {result.returncode})")
+            print(f"[ERROR] TikTok upload failed (exit code: {result.returncode})")
             return False
 
     except subprocess.TimeoutExpired:
-        print("❌ TikTok upload timed out after 5 minutes")
+        print("[ERROR] TikTok upload timed out after 5 minutes")
         # Clean up
         try:
             temp_video_path.unlink()
@@ -416,7 +823,7 @@ def upload_tiktok_cookie_based(video_path: Path, caption: str, username: str = "
             pass
         return False
     except Exception as e:
-        print(f"❌ TikTok upload failed: {e}")
+        print(f"[ERROR] TikTok upload failed: {e}")
         # Clean up
         try:
             temp_video_path.unlink()
@@ -458,15 +865,15 @@ def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_h
     youtube_uploader = Path(__file__).parent / "youtube_uploader.py"
 
     if not youtube_uploader.exists():
-        print(f"❌ YouTube uploader not found: {youtube_uploader}")
+        print(f"[ERROR] YouTube uploader not found: {youtube_uploader}")
         return False
 
     if not video_path.exists():
-        print(f"⚠️ Skipping missing video for YouTube: {video_path}")
+        print(f"[WARN] Skipping missing video for YouTube: {video_path}")
         return False
 
     schedule_msg = f" (scheduled {schedule_hours}h from now)" if schedule_hours > 0 else f" (privacy: {privacy})"
-    print(f"▶️ Uploading to YouTube{schedule_msg}...")
+    print(f"[INFO] Uploading to YouTube{schedule_msg}...")
 
     cmd = [
         "python",
@@ -486,6 +893,8 @@ def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_h
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=600,  # 10 minute timeout for YouTube
         )
 
@@ -496,17 +905,58 @@ def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_h
             print(result.stderr)
 
         if result.returncode == 0:
-            print(f"✅ YouTube upload successful!")
+            output_blob = f"{result.stdout or ''}\n{result.stderr or ''}"
+            video_id_match = re.search(r"(?:Video ID:\s*|watch\?v=)([A-Za-z0-9_-]{6,})", output_blob, re.IGNORECASE)
+            youtube_video_id = video_id_match.group(1).strip() if video_id_match else ""
+            if not youtube_video_id:
+                print("[WARN] Could not parse YouTube video id from uploader output; mapping not persisted.")
+            if youtube_video_id and remember_youtube_media_mapping is not None:
+                try:
+                    map_extra = {
+                        "video_filename": video_path.name,
+                        "privacy": str(privacy or ""),
+                        "schedule_hours": float(schedule_hours or 0),
+                    }
+                    remember_youtube_media_mapping(
+                        _resolve_youtube_media_map_path(),
+                        video_id=youtube_video_id,
+                        game_type=str(game_mode),
+                        day_number=int(day_number),
+                        source="youtube_upload",
+                        extra=map_extra,
+                    )
+                    print(f"[OK] YouTube mapping persisted for {youtube_video_id}")
+                except Exception as exc:
+                    print(f"[WARN] Failed to persist YouTube mapping: {exc}")
+            if youtube_video_id and _resolve_youtube_upload_join_comment_enabled():
+                join_prompt_text = _resolve_youtube_upload_join_comment_text()
+                if join_prompt_text:
+                    posted = False
+                    for attempt_index, delay_seconds in enumerate((0.0, 2.0, 5.0), start=1):
+                        if delay_seconds > 0:
+                            time.sleep(delay_seconds)
+                        if post_youtube_comment(youtube_video_id, join_prompt_text):
+                            print(
+                                f"[OK] YouTube JOIN CTA comment posted on {youtube_video_id} "
+                                f"(attempt {attempt_index})"
+                            )
+                            posted = True
+                            break
+                    if not posted:
+                        print(f"[WARN] YouTube JOIN CTA comment could not be posted on {youtube_video_id}")
+                else:
+                    print("[WARN] YouTube JOIN upload-comment enabled, but text is empty.")
+            print(f"[OK] YouTube upload successful!")
             return True
         else:
-            print(f"❌ YouTube upload failed (exit code: {result.returncode})")
+            print(f"[ERROR] YouTube upload failed (exit code: {result.returncode})")
             return False
 
     except subprocess.TimeoutExpired:
-        print("❌ YouTube upload timed out after 10 minutes")
+        print("[ERROR] YouTube upload timed out after 10 minutes")
         return False
     except Exception as e:
-        print(f"❌ YouTube upload failed: {e}")
+        print(f"[ERROR] YouTube upload failed: {e}")
         return False
 
 
@@ -515,17 +965,28 @@ def push_stats(commit_message: str | None):
         raise SystemExit("TEST_MODE is True: stats/history not saved. Re-run games with TEST_MODE=False before pushing.")
     # Regenerate web bundles before pushing
     try:
-        stats = statistics.PlayerStatistics()
-        stats.export_web_stats(output_path="website/public/player_statistics_web.json")
-        print("Regenerated website/public/player_statistics_web.json")
-    except Exception as e:
-        print(f"Failed to regenerate player_statistics_web.json: {e}")
-    try:
+        api_games = _load_partitioned_games("website/public/api")
+        local_history = game_history.GameHistory("game_history.json")
+        merged_games = _merge_games(api_games, local_history.history.get("games", []))
         gh = game_history.GameHistory("game_history.json")
+        gh.history = {"games": merged_games}
+        if api_games:
+            print(f"Using existing API history ({len(api_games)} games) as baseline")
+        print(f"Merged local history -> {len(merged_games)} total games")
         gh.export_web_history(output_path="website/public/game_history_web.json")
         print("Regenerated website/public/game_history_web.json")
     except Exception as e:
         print(f"Failed to regenerate game_history.json (web): {e}")
+    try:
+        games = gh.history.get("games", []) if gh else []
+        stats = statistics.PlayerStatistics.rebuild_from_games(
+            games,
+            stats_file="player_statistics.json",
+        )
+        stats.export_web_stats(output_path="website/public/player_statistics_web.json")
+        print("Regenerated website/public/player_statistics_web.json")
+    except Exception as e:
+        print(f"Failed to regenerate player_statistics_web.json: {e}")
     ok = auto_push.push_stats_to_github(commit_message=commit_message)
     if not ok:
         raise SystemExit("Git push failed. See logs above.")
@@ -563,13 +1024,13 @@ def parse_args():
     parser.add_argument(
         "--session-file",
         type=Path,
-        default=Path(r"C:\Users\SondreNorheim\Documents\Instagram-Reels-Scraper-Auto-Poster\src\session_followerbattlegrounds.json"),
+        default=DEFAULT_IG_SESSION_FILE,
         help="Path to instagrapi session JSON (or set IG_SESSION_FILE env var).",
     )
     parser.add_argument(
         "--tiktok-session-file",
         type=Path,
-        default=Path(r"C:\Users\SondreNorheim\Documents\tiktok_follower_account_sessionid.json"),
+        default=DEFAULT_TIKTOK_SESSION_FILE,
         help="Path to TikTok session JSON with {'sessionid': '...'} (or set TIKTOK_SESSION_FILE).",
     )
     parser.add_argument(
@@ -614,7 +1075,13 @@ def parse_args():
         "--delay-seconds",
         type=int,
         default=None,
-        help="Fixed delay between uploads in seconds. If set, randomization of ±20%% will be applied.",
+        help="Fixed delay between uploads in seconds. If set, randomization of +/-20%% will be applied.",
+    )
+    parser.add_argument(
+        "--upload-interval-minutes",
+        type=int,
+        default=None,
+        help="Fixed delay between uploads in minutes (no jitter; overrides delay-min/max).",
     )
     parser.add_argument(
         "--delay-min-seconds",
@@ -629,6 +1096,34 @@ def parse_args():
         help="Maximum delay between uploads in seconds (default 14400 = 4 hours).",
     )
     parser.add_argument(
+        "--wait-for-videos",
+        action="store_true",
+        help="Wait for missing videos to appear before uploading.",
+    )
+    parser.add_argument(
+        "--wait-forever",
+        action="store_true",
+        help="When waiting for videos, wait indefinitely until the file appears.",
+    )
+    parser.add_argument(
+        "--wait-max-seconds",
+        type=int,
+        default=0,
+        help="Maximum seconds to wait per missing video (default 0 = no wait; negative = wait forever).",
+    )
+    parser.add_argument(
+        "--wait-poll-seconds",
+        type=int,
+        default=30,
+        help="Polling interval when waiting for videos (default 30).",
+    )
+    parser.add_argument(
+        "--wait-poll-minutes",
+        type=int,
+        default=None,
+        help="Polling interval in minutes when waiting for videos (overrides --wait-poll-seconds).",
+    )
+    parser.add_argument(
         "--push-message",
         default=None,
         help="Optional git commit message for stats push.",
@@ -637,6 +1132,18 @@ def parse_args():
         "--skip-stats",
         action="store_true",
         help="Skip stats/history push (uploads only).",
+    )
+    parser.add_argument(
+        "--run-context-file",
+        type=Path,
+        default=None,
+        help="Optional run context JSON (freezes day/modes for uploads).",
+    )
+    parser.add_argument(
+        "--run-day-number",
+        type=int,
+        default=None,
+        help="Override day number for video paths/captions.",
     )
     parser.add_argument(
         "--skip-youtube",
@@ -655,7 +1162,362 @@ def parse_args():
         default=0,
         help="Schedule YouTube upload X hours from now (0 = upload as private immediately).",
     )
+    parser.add_argument(
+        "--enable-facebook-page-upload",
+        action="store_true",
+        help="Upload each successful Instagram video to a Facebook Page via Graph API.",
+    )
+    parser.add_argument(
+        "--facebook-page-id",
+        default="",
+        help="Facebook Page ID for Graph API uploads (or set FACEBOOK_PAGE_ID).",
+    )
+    parser.add_argument(
+        "--facebook-access-token",
+        default="",
+        help="Page access token for Graph API uploads (or set FACEBOOK_PAGE_ACCESS_TOKEN).",
+    )
+    parser.add_argument(
+        "--facebook-api-version",
+        default="",
+        help="Graph API version (default from env/config or v18.0).",
+    )
+    parser.add_argument(
+        "--facebook-upload-on-ig-failure",
+        action="store_true",
+        help="Attempt Facebook Page upload even when Instagram upload is not explicitly confirmed.",
+    )
+    parser.add_argument(
+        "--facebook-secrets-file",
+        default="facebook_page_publish.local.env",
+        help="Local env-style file for Facebook publish credentials (default: facebook_page_publish.local.env).",
+    )
     return parser.parse_args()
+
+
+def _parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def load_env_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        if not path.exists():
+            return values
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.lower().startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            values[key] = value
+    except Exception as e:
+        print(f"[WARN] Failed to load env values from {path}: {e}")
+    return values
+
+
+def _resolve_facebook_join_prompt_mode() -> str:
+    mode = str(getattr(config, "FACEBOOK_JOIN_PROMPT_MODE", "both") or "both").strip().lower()
+    if mode not in {"off", "title", "comment", "both"}:
+        mode = "both"
+    return mode
+
+
+def _resolve_facebook_join_prompt_text() -> str:
+    return str(getattr(config, "FACEBOOK_JOIN_PROMPT_TEXT", "") or "").strip()
+
+
+def _resolve_facebook_media_map_path() -> Path:
+    raw_path = str(
+        getattr(
+            config,
+            "FACEBOOK_MEDIA_GAME_MAP_PATH",
+            "logs/webhook_services/facebook_media_game_mapping.json",
+        )
+        or "logs/webhook_services/facebook_media_game_mapping.json"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_youtube_media_map_path() -> Path:
+    raw_path = str(
+        getattr(
+            config,
+            "YOUTUBE_MEDIA_GAME_MAP_PATH",
+            "logs/webhook_services/youtube_media_game_mapping.json",
+        )
+        or "logs/webhook_services/youtube_media_game_mapping.json"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_youtube_upload_join_comment_enabled() -> bool:
+    return _parse_bool(
+        os.getenv("YOUTUBE_UPLOAD_JOIN_COMMENT_ENABLED"),
+        default=bool(getattr(config, "YOUTUBE_UPLOAD_JOIN_COMMENT_ENABLED", True)),
+    )
+
+
+def _resolve_youtube_upload_join_comment_text() -> str:
+    return str(
+        os.getenv("YOUTUBE_UPLOAD_JOIN_COMMENT_TEXT")
+        or getattr(config, "YOUTUBE_UPLOAD_JOIN_COMMENT_TEXT", 'Comment "JOIN" in order to be added to future games')
+        or ""
+    ).strip()
+
+
+def _resolve_youtube_comment_token_path() -> Path:
+    raw_path = str(
+        os.getenv("YOUTUBE_COMMENT_TOKEN_PATH")
+        or getattr(config, "YOUTUBE_COMMENT_TOKEN_PATH", "secrets/youtube_comment_token.pickle")
+        or "secrets/youtube_comment_token.pickle"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_youtube_upload_token_path() -> Path:
+    raw_path = str(
+        os.getenv("YOUTUBE_TOKEN_PATH")
+        or getattr(config, "YOUTUBE_TOKEN_PATH", "secrets/youtube_token.json")
+        or "secrets/youtube_token.json"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _youtube_comment_required_scopes() -> list[str]:
+    return ["https://www.googleapis.com/auth/youtube.force-ssl"]
+
+
+def _import_youtube_comment_libs():
+    global _YOUTUBE_COMMENT_LIBS, _YOUTUBE_COMMENT_LIBS_FAILED
+    if _YOUTUBE_COMMENT_LIBS is not None:
+        return _YOUTUBE_COMMENT_LIBS
+    if _YOUTUBE_COMMENT_LIBS_FAILED:
+        return None
+    try:
+        import pickle
+        from googleapiclient.discovery import build
+        from google.auth.transport.requests import Request
+        _YOUTUBE_COMMENT_LIBS = {
+            "pickle": pickle,
+            "build": build,
+            "Request": Request,
+        }
+        return _YOUTUBE_COMMENT_LIBS
+    except Exception as exc:
+        print(f"[WARN] YouTube API libraries unavailable for upload comment posting: {exc}")
+        _YOUTUBE_COMMENT_LIBS_FAILED = True
+        return None
+
+
+def _load_pickled_youtube_credentials(path: Path):
+    libs = _import_youtube_comment_libs()
+    if libs is None or not path.exists():
+        return None
+    try:
+        with path.open("rb") as handle:
+            return libs["pickle"].load(handle)
+    except Exception as exc:
+        print(f"[WARN] Failed to load YouTube credentials from {path}: {exc}")
+        return None
+
+
+def _save_pickled_youtube_credentials(path: Path, creds):
+    libs = _import_youtube_comment_libs()
+    if libs is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            libs["pickle"].dump(creds, handle)
+    except Exception as exc:
+        print(f"[WARN] Failed to save YouTube credentials to {path}: {exc}")
+
+
+def _credentials_include_required_scopes(creds, required_scopes: list[str]) -> bool:
+    if creds is None:
+        return False
+    scopes = getattr(creds, "scopes", None)
+    if not scopes:
+        # Some token objects do not expose scopes directly; let API call validate.
+        return True
+    current = {str(scope).strip() for scope in scopes if str(scope).strip()}
+    required = {str(scope).strip() for scope in required_scopes if str(scope).strip()}
+    return required.issubset(current)
+
+
+def _get_youtube_comment_client():
+    global _YOUTUBE_COMMENT_CLIENT
+    with _YOUTUBE_COMMENT_CLIENT_LOCK:
+        if _YOUTUBE_COMMENT_CLIENT is not None:
+            return _YOUTUBE_COMMENT_CLIENT
+        libs = _import_youtube_comment_libs()
+        if libs is None:
+            return None
+
+        required_scopes = _youtube_comment_required_scopes()
+        token_candidates: list[Path] = []
+        for candidate in (_resolve_youtube_comment_token_path(), _resolve_youtube_upload_token_path()):
+            if candidate and candidate not in token_candidates:
+                token_candidates.append(candidate)
+
+        creds = None
+        source_path = None
+        for candidate in token_candidates:
+            loaded = _load_pickled_youtube_credentials(candidate)
+            if loaded is None:
+                continue
+            if _credentials_include_required_scopes(loaded, required_scopes):
+                creds = loaded
+                source_path = candidate
+                break
+            if creds is None:
+                creds = loaded
+                source_path = candidate
+
+        if creds is None:
+            print(
+                "[WARN] YouTube JOIN upload-comment skipped: no OAuth token found. "
+                f"Expected one of: {', '.join(str(p) for p in token_candidates)}"
+            )
+            return None
+
+        if getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
+            try:
+                creds.refresh(libs["Request"]())
+                if source_path:
+                    _save_pickled_youtube_credentials(source_path, creds)
+            except Exception as exc:
+                print(f"[WARN] Failed to refresh YouTube OAuth token for upload comment: {exc}")
+                return None
+
+        if not _credentials_include_required_scopes(creds, required_scopes):
+            print(
+                "[WARN] YouTube JOIN upload-comment skipped: token missing scope "
+                f"{required_scopes}. Re-auth comment token with that scope."
+            )
+            return None
+
+        try:
+            _YOUTUBE_COMMENT_CLIENT = libs["build"](
+                "youtube",
+                "v3",
+                credentials=creds,
+                cache_discovery=False,
+            )
+        except Exception as exc:
+            print(f"[WARN] Failed to create YouTube client for upload comments: {exc}")
+            _YOUTUBE_COMMENT_CLIENT = None
+        return _YOUTUBE_COMMENT_CLIENT
+
+
+def post_youtube_comment(video_id: str, message: str) -> bool:
+    video_ref = str(video_id or "").strip()
+    payload_text = str(message or "").strip()
+    if not video_ref or not payload_text:
+        return False
+    youtube = _get_youtube_comment_client()
+    if youtube is None:
+        return False
+    try:
+        youtube.commentThreads().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "videoId": video_ref,
+                    "topLevelComment": {
+                        "snippet": {
+                            "textOriginal": payload_text,
+                        }
+                    },
+                }
+            },
+        ).execute()
+        return True
+    except Exception as exc:
+        print(f"[WARN] YouTube JOIN upload-comment request failed for {video_ref}: {exc}")
+        return False
+
+
+def fetch_facebook_object_metadata(object_id: str, access_token: str, api_version: str = "v18.0") -> dict:
+    if not object_id:
+        return {}
+    version = str(api_version or "v18.0").strip().lstrip("/")
+    url = f"https://graph.facebook.com/{version}/{object_id}"
+    fields = "id,post_id,permalink_url,title,description,message,created_time"
+    try:
+        response = requests.get(
+            url,
+            params={"fields": fields, "access_token": access_token},
+            timeout=(15, 45),
+        )
+    except Exception as exc:
+        print(f"[WARN] FB metadata fetch failed for {object_id}: {exc}")
+        return {}
+
+    if not response.ok:
+        print(f"[WARN] FB metadata fetch failed for {object_id}: HTTP {response.status_code} {response.text[:400]}")
+        return {}
+
+    try:
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def post_facebook_comment(target_id: str, message: str, access_token: str, api_version: str = "v18.0") -> bool:
+    if not target_id or not message:
+        return False
+    version = str(api_version or "v18.0").strip().lstrip("/")
+    url = f"https://graph.facebook.com/{version}/{target_id}/comments"
+    payload = {
+        "message": message,
+        "access_token": access_token,
+    }
+    try:
+        response = requests.post(url, data=payload, timeout=(15, 90))
+    except Exception as exc:
+        print(f"[WARN] FB CTA comment request failed for target {target_id}: {exc}")
+        return False
+    if response.ok:
+        return True
+    print(
+        f"[WARN] FB CTA comment failed for target {target_id}: "
+        f"HTTP {response.status_code} {response.text[:400]}"
+    )
+    return False
+
 
 def load_export_password_from_file(path: Path) -> str:
     try:
@@ -664,6 +1526,21 @@ def load_export_password_from_file(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
+
+
+def load_run_context(path: Path | None) -> dict | None:
+    if not path:
+        return None
+    try:
+        if not path.exists():
+            print(f"[WARN] Run context not found: {path}")
+            return None
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        print(f"[WARN] Failed to load run context {path}: {e}")
+        return None
 
 def run_ig_export(ig_persistent, args):
     if args.ig_uploader != "safe" or not ig_persistent:
@@ -705,6 +1582,22 @@ def run_ig_export(ig_persistent, args):
 
 def main():
     args = parse_args()
+    if args.upload_interval_minutes is not None:
+        if args.upload_interval_minutes <= 0:
+            raise SystemExit("--upload-interval-minutes must be > 0")
+        args.delay_seconds = None
+        args.delay_min_seconds = None
+        args.delay_max_seconds = None
+
+    if args.wait_poll_minutes is not None:
+        if args.wait_poll_minutes <= 0:
+            raise SystemExit("--wait-poll-minutes must be > 0")
+        args.wait_poll_seconds = args.wait_poll_minutes * 60
+
+    if args.wait_forever:
+        args.wait_for_videos = True
+        args.wait_max_seconds = -1
+
     _ensure_discord_bot()
     if args.ig_export_after_uploads and not args.ig_export_followers:
         args.ig_export_followers = True
@@ -731,21 +1624,88 @@ def main():
         print("Export completed.")
         return
 
-    # Build expected videos from ALL_GAME_MODES
-    game_modes = getattr(config, "ALL_GAME_MODES", [])
-    video_paths = [build_video_path(gm) for gm in game_modes]
+    run_context = load_run_context(args.run_context_file)
+    run_day_number = (
+        args.run_day_number
+        if args.run_day_number is not None
+        else (run_context.get("day_number") if run_context else None)
+    )
+    if run_day_number is None:
+        run_day_number = getattr(config, "DAY_NUMBER", 0)
+    run_game_modes = (run_context.get("all_game_modes") if run_context else None) or getattr(config, "ALL_GAME_MODES", [])
+    if not run_game_modes:
+        fallback_mode = getattr(config, "GAME_MODE", "")
+        run_game_modes = [fallback_mode] if fallback_mode else []
+
+    if run_context:
+        print(f"[INFO] Using run context: day {run_day_number}, modes {len(run_game_modes)}")
+
+    fb_secrets_path = Path(args.facebook_secrets_file)
+    fb_local_env = load_env_values(fb_secrets_path)
+    fb_page_id = (
+        args.facebook_page_id
+        or os.getenv("FACEBOOK_PAGE_ID")
+        or fb_local_env.get("FACEBOOK_PAGE_ID")
+        or getattr(config, "FACEBOOK_PAGE_ID", "")
+    ).strip()
+    fb_access_token = (
+        args.facebook_access_token
+        or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+        or fb_local_env.get("FACEBOOK_PAGE_ACCESS_TOKEN")
+        or getattr(config, "FACEBOOK_PAGE_ACCESS_TOKEN", "")
+    ).strip()
+    fb_api_version = (
+        args.facebook_api_version
+        or os.getenv("FACEBOOK_GRAPH_API_VERSION")
+        or fb_local_env.get("FACEBOOK_GRAPH_API_VERSION")
+        or getattr(config, "FACEBOOK_GRAPH_API_VERSION", "v18.0")
+    ).strip() or "v18.0"
+    fb_auto_upload_env = os.getenv("FACEBOOK_PAGE_AUTO_UPLOAD")
+    if fb_auto_upload_env is not None:
+        fb_auto_upload = _parse_bool(fb_auto_upload_env, default=False)
+    elif "FACEBOOK_PAGE_AUTO_UPLOAD" in fb_local_env:
+        fb_auto_upload = _parse_bool(fb_local_env.get("FACEBOOK_PAGE_AUTO_UPLOAD"), default=False)
+    else:
+        fb_auto_upload = bool(getattr(config, "FACEBOOK_PAGE_AUTO_UPLOAD", False))
+    fb_upload_enabled = bool(args.enable_facebook_page_upload or fb_auto_upload)
+    fb_upload_on_ig_failure = bool(args.facebook_upload_on_ig_failure)
+    if not fb_upload_on_ig_failure:
+        fb_on_fail_env = os.getenv("FACEBOOK_UPLOAD_ON_IG_FAILURE")
+        if fb_on_fail_env is not None:
+            fb_upload_on_ig_failure = _parse_bool(fb_on_fail_env, default=False)
+        elif "FACEBOOK_UPLOAD_ON_IG_FAILURE" in fb_local_env:
+            fb_upload_on_ig_failure = _parse_bool(
+                fb_local_env.get("FACEBOOK_UPLOAD_ON_IG_FAILURE"),
+                default=False,
+            )
+        else:
+            fb_upload_on_ig_failure = bool(getattr(config, "FACEBOOK_UPLOAD_ON_IG_FAILURE", False))
+    if fb_upload_enabled and (not fb_page_id or not fb_access_token):
+        print(
+            f"[WARN] FB page upload enabled but missing credentials. Set FACEBOOK_PAGE_ID and "
+            f"FACEBOOK_PAGE_ACCESS_TOKEN via args, env, or {fb_secrets_path}."
+        )
+        fb_upload_enabled = False
+    if fb_upload_enabled:
+        if fb_upload_on_ig_failure:
+            print(f"[INFO] FB page upload enabled (will upload even if IG confirmation is missing): {fb_page_id}")
+        else:
+            print(f"[INFO] FB page upload enabled (requires IG success): {fb_page_id}")
+
+    # Build expected videos from run context (or ALL_GAME_MODES)
+    video_paths = [build_video_path(gm, day_number=run_day_number) for gm in run_game_modes]
 
     if args.skip_stats:
-        print("⚠️ Skipping stats/history push (--skip-stats).")
+        print("[WARN] Skipping stats/history push (--skip-stats).")
     else:
-        print("📦 Pushing stats/history to GitHub...")
+        print("[INFO] Pushing stats/history to GitHub...")
         push_stats(args.push_message)
 
     if not args.enable_uploads:
         if args.skip_stats:
-            print("✅ Done (stats skipped, video upload disabled).")
+            print("[OK] Done (stats skipped, video upload disabled).")
         else:
-            print("✅ Done (stats pushed only - video upload disabled).")
+            print("[OK] Done (stats pushed only - video upload disabled).")
         return
 
     session_path = os.getenv("IG_SESSION_FILE", str(args.session_file))
@@ -790,7 +1750,7 @@ def main():
         try:
             tiktok_session_id = load_tiktok_session(Path(tiktok_session_path))
         except Exception as e:
-            print(f"⚠️ TikTok session load failed: {e}. TikTok uploads will be skipped.")
+            print(f"[WARN] TikTok session load failed: {e}. TikTok uploads will be skipped.")
 
     if args.ig_export_followers and not args.ig_export_after_uploads:
         if args.ig_uploader == "safe":
@@ -803,7 +1763,7 @@ def main():
         else:
             run_ig_export(None, args)
 
-    print("📤 Uploading videos as Reels/TikTok/YouTube...")
+    print("[INFO] Uploading videos as Reels/TikTok/YouTube...")
     try:
         if args.ig_uploader == "safe":
             from safe_instagram_uploader import SafeInstagramUploader
@@ -816,53 +1776,121 @@ def main():
 
         for idx, video_path in enumerate(video_paths):
             if not video_path.exists():
-                print(f"⚠️ Skipping missing video: {video_path}")
-                continue
+                if args.wait_for_videos:
+                    print(f"[WAIT] Missing video: {video_path}. Waiting up to {args.wait_max_seconds}s...")
+                    found = wait_for_video(video_path, args.wait_max_seconds, args.wait_poll_seconds)
+                    if not found:
+                        print(f"[WARN] Timed out waiting for video: {video_path}")
+                        continue
+                    print(f"[OK] Found video after wait: {video_path}")
+                else:
+                    print(f"[WARN] Skipping missing video: {video_path}")
+                    continue
             game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
-            base_caption = args.caption_template.format(game_mode=game_mode, day_number=config.DAY_NUMBER)
-            top_users = get_top_usernames_for_game(config.DAY_NUMBER, game_mode, limit=10)
-            ig_caption = base_caption + format_top_users_block(top_users)
+            actual_day_number = int(run_day_number)
+            day_value = _display_day_for_mode(game_mode, actual_day_number)
+            base_caption = args.caption_template.format(game_mode=game_mode, day_number=day_value)
+            skip_top10_modes = set(getattr(config, "TOP10_SKIP_GAME_MODES", []))
+            if _is_mode_in_skip_list(game_mode, skip_top10_modes):
+                ig_caption = base_caption
+            else:
+                top_users = get_top_usernames_for_game(actual_day_number, game_mode, limit=10)
+                ig_caption = base_caption + format_top_users_block(top_users)
 
             # Instagram upload
-            print(f"▶️ IG: Uploading {video_path.name}")
+            print(f"[INFO] IG: Uploading {video_path.name}")
+            ig_ok = False
             if args.ig_uploader == "safe":
-                ig_safe.upload_reel(str(video_path), ig_caption, reuse_session=True)
+                ig_ok = bool(
+                    ig_safe.upload_reel(
+                        str(video_path),
+                        ig_caption,
+                        reuse_session=True,
+                        game_mode=game_mode,
+                    )
+                )
             else:
-                upload_instagram(client, video_path, ig_caption)
+                ig_ok = upload_instagram(client, video_path, ig_caption)
+
+            if fb_upload_enabled and (ig_ok or fb_upload_on_ig_failure):
+                if not ig_ok and fb_upload_on_ig_failure:
+                    print(
+                        f"[WARN] IG upload not confirmed for {video_path.name}; "
+                        "attempting FB upload anyway (FACEBOOK_UPLOAD_ON_IG_FAILURE)."
+                    )
+                fb_video_path = resolve_platform_video_path(
+                    base_video_path=video_path,
+                    platform="facebook",
+                    game_mode=game_mode,
+                    day_number=actual_day_number,
+                )
+                if fb_video_path is None:
+                    print(f"[WARN] FB: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    print(f"[INFO] FB: Uploading {fb_video_path.name} to Page {fb_page_id}")
+                    upload_facebook_page_video(
+                        video_path=fb_video_path,
+                        caption=ig_caption,
+                        page_id=fb_page_id,
+                        access_token=fb_access_token,
+                        api_version=fb_api_version,
+                        game_mode=game_mode,
+                        day_number=actual_day_number,
+                    )
 
             # TikTok upload
             if tiktok_session_id:
-                print(f"▶️ TikTok: Uploading {video_path.name}")
-                upload_tiktok(tiktok_session_id, video_path, base_caption)
+                tiktok_video_path = resolve_platform_video_path(
+                    base_video_path=video_path,
+                    platform="tiktok",
+                    game_mode=game_mode,
+                    day_number=actual_day_number,
+                )
+                if tiktok_video_path is None:
+                    print(f"[WARN] TikTok: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    print(f"[INFO] TikTok: Uploading {tiktok_video_path.name}")
+                    upload_tiktok(tiktok_session_id, tiktok_video_path, base_caption)
 
             # YouTube upload
             skip_youtube_modes = set(getattr(config, "YOUTUBE_SKIP_GAME_MODES", []))
-            if not args.skip_youtube and game_mode not in skip_youtube_modes:
-                print(f"▶️ YouTube: Uploading {video_path.name}")
-                upload_youtube(
-                    video_path=video_path,
+            if not args.skip_youtube and not _is_mode_in_skip_list(game_mode, skip_youtube_modes):
+                youtube_video_path = resolve_platform_video_path(
+                    base_video_path=video_path,
+                    platform="youtube",
                     game_mode=game_mode,
-                    day_number=config.DAY_NUMBER,
-                    schedule_hours=args.youtube_schedule_hours,
-                    privacy=args.youtube_privacy
+                    day_number=actual_day_number,
                 )
+                if youtube_video_path is None:
+                    print(f"[WARN] YouTube: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    print(f"[INFO] YouTube: Uploading {youtube_video_path.name}")
+                    upload_youtube(
+                        video_path=youtube_video_path,
+                        game_mode=game_mode,
+                        day_number=day_value,
+                        schedule_hours=args.youtube_schedule_hours,
+                        privacy=args.youtube_privacy
+                    )
             elif game_mode in skip_youtube_modes:
                 print(f"Skipping YouTube upload for {game_mode} (config.YOUTUBE_SKIP_GAME_MODES).")
 
             # Delay before next upload (except after last one)
             if idx < len(video_paths) - 1:
-                randomized_delay = None
-                if args.delay_seconds is not None and args.delay_seconds > 0:
+                delay_seconds = None
+                if args.upload_interval_minutes is not None:
+                    delay_seconds = args.upload_interval_minutes * 60
+                elif args.delay_seconds is not None and args.delay_seconds > 0:
                     variation = args.delay_seconds * 0.2
-                    randomized_delay = args.delay_seconds + random.uniform(-variation, variation)
+                    delay_seconds = args.delay_seconds + random.uniform(-variation, variation)
                 elif args.delay_min_seconds and args.delay_max_seconds:
                     low = min(args.delay_min_seconds, args.delay_max_seconds)
                     high = max(args.delay_min_seconds, args.delay_max_seconds)
-                    randomized_delay = random.uniform(low, high)
+                    delay_seconds = random.uniform(low, high)
 
-                if randomized_delay and randomized_delay > 0:
-                    print(f"⏳ Waiting {randomized_delay/3600:.2f} hours before next upload...")
-                    time.sleep(randomized_delay)
+                if delay_seconds and delay_seconds > 0:
+                    print(f"[WAIT] Waiting {delay_seconds/60:.1f} minutes before next upload...")
+                    time.sleep(delay_seconds)
 
         if args.ig_export_followers and args.ig_export_after_uploads:
             if args.ig_uploader == "safe":
@@ -882,7 +1910,7 @@ def main():
         if ig_export:
             ig_export.close_session()
 
-    print("✅ Done.")
+    print("[OK] Done.")
 
 
 if __name__ == "__main__":

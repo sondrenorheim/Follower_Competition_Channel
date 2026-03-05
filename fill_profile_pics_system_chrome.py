@@ -4,14 +4,16 @@ import os
 import random
 import re
 import time
+from pathlib import Path
 from tqdm import tqdm
 from playwright.async_api import async_playwright
 
 # -----------------------
 # CONFIG
 # -----------------------
-INPUT_JSON = r"C:\Users\SondreNorheim\Documents\Follower_Competition_Channel\Followers\all_followers_fresh.json"
-STATE_FILE = r"C:\Users\SondreNorheim\Documents\Follower_Competition_Channel\ig_state.json"
+PROJECT_ROOT = Path(__file__).resolve().parent
+INPUT_JSON = str(PROJECT_ROOT / "Followers" / "all_followers_fresh.json")
+STATE_FILE = str(PROJECT_ROOT / "ig_state.json")
 
 # ULTRA-SAFE MODE for burner account (very slow but minimal detection risk)
 DELAY_MIN = 8.0             # Minimum 8 seconds between profiles (human-like)

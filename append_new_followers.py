@@ -5,8 +5,10 @@ Merges new Instagram export into existing follower list WITHOUT overwriting
 import json
 import os
 import re
+import html
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse, unquote
 
 try:
     import config
@@ -16,7 +18,7 @@ except Exception:
 
 # Paths
 # Path to latest Instagram export to merge in
-NEW_EXPORT_DIR = r"C:\Users\SondreNorheim\Downloads\instagram-followerbattlegrounds-2025-12-19-5HTOPliS\connections\followers_and_following"
+NEW_EXPORT_DIR = r"C:\Users\SondreNorheim\Downloads\instagram-followerbattlegrounds-2026-03-03-hZ6W6uLb\connections\followers_and_following"
 EXISTING_FILE = DEFAULT_FOLLOWER_FILE
 _base_name = Path(EXISTING_FILE).stem
 BACKUP_FILE = f"Followers/{_base_name}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -44,6 +46,63 @@ def convert_instagram_entry(entry):
     except Exception as e:
         print(f"Error converting entry: {e}")
         return None
+
+
+def convert_html_anchor_to_follower(href: str, anchor_text: str):
+    """Convert an Instagram HTML export anchor to our follower format."""
+    try:
+        href = html.unescape((href or "").strip())
+        anchor_text = html.unescape((anchor_text or "").strip())
+
+        parsed = urlparse(href)
+        netloc = (parsed.netloc or "").lower()
+        if netloc not in {"instagram.com", "www.instagram.com", "m.instagram.com"}:
+            return None
+
+        path = (parsed.path or "").strip("/")
+        if not path:
+            return None
+
+        username_from_path = unquote(path.split("/", 1)[0].strip())
+        if not username_from_path:
+            return None
+
+        reserved = {
+            "accounts", "about", "directory", "explore", "developer",
+            "reel", "reels", "stories", "p", "tv", "direct",
+        }
+        if username_from_path.lower() in reserved:
+            return None
+
+        username = anchor_text or username_from_path
+
+        return {
+            "username": username,
+            "profile_url": f"https://www.instagram.com/{username_from_path}",
+            "profile_pic_url": "",
+        }
+    except Exception as e:
+        print(f"Error converting HTML anchor: {e}")
+        return None
+
+
+def parse_html_followers_file(path: Path):
+    """Parse followers from an Instagram followers_*.html export file."""
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    anchor_matches = re.findall(
+        r'<a\b[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>',
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    followers = []
+    for href, text in anchor_matches:
+        follower = convert_html_anchor_to_follower(href, re.sub(r"<[^>]+>", "", text))
+        if follower:
+            followers.append(follower)
+    return followers
 
 
 def append_from_export_dir(export_dir, existing_file=EXISTING_FILE, backup_file=None):
@@ -93,32 +152,46 @@ def append_from_export_dir(export_dir, existing_file=EXISTING_FILE, backup_file=
         print(f"  Export folder not found: {export_dir}")
         return None
 
-    export_files = list(export_dir_path.glob("followers_*.json"))
-    plain_followers = export_dir_path / "followers.json"
-    if plain_followers.exists():
-        export_files.append(plain_followers)
+    json_files = list(export_dir_path.glob("followers_*.json"))
+    html_files = list(export_dir_path.glob("followers_*.html"))
+    plain_followers_json = export_dir_path / "followers.json"
+    plain_followers_html = export_dir_path / "followers.html"
+    if plain_followers_json.exists():
+        json_files.append(plain_followers_json)
+    if plain_followers_html.exists():
+        html_files.append(plain_followers_html)
+    export_files = json_files + html_files
 
     if not export_files:
         fallback_dir = next(export_dir_path.rglob("followers_and_following"), None)
         if fallback_dir and fallback_dir != export_dir_path:
             export_dir_path = fallback_dir
-            export_files = list(export_dir_path.glob("followers_*.json"))
-            plain_followers = export_dir_path / "followers.json"
-            if plain_followers.exists():
-                export_files.append(plain_followers)
+            json_files = list(export_dir_path.glob("followers_*.json"))
+            html_files = list(export_dir_path.glob("followers_*.html"))
+            plain_followers_json = export_dir_path / "followers.json"
+            plain_followers_html = export_dir_path / "followers.html"
+            if plain_followers_json.exists():
+                json_files.append(plain_followers_json)
+            if plain_followers_html.exists():
+                html_files.append(plain_followers_html)
+            export_files = json_files + html_files
     print(f"Reading new export from: {export_dir_path}")
 
     def _export_sort_key(path: Path):
-        match = re.search(r"followers_(\d+)\.json$", path.name, re.IGNORECASE)
+        match = re.search(r"followers_(\d+)\.(json|html)$", path.name, re.IGNORECASE)
         if match:
-            return (0, int(match.group(1)))
-        if path.name.lower() == "followers.json":
-            return (1, 0)
-        return (2, path.name.lower())
+            ext = match.group(2).lower()
+            ext_order = 0 if ext == "json" else 1
+            return (0, int(match.group(1)), ext_order)
+        lowered = path.name.lower()
+        if lowered in {"followers.json", "followers.html"}:
+            ext_order = 0 if lowered.endswith(".json") else 1
+            return (1, 0, ext_order)
+        return (2, path.name.lower(), 2)
 
     export_files = sorted(export_files, key=_export_sort_key)
     if not export_files:
-        print("  No followers_*.json files found in the export folder.")
+        print("  No followers_*.json or followers_*.html files found in the export folder.")
         return None
 
     print(f"  Found {len(export_files)} follower file(s).")
@@ -131,23 +204,29 @@ def append_from_export_dir(export_dir, existing_file=EXISTING_FILE, backup_file=
 
         print()
         print(f"  Processing {fname}...")
-        with open(fpath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        if fpath.suffix.lower() == ".html":
+            data = parse_html_followers_file(fpath)
+        else:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                raw_data = json.load(f)
+            data = []
+            for entry in raw_data:
+                follower = convert_instagram_entry(entry)
+                if follower:
+                    data.append(follower)
 
-        print(f"    Entries in file: {len(data):,}")
+        print(f"    Parsed entries in file: {len(data):,}")
         total_entries += len(data)
 
         for entry in data:
-            follower = convert_instagram_entry(entry)
-            if follower:
-                username = follower['username']
+            username = entry['username']
 
-                # Only add if NOT already in existing followers
-                if username not in existing_followers:
-                    existing_followers[username] = follower
-                    new_count += 1
-                else:
-                    skipped_count += 1
+            # Only add if NOT already in existing followers
+            if username not in existing_followers:
+                existing_followers[username] = entry
+                new_count += 1
+            else:
+                skipped_count += 1
 
     # Step 3: Convert to sorted list and save
     followers_list = sorted(existing_followers.values(), key=lambda x: x['username'].lower())

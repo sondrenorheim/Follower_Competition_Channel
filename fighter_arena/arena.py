@@ -19,7 +19,11 @@ class FighterArena:
         Initialize the fighter arena
         """
         # Get arena bounds from config
-        self.x, self.y, self.width, self.height = config.FIGHTER_ARENA_RECT
+        self.x, self.y, self.width, self.height = getattr(
+            config,
+            "FIGHTER_ARENA_MODE_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", config.FIGHTER_ARENA_RECT),
+        )
 
         # Calculate center
         self.center = (self.x + self.width // 2, self.y + self.height // 2)

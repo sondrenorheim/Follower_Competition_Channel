@@ -56,7 +56,11 @@ class CourseGenerator:
 
         # Starting position (left side, center vertically)
         start_x = 100
-        start_y = config.SCREEN_HEIGHT / 2
+        default_center_y = config.SCREEN_HEIGHT / 2
+        maze_rect = getattr(config, "MAZE_RUSH_ARENA_RECT", None)
+        if maze_rect:
+            default_center_y = maze_rect[1] + (maze_rect[3] / 2)
+        start_y = float(getattr(config, "OBSTACLE_COURSE_START_Y", default_center_y))
 
         current_x = start_x
         current_y = start_y

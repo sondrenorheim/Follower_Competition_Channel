@@ -12,6 +12,8 @@ import pygame
 import random
 import math
 import time
+import importlib
+from datetime import datetime
 import sys
 import os
 import socket
@@ -34,6 +36,14 @@ if os.name == 'nt':  # Windows
 
 # Import configuration
 import config
+try:
+    from shared.video_variant_builder import (
+        ensure_non_ig_join_variant,
+        get_last_non_ig_variant_build_info,
+    )
+except Exception:
+    ensure_non_ig_join_variant = None
+    get_last_non_ig_variant_build_info = None
 
 # Import shared modules
 from shared import (
@@ -57,12 +67,28 @@ _DEFAULT_FOLLOWER_IMPORT_FILE = getattr(config, "FOLLOWER_IMPORT_FILE", "")
 _LOG_HANDLES = []
 
 
+def _normalize_smb_mode(game_mode: str | None):
+    try:
+        from super_follower_bros_shared.levels import normalize_smb_mode
+    except Exception:
+        return None
+    return normalize_smb_mode(game_mode)
+
+
 def _get_follower_import_file(game_mode: str) -> str:
     overrides = getattr(config, "FOLLOWER_IMPORT_FILE_BY_MODE", {})
     if isinstance(overrides, dict):
         override = overrides.get(game_mode)
         if override:
             return override
+        # All SMB1 levels use the same club-members source file.
+        if _normalize_smb_mode(game_mode):
+            smb_override = overrides.get("super_follower_bros")
+            if smb_override:
+                return smb_override
+            smb_override = overrides.get("super_follower_bros_1_2")
+            if smb_override:
+                return smb_override
     return _DEFAULT_FOLLOWER_IMPORT_FILE
 
 
@@ -186,6 +212,79 @@ def _ensure_webhook_services():
         else:
             print(f"Warning: Webhook script not found at {script_path}")
 
+    tunnel_provider = str(getattr(config, "TUNNEL_PROVIDER", "ngrok")).strip().lower()
+    if tunnel_provider in ("cloudflare", "cloudflared"):
+        tunnel_provider = "cloudflared"
+    elif tunnel_provider != "ngrok":
+        print(f"Warning: Unknown TUNNEL_PROVIDER '{tunnel_provider}', defaulting to ngrok.")
+        tunnel_provider = "ngrok"
+
+    if tunnel_provider == "cloudflared":
+        _ensure_cloudflared_tunnel(base_dir, log_dir, hidden, webhook_port)
+    else:
+        _ensure_ngrok_tunnel(base_dir, log_dir, hidden)
+
+
+def _ensure_cloudflared_tunnel(base_dir: Path, log_dir: Path, hidden: bool, webhook_port: int):
+    metrics_port = int(getattr(config, "CLOUDFLARED_METRICS_PORT", 49312))
+    tunnel_mode = str(getattr(config, "CLOUDFLARED_TUNNEL_MODE", "quick")).strip().lower()
+    tunnel_name = str(getattr(config, "CLOUDFLARED_TUNNEL_NAME", "")).strip()
+    config_path = str(getattr(config, "CLOUDFLARED_CONFIG_PATH", "")).strip()
+    if tunnel_mode not in ("quick", "named"):
+        print(f"Warning: Unknown CLOUDFLARED_TUNNEL_MODE '{tunnel_mode}', defaulting to quick.")
+        tunnel_mode = "quick"
+    tunnel_ok = False
+    if metrics_port > 0 and _is_port_open("127.0.0.1", metrics_port):
+        tunnel_ok = True
+
+    if not tunnel_ok:
+        cloudflared_path = getattr(config, "CLOUDFLARED_PATH", "cloudflared")
+        cloudflared_bin = shutil.which(cloudflared_path) or cloudflared_path
+        url = getattr(config, "CLOUDFLARED_URL", f"http://localhost:{webhook_port}")
+        log_level = str(getattr(config, "CLOUDFLARED_LOG_LEVEL", "")).strip()
+        no_autoupdate = bool(getattr(config, "CLOUDFLARED_NO_AUTOUPDATE", True))
+        protocol = str(getattr(config, "CLOUDFLARED_PROTOCOL", "")).strip().lower()
+        edge_ip_version = str(getattr(config, "CLOUDFLARED_EDGE_IP_VERSION", "")).strip()
+
+        cloudflared_command = [cloudflared_bin, "tunnel"]
+        if no_autoupdate:
+            cloudflared_command.append("--no-autoupdate")
+        if log_level:
+            cloudflared_command.extend(["--loglevel", log_level])
+        if metrics_port > 0:
+            cloudflared_command.extend(["--metrics", f"127.0.0.1:{metrics_port}"])
+        if protocol in ("auto", "quic", "http2"):
+            cloudflared_command.extend(["--protocol", protocol])
+        if edge_ip_version in ("4", "6", "auto"):
+            cloudflared_command.extend(["--edge-ip-version", edge_ip_version])
+
+        print("Cloudflare Tunnel not running. Starting cloudflared...")
+        if tunnel_mode == "named":
+            if not tunnel_name:
+                print("Warning: CLOUDFLARED_TUNNEL_NAME is empty. Falling back to quick tunnel.")
+                cloudflared_command.extend(["--url", url])
+                tunnel_mode = "quick"
+            else:
+                cfg_path = Path(config_path) if config_path else (Path.home() / ".cloudflared" / "config.yml")
+                if not cfg_path.exists():
+                    print(f"Warning: cloudflared config not found at {cfg_path}. Falling back to quick tunnel.")
+                    cloudflared_command.extend(["--url", url])
+                    tunnel_mode = "quick"
+                else:
+                    # For named tunnels, global flags must come before `run`.
+                    cloudflared_command.extend(["--config", str(cfg_path), "run", tunnel_name])
+        else:
+            cloudflared_command.extend(["--url", url])
+
+        _start_process_in_new_console(
+            cloudflared_command,
+            str(base_dir),
+            hidden=hidden,
+            log_path=log_dir / "cloudflared.log",
+        )
+
+
+def _ensure_ngrok_tunnel(base_dir: Path, log_dir: Path, hidden: bool):
     ngrok_port = int(getattr(config, "NGROK_API_PORT", 4040))
     ngrok_ok = False
     if _is_port_open("127.0.0.1", ngrok_port):
@@ -935,14 +1034,76 @@ class FollowerBattleRoyale:
 
 def _create_game_instance(game_mode: str):
     """Instantiate the correct game class for the given mode."""
+    smb_mode = _normalize_smb_mode(game_mode)
+    if smb_mode:
+        from super_follower_bros_shared.levels import world_label_for_mode
+
+        module_name = "super_follower_bros" if game_mode == "super_follower_bros" else smb_mode
+        print(f"Starting Super Follower Bros. {world_label_for_mode(smb_mode)} mode...")
+        module = importlib.import_module(module_name)
+
+        factory = getattr(module, "create_game", None)
+        if callable(factory):
+            return factory()
+
+        game_cls = getattr(module, "Game", None)
+        if callable(game_cls):
+            return game_cls()
+
+        raise RuntimeError(f"{module_name} is missing create_game() or Game class")
+
     if game_mode == "fighter_arena":
         from fighter_arena import FighterBattleArena
         print("Starting Fighter Arena mode...")
         return FighterBattleArena()
+    elif game_mode == "followers_io":
+        from followers_io import FollowersIOGame
+        print("Starting Followers.io mode...")
+        return FollowersIOGame()
     elif game_mode == "maze_rush":
         from maze_rush import MazeRushGame
         print("Starting Maze Rush mode...")
         return MazeRushGame()
+    elif game_mode == "flappy_followers":
+        from flappy_followers import FlappyFollowersGame
+        print("Starting Flappy Followers mode...")
+        return FlappyFollowersGame()
+    elif game_mode == "tiny_followers":
+        from tiny_followers import TinyFollowersGame
+        print("Starting Tiny Followers mode...")
+        return TinyFollowersGame()
+    elif game_mode == "jetpack_followers":
+        from jetpack_followers import JetpackFollowersGame
+        print("Starting Jetpack Followers mode...")
+        return JetpackFollowersGame()
+    elif game_mode == "doodle_followers":
+        from doodle_followers import DoodleFollowersGame
+        print("Starting Doodle Followers mode...")
+        return DoodleFollowersGame()
+    elif game_mode == "crossy_followers":
+        if bool(getattr(config, "CROSSY_USE_3D_RENDERER", False)):
+            try:
+                from crossy_followers.game_3d import CrossyFollowers3DGame
+
+                print("Starting Crossy Followers mode (3D)...")
+                return CrossyFollowers3DGame()
+            except Exception as exc:
+                print(f"Warning: Failed to start Crossy 3D renderer ({exc}). Falling back to 2D renderer.")
+        from crossy_followers import CrossyFollowersGame
+        print("Starting Crossy Followers mode...")
+        return CrossyFollowersGame()
+    elif game_mode == "subway_followers":
+        from subway_followers import SubwayFollowersGame
+        print("Starting Subway Followers mode...")
+        return SubwayFollowersGame()
+    elif game_mode == "subway_followers_3d":
+        from subway_followers_3d import SubwayFollowers3DGame
+        print("Starting Subway Followers 3D mode...")
+        return SubwayFollowers3DGame()
+    elif game_mode == "mini_golf":
+        from mini_golf import MiniGolfGame
+        print("Starting Mini Golf mode...")
+        return MiniGolfGame()
     elif game_mode == "anime_fighting":
         from anime_fighting import AnimeFightingGame
         print("Starting Anime Fighting mode...")
@@ -983,10 +1144,46 @@ def _create_game_instance(game_mode: str):
         from side_choice import SideChoiceGame
         print("Starting Heads/Tails mode...")
         return SideChoiceGame()
+    elif game_mode == "math_drop":
+        from math_drop import MathDropGame
+        print("Starting Math Drop mode...")
+        return MathDropGame()
+    elif game_mode == "plinko":
+        from plinko import PlinkoGame
+        print("Starting Plinko mode...")
+        return PlinkoGame()
     elif game_mode == "wheel_spinner":
         from wheel_spinner import WheelSpinnerGame
         print("Starting Wheel Spinner mode...")
         return WheelSpinnerGame()
+    elif game_mode == "lava_platform":
+        from lava_platform import LavaPlatformGame
+        print("Starting Lava Platform mode...")
+        return LavaPlatformGame()
+    elif game_mode == "beacon_blitz":
+        from beacon_blitz import BeaconBlitzGame
+        print("Starting Beacon Blitz mode...")
+        return BeaconBlitzGame()
+    elif game_mode == "lane_rush":
+        from lane_rush import LaneRushGame
+        print("Starting Lane Rush mode...")
+        return LaneRushGame()
+    elif game_mode == "discord_signal":
+        from discord_signal import DiscordSignalGame
+        print("Starting Discord Signal mode...")
+        return DiscordSignalGame()
+    elif game_mode == "club_duel":
+        from club_duel import ClubDuelGame
+        print("Starting Club Duel mode...")
+        return ClubDuelGame()
+    elif game_mode == "club_relic":
+        from club_relic import ClubRelicGame
+        print("Starting Relic Rally mode...")
+        return ClubRelicGame()
+    elif game_mode == "moon_stack":
+        from moon_stack import MoonStackGame
+        print("Starting Moon Stack mode...")
+        return MoonStackGame()
 
     print("Starting Battle Royale mode...")
     return FollowerBattleRoyale()
@@ -1017,6 +1214,214 @@ def _run_single_mode(game_mode: str):
     game = _create_game_instance(game_mode)
     game.run()
 
+    if not bool(getattr(config, "EXPORT_VIDEO", False)):
+        return
+    if not bool(getattr(config, "NON_IG_VARIANT_ENABLED", True)):
+        return
+    if not bool(getattr(config, "NON_IG_VARIANT_GENERATE_AFTER_EXPORT", True)):
+        return
+    if ensure_non_ig_join_variant is None:
+        print("[WARN] Non-IG variant builder unavailable; skipping JOIN footer variant generation.")
+        return
+
+    base_video_raw = str(getattr(config, "OUTPUT_VIDEO_PATH", "") or "").strip()
+    if not base_video_raw:
+        return
+    base_video_path = Path(base_video_raw)
+
+    variant_video_path = Path(
+        config.get_non_ig_variant_video_path(
+            game_mode=game_mode,
+            day_number=getattr(config, "DAY_NUMBER", None),
+            test_mode=getattr(config, "TEST_MODE", None),
+        )
+    )
+
+    needs_generation = True
+    try:
+        if variant_video_path.exists() and variant_video_path.stat().st_mtime >= base_video_path.stat().st_mtime:
+            needs_generation = False
+    except Exception:
+        needs_generation = True
+
+    try:
+        resolved_path = ensure_non_ig_join_variant(base_video_path, variant_video_path)
+        if resolved_path == variant_video_path and variant_video_path.exists():
+            if needs_generation:
+                message = f"Generated non-IG JOIN variant: {variant_video_path}"
+                if get_last_non_ig_variant_build_info is not None:
+                    info = get_last_non_ig_variant_build_info() or {}
+                    top_y = info.get("top_y")
+                    mode = str(info.get("placement_mode") or "").strip()
+                    if top_y is not None:
+                        if mode:
+                            message += f" (top_y={top_y}, mode={mode})"
+                        else:
+                            message += f" (top_y={top_y})"
+                print(message)
+        else:
+            print("Variant generation failed; falling back to base video")
+    except Exception as exc:
+        print(f"Variant generation failed; falling back to base video ({exc})")
+
+
+def _write_scheduled_upload_context() -> Path | None:
+    """Persist the current ALL-mode run settings for scheduled uploads."""
+    try:
+        log_dir = Path(__file__).resolve().parent / "logs" / "scheduled_upload"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "day_number": int(getattr(config, "DAY_NUMBER", 0)),
+            "all_game_modes": list(getattr(config, "ALL_GAME_MODES", [])),
+            "game_mode": getattr(config, "GAME_MODE", ""),
+            "timestamp": datetime.now().isoformat(),
+        }
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = log_dir / f"run_context_day_{payload['day_number']}_{stamp}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        return path
+    except Exception as e:
+        print(f"Warning: Failed to write scheduled upload context: {e}")
+        return None
+
+
+def _start_scheduled_upload_background(context_path: Path | None = None):
+    """Start the scheduled upload process in background."""
+    base_dir = Path(__file__).resolve().parent
+    script_path = base_dir / "scheduled_upload.py"
+
+    if not script_path.exists():
+        print("Warning: scheduled_upload.py not found")
+        return
+
+    log_dir = base_dir / "logs" / "scheduled_upload"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"launcher_{config.DAY_NUMBER}.log"
+
+    command = [sys.executable, str(script_path), "--background"]
+    if context_path:
+        command.extend(["--context-file", str(context_path)])
+
+    try:
+        log_file = open(log_path, "a", encoding="utf-8")
+
+        if os.name == "nt":
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+            subprocess.Popen(
+                command,
+                cwd=str(base_dir),
+                creationflags=flags,
+                stdout=log_file,
+                stderr=log_file,
+            )
+        else:
+            subprocess.Popen(
+                command,
+                cwd=str(base_dir),
+                start_new_session=True,
+                stdout=log_file,
+                stderr=log_file,
+            )
+
+        print("\n" + "=" * 60)
+        print("Scheduled upload process started in background")
+        print(f"Log: {log_path}")
+        print("=" * 60)
+    except Exception as e:
+        print(f"Warning: Failed to start scheduled upload: {e}")
+
+
+def _push_stats_background(game_mode: str, day_number: int):
+    """Push stats to GitHub in background after a game completes."""
+    base_dir = Path(__file__).resolve().parent
+    log_dir = base_dir / "logs" / "stats_push"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"day_{day_number}_{game_mode}.log"
+
+    # Simple Python command to push stats
+    push_code = """
+import sys
+sys.path.insert(0, r'{base_dir}')
+from shared import auto_push
+auto_push.push_stats_to_github()
+print('Stats push complete for {game_mode}')
+""".format(base_dir=str(base_dir), game_mode=game_mode)
+
+    command = [sys.executable, "-c", push_code]
+
+    try:
+        log_file = open(log_path, "a", encoding="utf-8")
+
+        if os.name == "nt":
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+            subprocess.Popen(
+                command,
+                cwd=str(base_dir),
+                creationflags=flags,
+                stdout=log_file,
+                stderr=log_file,
+            )
+        else:
+            subprocess.Popen(
+                command,
+                cwd=str(base_dir),
+                start_new_session=True,
+                stdout=log_file,
+                stderr=log_file,
+            )
+
+        print(f"  -> Background stats push started for {game_mode}")
+    except Exception as e:
+        print(f"Warning: Failed to start background stats push: {e}")
+
+
+def _normalize_all_mode_push_strategy(value: str) -> str:
+    """Normalize ALL-mode auto-push strategy names."""
+    strategy = str(value or "").strip().lower()
+    if strategy in {"per_game", "every_game", "each_game"}:
+        return "per_game"
+    if strategy in {"every_n_games", "batch", "batched", "interval"}:
+        return "every_n_games"
+    return "final_only"
+
+
+def _compute_all_mode_batch_checkpoints(total_modes: int, batch_size: int) -> set[int]:
+    """
+    Return completed-game counts that should trigger intermediate pushes.
+    Final push is handled separately after all games finish.
+    """
+    if total_modes <= 0:
+        return set()
+    size = max(1, int(batch_size))
+    return {count for count in range(size, total_modes, size)}
+
+
+def _log_all_mode_exception(game_mode: str, exc: Exception) -> Path:
+    """Write a crash log for a failed ALL-mode game and return the log path."""
+    base_dir = Path(__file__).resolve().parent
+    log_dir = base_dir / "logs" / "run_all"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    day_number = getattr(config, "DAY_NUMBER", 0)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"day_{day_number}_{game_mode}_{timestamp}.log"
+
+    try:
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write("=" * 60 + "\n")
+            log_file.write(f"Crash in ALL mode: {game_mode}\n")
+            log_file.write(f"Day: {day_number}\n")
+            log_file.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            log_file.write(f"Exception: {type(exc).__name__}: {exc}\n")
+            log_file.write("\nTraceback:\n")
+            import traceback
+            traceback.print_exc(file=log_file)
+            log_file.write("\n")
+    except Exception:
+        # If logging fails, fall back to stderr in the caller.
+        pass
+
+    return log_path
+
 
 def main():
     """
@@ -1030,25 +1435,86 @@ def main():
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
 
+        # When running ALL modes, enforce production settings
+        if game_mode == "ALL":
+            config.TEST_MODE = False
+            config.EXPORT_VIDEO = True
+            config.DOWNLOAD_PROFILE_PICTURES = True
+            config.LOAD_PROFILE_PICTURES = True
+            config.TEST_MINIMAL_PLAYERS = False
+
         if game_mode == "ALL":
             print("Running ALL game modes sequentially:")
-            print(" -> " + ", ".join(getattr(config, "ALL_GAME_MODES", [])))
+            all_modes = list(getattr(config, "ALL_GAME_MODES", []))
+            print(" -> " + ", ".join(all_modes))
+            push_strategy = _normalize_all_mode_push_strategy(
+                getattr(config, "AUTO_PUSH_ALL_MODE_STRATEGY", "every_n_games")
+            )
+            push_batch_size = max(1, int(getattr(config, "AUTO_PUSH_ALL_MODE_BATCH_SIZE", 5) or 5))
+            push_checkpoints = _compute_all_mode_batch_checkpoints(len(all_modes), push_batch_size)
+            print(
+                f"ALL-mode stats push strategy: {push_strategy}"
+                + (f" (every {push_batch_size} games)" if push_strategy == "every_n_games" else "")
+            )
+            all_mode_push_enabled = (
+                not config.TEST_MODE
+                and bool(getattr(config, "AUTO_PUSH_STATS", False))
+            )
+            suppress_per_game_push = (
+                all_mode_push_enabled
+                and push_strategy != "per_game"
+                and bool(getattr(config, "AUTO_PUSH_ALL_MODE_SUPPRESS_PER_GAME_PUSH", True))
+            )
+            original_auto_push_stats = bool(getattr(config, "AUTO_PUSH_STATS", False))
+            if suppress_per_game_push:
+                config.AUTO_PUSH_STATS = False
+                print("ALL-mode: per-game module auto-push suppressed; using batched checkpoints only.")
             default_import_file = _DEFAULT_FOLLOWER_IMPORT_FILE
             config.FOLLOWER_IMPORT_FILE = default_import_file
+            # Start scheduled uploads immediately so it can wait for the set time
+            # while games are still rendering.
+            context_path = _write_scheduled_upload_context()
+            _start_scheduled_upload_background(context_path)
             prefetched = _prefetch_followers_for_all()
-            for mode in getattr(config, "ALL_GAME_MODES", []):
-                # Refresh the cache reference before each run
-                mode_import_file = _get_follower_import_file(mode)
-                if prefetched and mode_import_file == default_import_file:
-                    shared_api.set_prefetched_followers(prefetched)
-                else:
-                    shared_api.clear_prefetched_followers()
-                _run_single_mode(mode)
-            shared_api.clear_prefetched_followers()
-            # Restore GAME_MODE for downstream references (e.g., manual push)
-            config.GAME_MODE = "ALL"
-            config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
-            config.FOLLOWER_IMPORT_FILE = default_import_file
+            completed_modes = 0
+            try:
+                for mode in all_modes:
+                    # Refresh the cache reference before each run
+                    mode_import_file = _get_follower_import_file(mode)
+                    if prefetched and mode_import_file == default_import_file:
+                        shared_api.set_prefetched_followers(prefetched)
+                    else:
+                        shared_api.clear_prefetched_followers()
+                    try:
+                        _run_single_mode(mode)
+                    except Exception as e:
+                        log_path = _log_all_mode_exception(mode, e)
+                        print(f"\nERROR: {mode} crashed. See log: {log_path}\n")
+                        continue
+                    completed_modes += 1
+                    if all_mode_push_enabled:
+                        if push_strategy == "per_game":
+                            # Legacy behavior: push after each game.
+                            _push_stats_background(mode, config.DAY_NUMBER)
+                        elif push_strategy == "every_n_games" and completed_modes in push_checkpoints:
+                            # Batched behavior: push every N completed games.
+                            _push_stats_background(f"ALL_batch_{completed_modes}", config.DAY_NUMBER)
+                if (
+                    all_mode_push_enabled
+                    and push_strategy != "per_game"
+                    and completed_modes > 0
+                ):
+                    # Push once after all games are complete (final_only + every_n_games).
+                    config.GAME_MODE = "ALL"
+                    _push_stats_background("ALL", config.DAY_NUMBER)
+            finally:
+                shared_api.clear_prefetched_followers()
+                config.AUTO_PUSH_STATS = original_auto_push_stats
+                # Restore GAME_MODE for downstream references (e.g., manual push)
+                config.GAME_MODE = "ALL"
+                config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
+                config.FOLLOWER_IMPORT_FILE = default_import_file
+
         else:
             _run_single_mode(game_mode)
     except KeyboardInterrupt:

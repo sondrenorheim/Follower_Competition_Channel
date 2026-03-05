@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 import config
 from shared.renderer_template import RendererTemplate
+from shared.club_panel import draw_club_panel
 
 
 class SnakeEscapeRenderer(RendererTemplate):
@@ -23,27 +24,57 @@ class SnakeEscapeRenderer(RendererTemplate):
     GAME_SUBTITLE = "Making my followers battle every day"
     PLAYER_LABEL = "survivors"
 
-    # Override dimensions for square arena
-    GAME_WIDTH = 500
-    GAME_HEIGHT = 500
+    # Use the shared square profile arena by default.
+    GAME_WIDTH = int(
+        getattr(
+            config,
+            "SNAKE_ESCAPE_ARENA_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", (20, 230, 500, 500)),
+        )[2]
+    )
+    GAME_HEIGHT = int(
+        getattr(
+            config,
+            "SNAKE_ESCAPE_ARENA_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", (20, 230, 500, 500)),
+        )[3]
+    )
 
     def __init__(self, screen: pygame.Surface):
         """Initialize the renderer."""
         super().__init__(screen)
 
-        # Recalculate game area for 500x500 centered vertically
-        # Screen is 540x960, arena is 500x500
-        # Center vertically: (960 - 500) / 2 = 230
-        self.game_left = (self.width - self.GAME_WIDTH) // 2  # 20
-        self.game_top = (self.height - self.GAME_HEIGHT) // 2  # 230
+        arena_x, arena_y, arena_w, arena_h = getattr(
+            config,
+            "SNAKE_ESCAPE_ARENA_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", (20, 230, self.GAME_WIDTH, self.GAME_HEIGHT)),
+        )
+        self.game_left = int(arena_x)
+        self.game_top = int(arena_y)
+        self.GAME_WIDTH = int(arena_w)
+        self.GAME_HEIGHT = int(arena_h)
         self.game_right = self.game_left + self.GAME_WIDTH
         self.game_bottom = self.game_top + self.GAME_HEIGHT
 
         # Text positions relative to arena
-        self.title_y = self.game_top - 100  # 130
-        self.subtitle_y = self.game_top - 60  # 170
-        self.day_counter_y = self.game_bottom + 40  # 770
-        self.survivors_y = self.game_bottom + 80  # 810
+        self.title_y = self.game_top - 70
+        self.subtitle_y = self.game_top - 40
+        self.day_counter_offset = int(
+            getattr(
+                config,
+                "SNAKE_ESCAPE_DAY_COUNTER_OFFSET",
+                getattr(config, "MAZE_RUSH_DAY_COUNTER_OFFSET", 14),
+            )
+        )
+        self.day_counter_y = self.game_bottom + self.day_counter_offset
+        self.survivors_y = self.day_counter_y + 40
+        self.prompt_above_arena_margin = int(
+            getattr(
+                config,
+                "SNAKE_ESCAPE_PROMPT_ABOVE_ARENA_MARGIN",
+                getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8),
+            )
+        )
 
         # Arena colors
         self.arena_color = (220, 220, 210)  # Light tan/cream color
@@ -55,6 +86,18 @@ class SnakeEscapeRenderer(RendererTemplate):
         self.font_small = pygame.font.Font(None, 12)  # Smaller nametag font
         self.font_prompt = pygame.font.Font(None, 24)
         self.font_promo = pygame.font.Font(None, 24)
+        day_counter_size = int(
+            getattr(
+                config,
+                "SNAKE_ESCAPE_DAY_COUNTER_FONT_SIZE",
+                getattr(config, "MAZE_RUSH_DAY_COUNTER_FONT_SIZE", 32),
+            )
+        )
+        self.day_counter_font = pygame.font.Font(None, day_counter_size)
+        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
+        self.font_club_panel = pygame.font.Font(None, club_text_size)
+        self._club_panel_anchor_y = None
+        self._day_counter_bottom = None
         self.promo_text_left = "Join Discord, link in bio"
         self.promo_text_right = "Check your results in bio"
         self.discord_logo = None
@@ -105,7 +148,8 @@ class SnakeEscapeRenderer(RendererTemplate):
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
         if prompt_text:
             prompt_surface = self.font_prompt.render(prompt_text, True, config.COLOR_TEXT)
-            prompt_rect = prompt_surface.get_rect(center=(center_x, subtitle_rect.bottom + 6))
+            prompt_y = max(self.game_top - self.prompt_above_arena_margin, subtitle_rect.bottom + 6)
+            prompt_rect = prompt_surface.get_rect(center=(center_x, prompt_y))
             self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_day_counter(self, players: List, game_state: dict):
@@ -113,9 +157,10 @@ class SnakeEscapeRenderer(RendererTemplate):
         total_count = len(players)
         day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
 
-        day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
+        day_surface = self.day_counter_font.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, self.day_counter_y))
         self.screen.blit(day_surface, day_rect)
+        self._day_counter_bottom = day_rect.bottom
 
     def _draw_players(self, players: List):
         """Draw all followers."""
@@ -125,9 +170,17 @@ class SnakeEscapeRenderer(RendererTemplate):
                 self._draw_follower(follower)
 
         # Draw alive followers
+        club_followers = []
         for follower in players:
             if follower.alive:
-                self._draw_follower(follower)
+                if getattr(follower, "is_club_member", False):
+                    club_followers.append(follower)
+                else:
+                    self._draw_follower(follower)
+
+        for follower in club_followers:
+            self._draw_club_glow(follower, size=follower.radius * 2)
+            self._draw_follower(follower)
 
     def _draw_follower(self, follower):
         """Draw a single follower."""
@@ -195,6 +248,7 @@ class SnakeEscapeRenderer(RendererTemplate):
         surface = self.font_status.render(text, True, config.COLOR_TEXT)
         rect = surface.get_rect(center=(self.width // 2, self.survivors_y))
         self.screen.blit(surface, rect)
+        self._club_panel_anchor_y = rect.bottom
 
     def _draw_snake_speed_indicator(self, snake, snake_count: int = 1):
         """Draw an indicator showing the snake's current speed."""
@@ -395,14 +449,14 @@ class SnakeEscapeRenderer(RendererTemplate):
         # Draw players (followers)
         self._draw_players(players)
 
-        # Draw game-specific UI (snake, status)
-        self._draw_game_ui(players, game_state)
-
         # Draw title and subtitle
         self._draw_title_and_subtitle()
 
         # Draw day counter
         self._draw_day_counter(players, game_state)
+        # Draw game-specific UI (snake, status)
+        self._draw_game_ui(players, game_state)
+        self._draw_club_panel(game_state)
 
         # Draw end-game display if needed
         if game_state.get('show_leaderboards'):
@@ -413,3 +467,16 @@ class SnakeEscapeRenderer(RendererTemplate):
             )
 
         self._draw_promo_overlay()
+
+    def _draw_club_panel(self, game_state: dict):
+        anchor_y = self._club_panel_anchor_y or self._day_counter_bottom
+        if anchor_y is None:
+            return
+        panel_rect = draw_club_panel(
+            self.screen,
+            game_state.get("club_spotlight"),
+            anchor_y=anchor_y,
+            font=self.font_club_panel,
+            get_avatar_surface=self._get_avatar_surface,
+            glow_cache=self._club_glow_cache,
+        )

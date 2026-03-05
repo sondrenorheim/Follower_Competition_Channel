@@ -4,7 +4,8 @@ Test if your TikTok session is valid
 import json
 from pathlib import Path
 
-session_file = Path(r"C:\Users\SondreNorheim\Documents\tiktok_follower_account_sessionid.json")
+PROJECT_ROOT = Path(__file__).resolve().parent
+session_file = PROJECT_ROOT / "tiktok_follower_account_sessionid.json"
 
 print("Testing TikTok session...")
 print(f"Session file: {session_file}\n")

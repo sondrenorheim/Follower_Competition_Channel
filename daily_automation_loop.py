@@ -169,19 +169,44 @@ class DailyAutomationLoop:
         Returns:
             Caption text
         """
-        # Varied captions to seem more human (no emojis to avoid encoding issues)
+        # Convert game_mode to display name
+        game_display_names = {
+            "battle_royale": "Battle Royale",
+            "fighter_arena": "Fighter Arena",
+            "obstacle_course": "Obstacle Course",
+            "snake_escape": "Snake Escape",
+            "team_battle": "Team Battle",
+            "platformer_race": "Platformer Race",
+            "spleef": "Spleef",
+            "mingle": "Mingle",
+            "heads_or_tails": "Heads or Tails",
+            "wheel_spinner": "Wheel Spinner",
+            "gorillas_vs_followers": "Gorillas vs Followers",
+            "meteor_mayhem": "Meteor Mayhem",
+            "anime_fighting": "Anime Fighting",
+            "maze_rush": "Maze Rush",
+            "lava_platform": "Lava Platform",
+            "mini_golf": "Mini Golf",
+            "math_drop": "Math Drop",
+            "tiny_followers": "Tiny Followers",
+            "followers_io": "Followers.io",
+            "moon_stack": "Earth to Moon Stack",
+        }
+        game_display = game_display_names.get(game_mode, game_mode.replace("_", " ").title())
+
+        # Varied captions - all include "Game: X | Day Y" for webhook parsing
         caption_templates = [
-            f"Day {day_number} of making my followers battle every day! Follow to enter the battle\n\nCheck the link in the bio for your result and overall monthly ranking!\n\n#followerbattlegrounds",
-            f"Day {day_number}! My followers are fighting again. Follow to join the next round!\n\n#followerbattlegrounds #battle",
-            f"Making my followers compete - Day {day_number}! Follow to participate!\n\n#followerbattlegrounds #gaming",
-            f"Day {day_number} of the ultimate follower battle! Who will win?\n\n#followerbattlegrounds",
+            f"Game: {game_display} | Day {day_number}\nDay {day_number} of making my followers battle every day! Follow to enter the battle!\n\nCheck the link in the bio for your result and overall monthly ranking!\n\n#followerbattlegrounds",
+            f"Game: {game_display} | Day {day_number}\nMy followers are fighting again. Follow to join the next round!\n\n#followerbattlegrounds #battle",
+            f"Game: {game_display} | Day {day_number}\nMaking my followers compete! Follow to participate!\n\n#followerbattlegrounds #gaming",
+            f"Game: {game_display} | Day {day_number}\nThe ultimate follower battle! Who will win?\n\n#followerbattlegrounds",
         ]
 
         # Pick random template
         caption = random.choice(caption_templates)
         return caption
 
-    def upload_video_instagram(self, video_path: str, caption: str) -> bool:
+    def upload_video_instagram(self, video_path: str, caption: str, game_mode: str | None = None) -> bool:
         """
         Upload video to Instagram using persistent uploader (if active)
         Falls back to subprocess if no persistent session
@@ -189,6 +214,7 @@ class DailyAutomationLoop:
         Args:
             video_path: Path to video file
             caption: Caption text
+            game_mode: Optional game mode for aspect-ratio routing
 
         Returns:
             True if upload successful
@@ -199,7 +225,11 @@ class DailyAutomationLoop:
             # Use persistent uploader if available (keeps browser open all day)
             if self.persistent_ig_uploader and self.persistent_ig_uploader.session_active:
                 self.log("   Using persistent Instagram session...")
-                success = self.persistent_ig_uploader.upload_video(video_path, caption)
+                success = self.persistent_ig_uploader.upload_video(
+                    video_path,
+                    caption,
+                    game_mode=game_mode,
+                )
                 if success:
                     self.log("   SUCCESS: Instagram upload successful")
                 else:
@@ -216,6 +246,8 @@ class DailyAutomationLoop:
                     "--caption", caption,
                     "--headless"
                 ]
+                if game_mode:
+                    cmd.extend(["--game-mode", game_mode])
 
                 result = subprocess.run(
                     cmd,
@@ -364,7 +396,7 @@ class DailyAutomationLoop:
             if ig_done:
                 self.log(f"   SKIP Instagram: {Path(video_path).name} (already uploaded)")
             else:
-                ig_success = self.upload_video_instagram(video_path, caption)
+                ig_success = self.upload_video_instagram(video_path, caption, game_mode=game_mode)
 
             # Upload to TikTok
             tt_success = False

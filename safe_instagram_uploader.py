@@ -22,6 +22,8 @@ import json
 import time
 import random
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -32,6 +34,23 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+try:
+    import config
+except Exception:
+    config = None
+
+DEFAULT_SQUARE_ASPECT_GAME_MODES = {
+    "fighter_arena",
+    "maze_rush",
+    "mini_golf",
+    "obstacle_course",
+    "discord_signal",
+    "snake_escape",
+    "math_drop",
+    "heads_or_tails",
+    "side_choice",
+}
 
 
 class SafeInstagramUploader:
@@ -53,6 +72,10 @@ class SafeInstagramUploader:
         self.driver = None
         self.start_time = None
         self.session_active = False
+        self._temp_profile_dir = None
+        self.mute_browser_audio = bool(
+            getattr(config, "MUTE_BROWSER_AUDIO_DURING_UPLOADS", False)
+        )
 
     def _log(self, message: str, level: str = "INFO"):
         """Log message with timestamp and elapsed time"""
@@ -66,29 +89,94 @@ class SafeInstagramUploader:
 
     def _setup_driver(self):
         """Setup Chrome driver with options"""
-        chrome_options = Options()
+        self._cleanup_temp_profile()
+        attempts = 2
+        last_error = None
 
-        if self.headless:
-            chrome_options.add_argument("--headless")
+        for attempt in range(1, attempts + 1):
+            chrome_options = Options()
 
-        # Anti-detection settings
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+            if self.headless:
+                chrome_options.add_argument("--headless=new")
 
-        # Randomize user agent slightly
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+            # Keep Selenium runs isolated from your normal Chrome profile.
+            self._temp_profile_dir = tempfile.mkdtemp(prefix="ig_safe_chrome_")
+            chrome_options.add_argument(f"--user-data-dir={self._temp_profile_dir}")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-default-browser-check")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-background-networking")
+            chrome_options.add_argument("--disable-features=RendererCodeIntegrity")
+            if self.mute_browser_audio:
+                chrome_options.add_argument("--mute-audio")
 
-        self.driver = webdriver.Chrome(options=chrome_options)
+            # Anti-detection settings
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
 
-        # Execute script to avoid detection
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+            # Randomize user agent slightly
+            chrome_options.add_argument(
+                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+
+            try:
+                self.driver = webdriver.Chrome(options=chrome_options)
+                self.driver.set_page_load_timeout(90)
+                # Execute script to avoid detection
+                self.driver.execute_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+                self._apply_runtime_audio_mute()
+                return
+            except Exception as exc:
+                last_error = exc
+                self._log(f"Chrome startup attempt {attempt}/{attempts} failed: {exc}", "WARN")
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
+                self._cleanup_temp_profile()
+                if attempt < attempts:
+                    time.sleep(2)
+
+        raise RuntimeError(f"Chrome startup failed after {attempts} attempts: {last_error}")
+
+    def _apply_runtime_audio_mute(self):
+        """Best-effort runtime mute in case Chrome flag is ignored."""
+        if not self.driver or not self.mute_browser_audio:
+            return
+
+        try:
+            self.driver.execute_cdp_cmd("Media.setAudioMuted", {"muted": True})
+            self._log("Browser audio muted for upload session.")
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script(
+                "document.querySelectorAll('video,audio').forEach((el) => {"
+                "el.muted = true; el.volume = 0;"
+                "});"
+            )
+            self._log("Muted media elements in current page.")
+        except Exception as exc:
+            self._log(f"Could not apply runtime browser mute: {exc}", "WARN")
+
+    def _cleanup_temp_profile(self):
+        if not self._temp_profile_dir:
+            return
+        try:
+            shutil.rmtree(self._temp_profile_dir, ignore_errors=True)
+        except Exception:
+            pass
+        self._temp_profile_dir = None
 
     def _human_delay(self, min_seconds: float = 1.0, max_seconds: float = 3.0):
         """Random delay to mimic human behavior"""
@@ -124,6 +212,119 @@ class SafeInstagramUploader:
             except Exception as js_e:
                 self._log(f"JS click failed{suffix}: {js_e}", "WARN")
                 return False
+
+    @staticmethod
+    def _normalize_game_mode(game_mode: Optional[str]) -> str:
+        return str(game_mode or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _extract_game_mode_from_video_path(self, video_path: Path) -> str:
+        stem = video_path.stem
+        if "_day_" in stem:
+            stem = stem.split("_day_", 1)[0]
+        return self._normalize_game_mode(stem)
+
+    def _get_square_aspect_modes(self) -> set[str]:
+        configured = getattr(config, "INSTAGRAM_SQUARE_ASPECT_GAME_MODES", None) if config else None
+        if configured:
+            normalized = {
+                self._normalize_game_mode(mode)
+                for mode in configured
+                if mode
+            }
+            # Support legacy alias in case only one of these is configured.
+            if "heads_or_tails" in normalized:
+                normalized.add("side_choice")
+            if "side_choice" in normalized:
+                normalized.add("heads_or_tails")
+            return normalized
+        return set(DEFAULT_SQUARE_ASPECT_GAME_MODES)
+
+    def _resolve_target_aspect_ratio(self, video_path: Path, game_mode: Optional[str]) -> tuple[str, str]:
+        resolved_mode = self._normalize_game_mode(game_mode) if game_mode else self._extract_game_mode_from_video_path(video_path)
+        if resolved_mode in self._get_square_aspect_modes():
+            return "1:1", resolved_mode
+        return "9:16", resolved_mode
+
+    def _select_upload_aspect_ratio(self, target_ratio: str) -> None:
+        self._log(f"Checking for aspect ratio options (target: {target_ratio})...")
+        try:
+            aspect_selectors = [
+                "//button[@aria-label='Select crop']",
+                "//*[contains(@aria-label, 'crop')]",
+                "//*[contains(@aria-label, 'Crop')]",
+                "//button[contains(@aria-label, 'aspect')]",
+                "//*[@role='button' and .//*[contains(text(), 'Original')]]",
+                "//*[@role='button' and .//*[contains(text(), '1:1')]]",
+                "//*[@role='button' and .//*[contains(text(), '9:16')]]",
+                "//*[contains(text(), 'Original')]/ancestor::button[1]",
+                "//*[contains(text(), '1:1')]/ancestor::button[1]",
+                "//*[contains(text(), '9:16')]/ancestor::button[1]",
+            ]
+
+            for selector in aspect_selectors:
+                try:
+                    aspect_button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log("Found aspect ratio button, clicking...")
+                    self._safe_click(aspect_button, "aspect button")
+                    self._human_delay(1, 2)
+                    break
+                except TimeoutException:
+                    continue
+                except Exception as e:
+                    self._log(f"Aspect button error for selector {selector}: {e}", "WARN")
+                    continue
+
+            if target_ratio == "1:1":
+                target_selectors = [
+                    "//*[@aria-label='1:1']",
+                    "//*[contains(text(), '1:1')]/ancestor::button[1]",
+                    "//*[contains(text(), '1:1')]/ancestor::*[@role='button'][1]",
+                    "//*[@role='menuitemradio' and .//*[contains(text(), '1:1')]]",
+                    "//*[@role='menuitem' and .//*[contains(text(), '1:1')]]",
+                    "//*[contains(text(), 'Square')]",
+                ]
+                option_label = "1:1 option"
+            else:
+                target_selectors = [
+                    "//*[@aria-label='9:16']",
+                    "//*[@aria-label='Portrait']",
+                    "//*[@aria-label='Vertical']",
+                    "//*[contains(text(), '9:16')]/ancestor::button[1]",
+                    "//*[contains(text(), '9:16')]/ancestor::*[@role='button'][1]",
+                    "//*[@role='menuitemradio' and .//*[contains(text(), '9:16')]]",
+                    "//*[@role='menuitem' and .//*[contains(text(), '9:16')]]",
+                    "//*[contains(text(), '9:16')]",
+                    "//*[contains(text(), 'Portrait')]",
+                    "//*[contains(text(), 'Vertical')]",
+                ]
+                option_label = "9:16 option"
+
+            target_clicked = False
+            for selector in target_selectors:
+                try:
+                    target_option = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log(f"Found {target_ratio} option, clicking...")
+                    if self._safe_click(target_option, option_label):
+                        target_clicked = True
+                        self._human_delay(1, 2)
+                        break
+                except TimeoutException:
+                    continue
+                except Exception as e:
+                    self._log(f"Aspect ratio option error for selector {selector}: {e}", "WARN")
+                    continue
+
+            if not target_clicked:
+                self._log(
+                    f"Could not find {target_ratio} option - using current/default aspect ratio",
+                    "WARN",
+                )
+        except Exception as e:
+            self._log(f"Aspect ratio selection skipped: {e}", "WARN")
 
     def _attempt_cover_selection(self) -> bool:
         self._log("Checking for cover/thumbnail options...")
@@ -486,6 +687,7 @@ class SafeInstagramUploader:
         print("You can now upload videos without logging in each time!")
 
         self.driver.quit()
+        self._cleanup_temp_profile()
 
     def _load_cookies(self) -> bool:
         """
@@ -504,10 +706,12 @@ class SafeInstagramUploader:
                 cookies = json.load(f)
 
             # Load Instagram first
+            self._log("Opening Instagram page to attach cookies...")
             self.driver.get("https://www.instagram.com")
             self._human_delay(2, 3)
 
             # Add cookies
+            self._log(f"Applying {len(cookies)} cookies...")
             for cookie in cookies:
                 # Remove domain if it causes issues
                 if 'domain' in cookie and cookie['domain'].startswith('.'):
@@ -589,8 +793,15 @@ class SafeInstagramUploader:
                 pass
         self.driver = None
         self.session_active = False
+        self._cleanup_temp_profile()
 
-    def upload_reel(self, video_path: str, caption: str = "", reuse_session: bool = False) -> bool:
+    def upload_reel(
+        self,
+        video_path: str,
+        caption: str = "",
+        reuse_session: bool = False,
+        game_mode: Optional[str] = None,
+    ) -> bool:
         """
         Upload a video as an Instagram Reel
 
@@ -598,12 +809,14 @@ class SafeInstagramUploader:
             video_path: Path to video file
             caption: Caption text
             reuse_session: Keep browser open and reuse existing session
+            game_mode: Optional explicit game mode (used for aspect ratio selection)
 
         Returns:
             True if upload successful
         """
         self.start_time = time.time()
         video_path = Path(video_path).resolve()
+        target_aspect_ratio, resolved_game_mode = self._resolve_target_aspect_ratio(video_path, game_mode)
 
         self._log("=" * 50)
         self._log("INSTAGRAM REEL UPLOAD STARTED")
@@ -617,6 +830,7 @@ class SafeInstagramUploader:
         self._log(f"Video file: {video_path.name}")
         self._log(f"Video size: {video_path.stat().st_size / 1024 / 1024:.1f} MB")
         self._log(f"Caption: {caption[:50]}..." if len(caption) > 50 else f"Caption: {caption}")
+        self._log(f"Game mode: {resolved_game_mode or 'unknown'} | Target aspect: {target_aspect_ratio}")
 
         try:
             if not self.driver:
@@ -800,73 +1014,8 @@ class SafeInstagramUploader:
             except Exception as e:
                 self._log("No Reels popup found (OK)")
 
-            # Check for crop/aspect ratio options and select 9:16 (vertical)
-            self._log("Checking for aspect ratio options...")
-            try:
-                # Look for aspect ratio button or crop button
-                aspect_selectors = [
-                    "//button[@aria-label='Select crop']",
-                    "//*[contains(@aria-label, 'crop')]",
-                    "//*[contains(@aria-label, 'Crop')]",
-                    "//button[contains(@aria-label, 'aspect')]",
-                    "//*[@role='button' and .//*[contains(text(), 'Original')]]",
-                    "//*[@role='button' and .//*[contains(text(), '1:1')]]",
-                    "//*[contains(text(), 'Original')]/ancestor::button[1]",
-                    "//*[contains(text(), '1:1')]/ancestor::button[1]"
-                ]
-
-                aspect_button = None
-                for selector in aspect_selectors:
-                    try:
-                        aspect_button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        self._log("Found aspect ratio button, clicking...")
-                        self._safe_click(aspect_button, "aspect button")
-                        self._human_delay(1, 2)
-                        break
-                    except TimeoutException:
-                        continue
-                    except Exception as e:
-                        self._log(f"Aspect button error for selector {selector}: {e}", "WARN")
-                        continue
-
-                # Look for 9:16 or vertical option (menu may already be open)
-                vertical_selectors = [
-                    "//*[@aria-label='9:16']",
-                    "//*[@aria-label='Portrait']",
-                    "//*[@aria-label='Vertical']",
-                    "//*[contains(text(), '9:16')]/ancestor::button[1]",
-                    "//*[contains(text(), '9:16')]/ancestor::*[@role='button'][1]",
-                    "//*[@role='menuitemradio' and .//*[contains(text(), '9:16')]]",
-                    "//*[@role='menuitem' and .//*[contains(text(), '9:16')]]",
-                    "//*[contains(text(), '9:16')]",
-                    "//*[contains(text(), 'Portrait')]",
-                    "//*[contains(text(), 'Vertical')]",
-                ]
-
-                vertical_clicked = False
-                for selector in vertical_selectors:
-                    try:
-                        vertical_option = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        self._log("Found vertical/9:16 option, clicking...")
-                        if self._safe_click(vertical_option, "9:16 option"):
-                            vertical_clicked = True
-                            self._human_delay(1, 2)
-                            break
-                    except TimeoutException:
-                        continue
-                    except Exception as e:
-                        self._log(f"Aspect ratio option error for selector {selector}: {e}", "WARN")
-                        continue
-
-                if not vertical_clicked:
-                    self._log("Could not find 9:16 option - using default aspect ratio", "WARN")
-
-            except Exception as e:
-                self._log(f"Aspect ratio selection skipped: {e}", "WARN")
+            # Select upload framing per game mode.
+            self._select_upload_aspect_ratio(target_aspect_ratio)
 
             # Click "Next" button to proceed (there might be multiple Next buttons)
             self._log("STEP 7: Clicking Next button...")
@@ -1045,14 +1194,40 @@ class SafeInstagramUploader:
                     self._log("COMPLETE: Upload successful! Video should now be visible on profile.", "SUCCESS")
                     return True
 
-                # No confirmation yet - check for obvious errors
+                # No confirmation yet - check for obvious, visible errors
                 self._log("No explicit confirmation message found", "WARN")
                 self._log("Checking page for error messages...")
                 try:
-                    error_msg = self.driver.find_element(By.XPATH, "//*[contains(text(), 'error') or contains(text(), 'Error') or contains(text(), 'failed')]")
-                    self._log(f"Found error message on page: {error_msg.text}", "ERROR")
-                    return False
-                except NoSuchElementException:
+                    error_elements = self.driver.find_elements(
+                        By.XPATH,
+                        "//*[contains(translate(normalize-space(text()), "
+                        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'error') "
+                        "or contains(translate(normalize-space(text()), "
+                        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'failed') "
+                        "or contains(translate(normalize-space(text()), "
+                        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'try again') "
+                        "or contains(translate(normalize-space(text()), "
+                        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'couldn') "
+                        "or contains(translate(normalize-space(text()), "
+                        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'went wrong')]",
+                    )
+                    visible_error_texts = []
+                    for candidate in error_elements:
+                        try:
+                            if not candidate.is_displayed():
+                                continue
+                        except Exception:
+                            continue
+                        text_value = (candidate.text or "").strip()
+                        if text_value:
+                            visible_error_texts.append(text_value)
+                    if visible_error_texts:
+                        self._log(f"Found error message on page: {visible_error_texts[0]}", "ERROR")
+                        return False
+                except Exception:
+                    pass
+
+                try:
                     # Brief grace period
                     self._log("No error messages found. Waiting 20 more seconds for late confirmation...")
                     time.sleep(20)
@@ -1063,10 +1238,36 @@ class SafeInstagramUploader:
                         self._log("Late confirmation detected - upload complete!", "SUCCESS")
                         return True
                     except TimeoutException:
-                        # Don't assume success - we need explicit confirmation
+                        # Heuristic fallback: if the Share UI is gone, Instagram likely accepted the upload.
+                        share_still_visible = False
+                        for selector in share_selectors:
+                            try:
+                                for element in self.driver.find_elements(By.XPATH, selector):
+                                    try:
+                                        if element.is_displayed():
+                                            share_still_visible = True
+                                            break
+                                    except Exception:
+                                        continue
+                                if share_still_visible:
+                                    break
+                            except Exception:
+                                continue
+
+                        if not share_still_visible:
+                            self._log(
+                                "No confirmation message, but Share UI is gone; assuming upload likely succeeded.",
+                                "WARN",
+                            )
+                            return True
+
                         self._log("No confirmation message found after extended wait - upload likely failed", "ERROR")
                         self._log("Upload timed out without confirmation", "ERROR")
                         return False
+                except Exception:
+                    self._log("No confirmation message found after extended wait - upload likely failed", "ERROR")
+                    self._log("Upload timed out without confirmation", "ERROR")
+                    return False
 
             except TimeoutException:
                 self._log("Share button timeout - could not initiate upload", "ERROR")
@@ -1084,6 +1285,7 @@ class SafeInstagramUploader:
                 self.driver.quit()
                 self.driver = None
                 self.session_active = False
+                self._cleanup_temp_profile()
 
 
 def main():
@@ -1091,6 +1293,7 @@ def main():
     parser.add_argument("--save-cookies", action="store_true", help="Login and save cookies for future use")
     parser.add_argument("--video", help="Path to video file to upload")
     parser.add_argument("--caption", default="", help="Caption for the reel")
+    parser.add_argument("--game-mode", default="", help="Optional game mode override for aspect ratio rules")
     parser.add_argument("--cookies-file", default="instagram_cookies.json", help="Path to cookies file")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
 
@@ -1104,7 +1307,7 @@ def main():
     if args.save_cookies:
         uploader.save_cookies()
     elif args.video:
-        success = uploader.upload_reel(args.video, args.caption)
+        success = uploader.upload_reel(args.video, args.caption, game_mode=args.game_mode or None)
         exit(0 if success else 1)
     else:
         parser.print_help()

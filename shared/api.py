@@ -118,6 +118,27 @@ class InstagramAPI:
         else:
             self.import_file = import_file
 
+        # If a newer followers_safe_*.json exists, prefer it over stale imports.
+        newest_safe = _find_newest_safe_follower_file()
+        if newest_safe:
+            use_safe = False
+            if not self.import_file:
+                use_safe = True
+            else:
+                try:
+                    if not os.path.exists(self.import_file):
+                        use_safe = True
+                    else:
+                        safe_mtime = os.path.getmtime(newest_safe)
+                        import_mtime = os.path.getmtime(self.import_file)
+                        if safe_mtime > import_mtime:
+                            use_safe = True
+                except Exception:
+                    pass
+            if use_safe and newest_safe != self.import_file:
+                print(f"   Using newer safe follower file: {newest_safe} (was: {self.import_file})")
+                self.import_file = newest_safe
+
         self.tiktok_import_file = getattr(config, 'TIKTOK_IMPORT_FILE', '')
 
         # Avatar cache directory (persistent across runs)
@@ -258,6 +279,67 @@ class InstagramAPI:
                 break
 
         return followers if followers else None
+
+    def _load_cached_avatar(self, username: str) -> Optional[Image.Image]:
+        """Load avatar from disk cache by username (no network)."""
+        if not getattr(config, 'LOAD_PROFILE_PICTURES', True):
+            return None
+        if not username:
+            return None
+        max_size = int(getattr(config, "AVATAR_CACHE_MAX_SIZE", 64))
+        for ext in (".jpg", ".jpeg", ".png"):
+            cache_file = self.avatar_cache_dir / f"{username}{ext}"
+            if cache_file.exists():
+                try:
+                    img = Image.open(cache_file).convert('RGBA')
+                    if max_size > 0 and (img.width > max_size or img.height > max_size):
+                        img.thumbnail((max_size, max_size), Image.LANCZOS)
+                    return img
+                except Exception as e:
+                    print(f"      Failed to load cached avatar for {username}: {e}")
+                    return None
+        return None
+
+    def _load_local_avatar(self, path: Optional[str], username: Optional[str] = None) -> Optional[Image.Image]:
+        """Load avatar from a local file path (no network)."""
+        if not getattr(config, 'LOAD_PROFILE_PICTURES', True):
+            return None
+        if not path:
+            return None
+
+        local_path = path
+        if local_path.startswith("file://"):
+            local_path = local_path[7:]
+        local_path = os.path.expandvars(os.path.expanduser(local_path))
+
+        candidates = []
+        if os.path.isabs(local_path):
+            candidates.append(Path(local_path))
+        else:
+            candidates.append((Path.cwd() / local_path).resolve())
+            project_root = Path(getattr(config, "PROJECT_ROOT", Path(__file__).resolve().parent.parent))
+            candidates.append((project_root / local_path).resolve())
+
+        resolved_path = next((candidate for candidate in candidates if candidate.exists()), None)
+        if resolved_path is None:
+            return None
+
+        try:
+            img = Image.open(resolved_path).convert("RGBA")
+            max_size = int(getattr(config, "AVATAR_CACHE_MAX_SIZE", 64))
+            if max_size > 0 and (img.width > max_size or img.height > max_size):
+                img.thumbnail((max_size, max_size), Image.LANCZOS)
+            _AVATAR_CACHE[path] = img
+            if username:
+                cache_file = self.avatar_cache_dir / f"{username}.jpg"
+                try:
+                    img.convert('RGB').save(cache_file, 'JPEG', quality=85, optimize=True)
+                except Exception as e:
+                    print(f"      Failed to cache local avatar for {username}: {e}")
+            return img
+        except Exception as e:
+            print(f"      Failed to load local avatar {resolved_path}: {e}")
+            return None
 
     def _download_avatar(self, url: Optional[str], username: Optional[str] = None) -> Optional[Image.Image]:
         """
@@ -559,9 +641,11 @@ class InstagramAPI:
 
                         if username:
                             # Download profile picture if URL provided and downloading is enabled
-                            avatar_img = None
+                            avatar_img = self._load_cached_avatar(username)
+                            if profile_pic_url and avatar_img is None:
+                                avatar_img = self._load_local_avatar(profile_pic_url, username=username)
                             download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
-                            if profile_pic_url and download_pics:
+                            if profile_pic_url and download_pics and avatar_img is None:
                                 # Check if already cached
                                 cache_file = self.avatar_cache_dir / f"{username}.jpg"
                                 was_cached = cache_file.exists()
@@ -637,8 +721,10 @@ class InstagramAPI:
 
                         if username:
                             # Optionally download profile picture if URL provided and enabled
-                            avatar_img = None
-                            if profile_pic_url and download_pics:
+                            avatar_img = self._load_cached_avatar(username)
+                            if profile_pic_url and avatar_img is None:
+                                avatar_img = self._load_local_avatar(profile_pic_url, username=username)
+                            if profile_pic_url and download_pics and avatar_img is None:
                                 # Check if already cached
                                 cache_file = self.avatar_cache_dir / f"{username}.jpg"
                                 was_cached = cache_file.exists()
@@ -681,10 +767,11 @@ class InstagramAPI:
 
                         username = line.strip()
                         if username:
+                            avatar_img = self._load_cached_avatar(username)
                             followers.append({
                                 "id": f"imported_{i}",
                                 "username": username,
-                                "avatar": None,
+                                "avatar": avatar_img,
                                 "color": random.choice(config.RANDOM_COLORS)
                             })
 

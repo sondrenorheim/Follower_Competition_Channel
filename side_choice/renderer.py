@@ -7,6 +7,7 @@ import pygame
 
 import config
 from shared import RendererTemplate
+from shared.club_panel import draw_club_panel
 
 
 class SideChoiceRenderer(RendererTemplate):
@@ -15,11 +16,42 @@ class SideChoiceRenderer(RendererTemplate):
 
     def __init__(self, screen: pygame.Surface):
         super().__init__(screen)
+        arena_x, arena_y, arena_w, arena_h = getattr(
+            config,
+            "SIDE_CHOICE_ARENA_RECT",
+            getattr(config, "MAZE_RUSH_ARENA_RECT", (20, 230, 500, 500)),
+        )
+        self.game_left = int(arena_x)
+        self.game_top = int(arena_y)
+        self.game_right = self.game_left + int(arena_w)
+        self.game_bottom = self.game_top + int(arena_h)
         self.left_color = getattr(config, "SIDE_CHOICE_LEFT_COLOR", (190, 200, 210))
         self.right_color = getattr(config, "SIDE_CHOICE_RIGHT_COLOR", (210, 190, 200))
         self.open_color = getattr(config, "SIDE_CHOICE_OPEN_COLOR", (45, 45, 50))
         self.border_color = getattr(config, "SIDE_CHOICE_BORDER_COLOR", (0, 0, 0))
         self.split_color = getattr(config, "SIDE_CHOICE_SPLIT_LINE_COLOR", (40, 40, 40))
+        self.day_counter_offset = int(
+            getattr(
+                config,
+                "SIDE_CHOICE_DAY_COUNTER_OFFSET",
+                getattr(config, "MAZE_RUSH_DAY_COUNTER_OFFSET", 14),
+            )
+        )
+        day_counter_size = int(
+            getattr(
+                config,
+                "SIDE_CHOICE_DAY_COUNTER_FONT_SIZE",
+                getattr(config, "MAZE_RUSH_DAY_COUNTER_FONT_SIZE", 32),
+            )
+        )
+        self.day_counter_font = pygame.font.Font(None, day_counter_size)
+        self.prompt_above_arena_margin = int(
+            getattr(
+                config,
+                "SIDE_CHOICE_PROMPT_ABOVE_ARENA_MARGIN",
+                getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8),
+            )
+        )
         status_size = int(getattr(config, "SIDE_CHOICE_STATUS_TEXT_SIZE", 36))
         self.font_status = pygame.font.Font(None, status_size)
         coin_size = int(getattr(config, "SIDE_CHOICE_COIN_TEXT_SIZE", 26))
@@ -51,6 +83,10 @@ class SideChoiceRenderer(RendererTemplate):
         self.name_offset = int(getattr(config, "SIDE_CHOICE_NAME_OFFSET", 18))
         name_font_size = int(getattr(config, "SIDE_CHOICE_NAME_FONT_SIZE", 16))
         self.font_name = pygame.font.Font(None, name_font_size)
+        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
+        self.font_club_panel = pygame.font.Font(None, club_text_size)
+        self._day_counter_bottom = None
+        self._below_day_bottom = None
 
     def render_frame(self, players, game_state: dict):
         self.screen.fill(config.COLOR_BACKGROUND)
@@ -60,6 +96,7 @@ class SideChoiceRenderer(RendererTemplate):
         self._draw_title_and_subtitle()
         self._draw_day_counter(players, game_state)
         self._draw_game_ui(players, game_state)
+        self._draw_club_panel(game_state)
 
         if game_state.get('show_leaderboards'):
             self._draw_end_game_display(
@@ -70,8 +107,8 @@ class SideChoiceRenderer(RendererTemplate):
 
     def _draw_title_and_subtitle(self):
         center_x = self.width // 2
-        title_y = self.game_top - 100
-        subtitle_y = self.game_top - 60
+        title_y = self.game_top - 70
+        subtitle_y = self.game_top - 40
 
         title_surface = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
         title_rect = title_surface.get_rect(center=(center_x, title_y))
@@ -84,7 +121,8 @@ class SideChoiceRenderer(RendererTemplate):
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")
         if prompt_text:
             prompt_surface = self.font_small.render(prompt_text, True, config.COLOR_TEXT)
-            prompt_rect = prompt_surface.get_rect(center=(center_x, subtitle_rect.bottom + 6))
+            prompt_y = max(self.game_top - self.prompt_above_arena_margin, subtitle_rect.bottom + 6)
+            prompt_rect = prompt_surface.get_rect(center=(center_x, prompt_y))
             self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_game_area(self, players, game_state: dict):
@@ -164,10 +202,21 @@ class SideChoiceRenderer(RendererTemplate):
             alive_count = sum(1 for player in players if player.alive)
         show_names = self.show_names_max > 0 and alive_count <= self.show_names_max
 
+        club_players = []
         for player in players:
             if not player.alive and not player.falling:
                 continue
             size = player.radius * 2
+            if getattr(player, "is_club_member", False):
+                club_players.append(player)
+                continue
+            self._draw_player_avatar(player, size=size)
+            if show_names and player.alive:
+                self._draw_player_name(player, offset_y=self.name_offset)
+
+        for player in club_players:
+            size = player.radius * 2
+            self._draw_club_glow(player, size=size)
             self._draw_player_avatar(player, size=size)
             if show_names and player.alive:
                 self._draw_player_name(player, offset_y=self.name_offset)
@@ -183,14 +232,14 @@ class SideChoiceRenderer(RendererTemplate):
 
         arena = game_state.get("arena")
         if arena:
-            offset = int(getattr(config, "SIDE_CHOICE_DAY_COUNTER_OFFSET", 16))
-            y_pos = int(arena.bottom + offset)
+            y_pos = int(arena.bottom + self.day_counter_offset)
         else:
-            y_pos = int(self.game_bottom + 30)
+            y_pos = int(self.game_bottom + self.day_counter_offset)
 
-        day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
+        day_surface = self.day_counter_font.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, y_pos))
         self.screen.blit(day_surface, day_rect)
+        self._day_counter_bottom = day_rect.bottom
 
     def _draw_game_ui(self, players, game_state: dict):
         round_phase = game_state.get("round_phase") or ""
@@ -202,13 +251,13 @@ class SideChoiceRenderer(RendererTemplate):
         last_eliminated = game_state.get("last_eliminated", 0)
 
         arena = game_state.get("arena")
-        day_offset = int(getattr(config, "SIDE_CHOICE_DAY_COUNTER_OFFSET", 16))
+        day_offset = int(getattr(config, "SIDE_CHOICE_DAY_COUNTER_OFFSET", self.day_counter_offset))
         panel_offset = int(getattr(config, "SIDE_CHOICE_STATUS_PANEL_OFFSET", 8))
         if arena:
             day_y = int(arena.bottom + day_offset)
             panel_y = day_y + panel_offset
         else:
-            panel_y = self.game_bottom + 40
+            panel_y = self.game_bottom + day_offset + panel_offset
 
         panel_width = int(getattr(config, "SIDE_CHOICE_STATUS_PANEL_WIDTH", 200))
         panel_rect = pygame.Rect(0, panel_y, panel_width, 92)
@@ -232,6 +281,8 @@ class SideChoiceRenderer(RendererTemplate):
         )
         alive_rect = alive_text.get_rect(center=(panel_rect.centerx, panel_rect.y + 66))
         self.screen.blit(alive_text, alive_rect)
+
+        self._below_day_bottom = panel_rect.bottom
 
         if round_phase == "selection":
             status_text = "Pick heads or tails!"
@@ -259,6 +310,19 @@ class SideChoiceRenderer(RendererTemplate):
             self.screen.blit(elim_surface, elim_rect)
 
         self._draw_coin_flip(game_state)
+
+    def _draw_club_panel(self, game_state: dict):
+        anchor_y = self._below_day_bottom or self._day_counter_bottom
+        if anchor_y is None:
+            return
+        draw_club_panel(
+            self.screen,
+            game_state.get("club_spotlight"),
+            anchor_y=anchor_y,
+            font=self.font_club_panel,
+            get_avatar_surface=self._get_avatar_surface,
+            glow_cache=self._club_glow_cache,
+        )
 
     def _draw_coin_flip(self, game_state: dict):
         if game_state.get("round_phase") != "result":

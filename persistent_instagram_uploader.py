@@ -8,6 +8,8 @@ import time
 import json
 import random
 import os
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -18,6 +20,23 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+try:
+    import config
+except Exception:
+    config = None
+
+DEFAULT_SQUARE_ASPECT_GAME_MODES = {
+    "fighter_arena",
+    "maze_rush",
+    "mini_golf",
+    "obstacle_course",
+    "discord_signal",
+    "snake_escape",
+    "math_drop",
+    "heads_or_tails",
+    "side_choice",
+}
 
 
 class PersistentInstagramUploader:
@@ -55,6 +74,12 @@ class PersistentInstagramUploader:
         self.owns_driver = True
         self.start_time = None
         self.export_requested_at = None
+        self._temp_profile_dir = None
+        fb_crosspost_env = os.getenv("IG_ENABLE_FB_CROSSPOST", "1").strip().lower()
+        self.enable_facebook_crosspost = fb_crosspost_env not in {"0", "false", "no", "off"}
+        self.mute_browser_audio = bool(
+            getattr(config, "MUTE_BROWSER_AUDIO_DURING_UPLOADS", False)
+        )
 
     def _log(self, message: str, level: str = "INFO"):
         """Log message with timestamp"""
@@ -68,42 +93,108 @@ class PersistentInstagramUploader:
 
     def _setup_driver(self):
         """Setup Chrome driver"""
-        chrome_options = Options()
+        self._cleanup_temp_profile()
+        attempts = 2
+        last_error = None
 
-        if self.headless:
-            chrome_options.add_argument("--headless")
-            self._log("Running in headless mode (2FA may not work!)", "WARN")
+        for attempt in range(1, attempts + 1):
+            chrome_options = Options()
 
-        # Anti-detection
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+            if self.headless:
+                chrome_options.add_argument("--headless=new")
+                self._log("Running in headless mode (2FA may not work!)", "WARN")
 
-        prefs = {}
-        if self.download_dir:
+            # Keep Selenium runs isolated from your normal Chrome profile.
+            self._temp_profile_dir = tempfile.mkdtemp(prefix="ig_persistent_chrome_")
+            chrome_options.add_argument(f"--user-data-dir={self._temp_profile_dir}")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-default-browser-check")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-background-networking")
+            chrome_options.add_argument("--disable-features=RendererCodeIntegrity")
+            if self.mute_browser_audio:
+                chrome_options.add_argument("--mute-audio")
+
+            # Anti-detection
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            chrome_options.add_argument(
+                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+
+            prefs = {}
+            if self.download_dir:
+                try:
+                    self.download_dir.mkdir(parents=True, exist_ok=True)
+                    prefs["download.default_directory"] = str(self.download_dir)
+                    prefs["download.prompt_for_download"] = False
+                    prefs["download.directory_upgrade"] = True
+                    prefs["safebrowsing.enabled"] = True
+                except Exception as e:
+                    self._log(f"Could not prepare download dir {self.download_dir}: {e}", "WARN")
+
+            if prefs:
+                chrome_options.add_experimental_option("prefs", prefs)
+
             try:
-                self.download_dir.mkdir(parents=True, exist_ok=True)
-                prefs["download.default_directory"] = str(self.download_dir)
-                prefs["download.prompt_for_download"] = False
-                prefs["download.directory_upgrade"] = True
-                prefs["safebrowsing.enabled"] = True
-            except Exception as e:
-                self._log(f"Could not prepare download dir {self.download_dir}: {e}", "WARN")
+                self.driver = webdriver.Chrome(options=chrome_options)
+                self.driver.set_page_load_timeout(90)
+                self.owns_driver = True
+                self.driver.execute_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+                self._apply_runtime_audio_mute()
+                self._configure_download_behavior()
+                return
+            except Exception as exc:
+                last_error = exc
+                self._log(f"Chrome startup attempt {attempt}/{attempts} failed: {exc}", "WARN")
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
+                self._cleanup_temp_profile()
+                if attempt < attempts:
+                    time.sleep(2)
 
-        if prefs:
-            chrome_options.add_experimental_option("prefs", prefs)
+        raise RuntimeError(f"Chrome startup failed after {attempts} attempts: {last_error}")
 
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.owns_driver = True
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        self._configure_download_behavior()
+    def _apply_runtime_audio_mute(self):
+        """Best-effort runtime mute in case Chrome flag is ignored."""
+        if not self.driver or not self.mute_browser_audio:
+            return
+
+        try:
+            self.driver.execute_cdp_cmd("Media.setAudioMuted", {"muted": True})
+            self._log("Browser audio muted for upload session.")
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script(
+                "document.querySelectorAll('video,audio').forEach((el) => {"
+                "el.muted = true; el.volume = 0;"
+                "});"
+            )
+            self._log("Muted media elements in current page.")
+        except Exception as exc:
+            self._log(f"Could not apply runtime browser mute: {exc}", "WARN")
+
+    def _cleanup_temp_profile(self):
+        if not self._temp_profile_dir:
+            return
+        try:
+            shutil.rmtree(self._temp_profile_dir, ignore_errors=True)
+        except Exception:
+            pass
+        self._temp_profile_dir = None
 
     def _get_download_dirs(self) -> list[Path]:
         dirs = []
@@ -179,6 +270,7 @@ class PersistentInstagramUploader:
         self.session_active = True
         self.owns_driver = False
         self.start_time = time.time()
+        self._apply_runtime_audio_mute()
         self._configure_download_behavior()
 
     def _human_delay(self, min_seconds: float = 1.0, max_seconds: float = 3.0):
@@ -206,6 +298,209 @@ class PersistentInstagramUploader:
             except Exception as js_e:
                 self._log(f"JS click failed{suffix}: {js_e}", "WARN")
                 return False
+
+    @staticmethod
+    def _normalize_game_mode(game_mode: Optional[str]) -> str:
+        return str(game_mode or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _extract_game_mode_from_video_path(self, video_path: Path) -> str:
+        stem = video_path.stem
+        if "_day_" in stem:
+            stem = stem.split("_day_", 1)[0]
+        return self._normalize_game_mode(stem)
+
+    def _get_square_aspect_modes(self) -> set[str]:
+        configured = getattr(config, "INSTAGRAM_SQUARE_ASPECT_GAME_MODES", None) if config else None
+        if configured:
+            normalized = {
+                self._normalize_game_mode(mode)
+                for mode in configured
+                if mode
+            }
+            if "heads_or_tails" in normalized:
+                normalized.add("side_choice")
+            if "side_choice" in normalized:
+                normalized.add("heads_or_tails")
+            return normalized
+        return set(DEFAULT_SQUARE_ASPECT_GAME_MODES)
+
+    def _resolve_target_aspect_ratio(self, video_path: Path, game_mode: Optional[str]) -> tuple[str, str]:
+        resolved_mode = self._normalize_game_mode(game_mode) if game_mode else self._extract_game_mode_from_video_path(video_path)
+        if resolved_mode in self._get_square_aspect_modes():
+            return "1:1", resolved_mode
+        return "9:16", resolved_mode
+
+    def _select_upload_aspect_ratio(self, target_ratio: str) -> None:
+        self._log(f"Checking for aspect ratio options (target: {target_ratio})...")
+        try:
+            aspect_selectors = [
+                "//button[@aria-label='Select crop']",
+                "//*[contains(@aria-label, 'crop')]",
+                "//*[contains(@aria-label, 'Crop')]",
+                "//button[contains(@aria-label, 'aspect')]",
+                "//*[@role='button' and .//*[contains(text(), 'Original')]]",
+                "//*[@role='button' and .//*[contains(text(), '1:1')]]",
+                "//*[@role='button' and .//*[contains(text(), '9:16')]]",
+                "//*[contains(text(), 'Original')]/ancestor::button[1]",
+                "//*[contains(text(), '1:1')]/ancestor::button[1]",
+                "//*[contains(text(), '9:16')]/ancestor::button[1]",
+            ]
+
+            for selector in aspect_selectors:
+                try:
+                    aspect_button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log("Found aspect ratio button, clicking...")
+                    self._safe_click(aspect_button, "aspect button")
+                    self._human_delay(1, 2)
+                    break
+                except TimeoutException:
+                    continue
+                except Exception as e:
+                    self._log(f"Aspect button error for selector {selector}: {e}", "WARN")
+                    continue
+
+            if target_ratio == "1:1":
+                target_selectors = [
+                    "//*[@aria-label='1:1']",
+                    "//*[contains(text(), '1:1')]/ancestor::button[1]",
+                    "//*[contains(text(), '1:1')]/ancestor::*[@role='button'][1]",
+                    "//*[@role='menuitemradio' and .//*[contains(text(), '1:1')]]",
+                    "//*[@role='menuitem' and .//*[contains(text(), '1:1')]]",
+                    "//*[contains(text(), 'Square')]",
+                ]
+                option_label = "1:1 option"
+            else:
+                target_selectors = [
+                    "//*[@aria-label='9:16']",
+                    "//*[@aria-label='Portrait']",
+                    "//*[@aria-label='Vertical']",
+                    "//*[contains(text(), '9:16')]/ancestor::button[1]",
+                    "//*[contains(text(), '9:16')]/ancestor::*[@role='button'][1]",
+                    "//*[@role='menuitemradio' and .//*[contains(text(), '9:16')]]",
+                    "//*[@role='menuitem' and .//*[contains(text(), '9:16')]]",
+                    "//*[contains(text(), '9:16')]",
+                    "//*[contains(text(), 'Portrait')]",
+                    "//*[contains(text(), 'Vertical')]",
+                ]
+                option_label = "9:16 option"
+
+            target_clicked = False
+            for selector in target_selectors:
+                try:
+                    target_option = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    self._log(f"Found {target_ratio} option, clicking...")
+                    if self._safe_click(target_option, option_label):
+                        target_clicked = True
+                        self._human_delay(1, 2)
+                        break
+                except TimeoutException:
+                    continue
+                except Exception as e:
+                    self._log(f"Aspect ratio option error for selector {selector}: {e}", "WARN")
+                    continue
+
+            if not target_clicked:
+                self._log(
+                    f"Could not find {target_ratio} option - using current/default aspect ratio",
+                    "WARN",
+                )
+        except Exception as e:
+            self._log(f"Aspect ratio selection skipped: {e}", "WARN")
+
+    @staticmethod
+    def _coerce_toggle_state(raw_value) -> Optional[bool]:
+        if raw_value is None:
+            return None
+        value = str(raw_value).strip().lower()
+        if value in {"true", "1", "on", "yes", "checked", "selected"}:
+            return True
+        if value in {"false", "0", "off", "no", "unchecked", "unselected"}:
+            return False
+        return None
+
+    def _read_toggle_state(self, toggle) -> Optional[bool]:
+        attrs = ("aria-checked", "aria-pressed", "data-checked", "checked")
+        for attr in attrs:
+            state = self._coerce_toggle_state(toggle.get_attribute(attr))
+            if state is not None:
+                return state
+        try:
+            tag = (toggle.tag_name or "").lower()
+            if tag == "input":
+                return bool(toggle.is_selected())
+        except Exception:
+            pass
+        return None
+
+    def _enable_facebook_crosspost_toggle(self) -> bool:
+        if not self.enable_facebook_crosspost:
+            self._log("Facebook cross-post toggle disabled via IG_ENABLE_FB_CROSSPOST", "INFO")
+            return False
+
+        self._log("Checking for Facebook cross-post toggle...")
+        lower = "translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')"
+        aria_lower = "translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')"
+        toggle_relative = (
+            ".//*[@role='switch' or @role='checkbox' or "
+            "self::input[@type='checkbox'] or self::button[@role='switch'] or self::button[@role='checkbox']]"
+        )
+
+        row_selectors = [
+            f"//*[(@role='row' or @role='button' or self::div or self::li or self::label) and contains({lower}, 'facebook')]",
+            f"//*[(@role='switch' or @role='checkbox') and contains({aria_lower}, 'facebook')]",
+        ]
+
+        candidates = []
+        for selector in row_selectors:
+            try:
+                candidates.extend(self.driver.find_elements(By.XPATH, selector))
+            except Exception:
+                continue
+
+        for row in candidates:
+            try:
+                if not row.is_displayed():
+                    continue
+            except Exception:
+                continue
+
+            try:
+                toggles = row.find_elements(By.XPATH, toggle_relative)
+            except Exception:
+                toggles = []
+
+            if not toggles:
+                if (row.get_attribute("role") or "").lower() in {"switch", "checkbox"}:
+                    toggles = [row]
+
+            for toggle in toggles:
+                try:
+                    if not toggle.is_displayed():
+                        continue
+                except Exception:
+                    continue
+
+                state = self._read_toggle_state(toggle)
+                if state is True:
+                    self._log("Facebook cross-post is already enabled.")
+                    return True
+                if state is False:
+                    if not self._safe_click(toggle, "facebook crosspost toggle"):
+                        continue
+                    self._human_delay(0.4, 1.0)
+                    state_after = self._read_toggle_state(toggle)
+                    if state_after is False:
+                        self._log("Facebook cross-post toggle click did not enable it.", "WARN")
+                        continue
+                    self._log("Enabled Facebook cross-post toggle.")
+                    return True
+
+        self._log("Facebook cross-post toggle not found on this publish screen.", "WARN")
+        return False
 
     def _attempt_cover_selection(self) -> bool:
         self._log("Checking for cover/thumbnail options...")
@@ -1438,13 +1733,14 @@ class PersistentInstagramUploader:
         self._log("Waiting for session to stabilize...")
         self._human_delay(3, 5)
 
-    def upload_video(self, video_path: str, caption: str = "") -> bool:
+    def upload_video(self, video_path: str, caption: str = "", game_mode: Optional[str] = None) -> bool:
         """
         Upload a video using the existing session
 
         Args:
             video_path: Path to video file
             caption: Caption text
+            game_mode: Optional explicit game mode (used for aspect ratio selection)
 
         Returns:
             True if upload successful
@@ -1455,6 +1751,7 @@ class PersistentInstagramUploader:
 
         upload_start = time.time()
         video_path = Path(video_path).resolve()
+        target_aspect_ratio, resolved_game_mode = self._resolve_target_aspect_ratio(video_path, game_mode)
 
         self._log("="*50)
         self._log(f"UPLOADING: {video_path.name}")
@@ -1466,6 +1763,7 @@ class PersistentInstagramUploader:
 
         self._log(f"Video size: {video_path.stat().st_size / 1024 / 1024:.1f} MB")
         self._log(f"Caption: {caption[:50]}{'...' if len(caption) > 50 else ''}")
+        self._log(f"Game mode: {resolved_game_mode or 'unknown'} | Target aspect: {target_aspect_ratio}")
 
         try:
             # Navigate to home (in case we're somewhere else)
@@ -1568,71 +1866,8 @@ class PersistentInstagramUploader:
             except Exception:
                 self._log("No Reels popup found (OK)")
 
-            # Check for crop/aspect ratio options and select 9:16 (vertical)
-            self._log("Checking for aspect ratio options...")
-            try:
-                aspect_selectors = [
-                    "//button[@aria-label='Select crop']",
-                    "//*[contains(@aria-label, 'crop')]",
-                    "//*[contains(@aria-label, 'Crop')]",
-                    "//button[contains(@aria-label, 'aspect')]",
-                    "//*[@role='button' and .//*[contains(text(), 'Original')]]",
-                    "//*[@role='button' and .//*[contains(text(), '1:1')]]",
-                    "//*[contains(text(), 'Original')]/ancestor::button[1]",
-                    "//*[contains(text(), '1:1')]/ancestor::button[1]"
-                ]
-
-                aspect_button = None
-                for selector in aspect_selectors:
-                    try:
-                        aspect_button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        self._log("Found aspect ratio button, clicking...")
-                        self._safe_click(aspect_button, "aspect button")
-                        self._human_delay(1, 2)
-                        break
-                    except TimeoutException:
-                        continue
-                    except Exception as e:
-                        self._log(f"Aspect button error for selector {selector}: {e}", "WARN")
-                        continue
-
-                vertical_selectors = [
-                    "//*[@aria-label='9:16']",
-                    "//*[@aria-label='Portrait']",
-                    "//*[@aria-label='Vertical']",
-                    "//*[contains(text(), '9:16')]/ancestor::button[1]",
-                    "//*[contains(text(), '9:16')]/ancestor::*[@role='button'][1]",
-                    "//*[@role='menuitemradio' and .//*[contains(text(), '9:16')]]",
-                    "//*[@role='menuitem' and .//*[contains(text(), '9:16')]]",
-                    "//*[contains(text(), '9:16')]",
-                    "//*[contains(text(), 'Portrait')]",
-                    "//*[contains(text(), 'Vertical')]",
-                ]
-
-                vertical_clicked = False
-                for selector in vertical_selectors:
-                    try:
-                        vertical_option = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        self._log("Found vertical/9:16 option, clicking...")
-                        if self._safe_click(vertical_option, "9:16 option"):
-                            vertical_clicked = True
-                            self._human_delay(1, 2)
-                            break
-                    except TimeoutException:
-                        continue
-                    except Exception as e:
-                        self._log(f"Aspect ratio option error for selector {selector}: {e}", "WARN")
-                        continue
-
-                if not vertical_clicked:
-                    self._log("Could not find 9:16 option - using default aspect ratio", "WARN")
-
-            except Exception as e:
-                self._log(f"Aspect ratio selection skipped: {e}", "WARN")
+            # Select upload framing per game mode.
+            self._select_upload_aspect_ratio(target_aspect_ratio)
 
             # Click Next button to proceed (there might be multiple Next buttons)
             self._log("Clicking Next button...")
@@ -1788,6 +2023,7 @@ class PersistentInstagramUploader:
             self.driver = None
             self.session_active = False
             self._log("Browser closed. Session ended.")
+        self._cleanup_temp_profile()
 
     def __del__(self):
         """Cleanup on deletion"""
@@ -1796,6 +2032,7 @@ class PersistentInstagramUploader:
                 self.driver.quit()
             except:
                 pass
+        self._cleanup_temp_profile()
 
 
 # Example usage

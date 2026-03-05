@@ -6,7 +6,7 @@ The script now uses your existing **TiktokAutoUploader** (cookie-based) which is
 
 ### 1. Navigate to TiktokAutoUploader
 ```bash
-cd C:\Users\SondreNorheim\Documents\Video_Editor_Script\tools\TiktokAutoUploader
+cd <path-to-your-project>\TiktokAutoUploader
 ```
 
 ### 2. Run authentication for your follower battle account
@@ -30,7 +30,7 @@ tiktok_username = "followerbattlegro"  # Your actual TikTok username
 
 ### 4. Test the upload
 ```bash
-cd C:\Users\SondreNorheim\Documents\Follower_Competition_Channel
+cd <path-to-your-project>
 python post_run_publish.py --delay-seconds 0
 ```
 
