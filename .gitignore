@@ -126,13 +126,30 @@ Followers/missing_profile_pics/missing_profile_pics_003.json
 Followers/missing_profile_pics/missing_profile_pics_004.json
 
 # Local temp/recovery JSON dumps (not for remote)
-/tmp_*.json
-/tmp_*_games.json
-/tmp_*_game_history.json
-/tmp_backup_day_*_games.json
-/tmp_recovered_day_*_games.json
-/tmp_stash1_day_*_games.json
-/tmp_stash1_game_history.json
-/game_history_backup_*.json
-/game_history_recovered.json
-/day_*_games.json
+tmp_*.json
+tmp_*_games.json
+tmp_*_game_history.json
+tmp_backup_day_*_games.json
+tmp_recovered_day_*_games.json
+tmp_stash1_day_*_games.json
+tmp_stash1_game_history.json
+game_history_backup_*.json
+game_history_recovered.json
+day_*_games.json
+
+# Local bot runtime artifacts
+discord_bot/*.pid
+discord_bot/discord_links.json
+
+# Local runtime/state artifacts (do not publish)
+backups/
+logs/
+Videos/**/*.meta.json
+tmp_*.py
+tmp_mario_level_1/
+Followers/new_followers_fresh.json
+secrets/
+sessions/
+tiktok_follower_account_sessionid.json
+tools/cloudflared-windows-amd64.exe
+nul
