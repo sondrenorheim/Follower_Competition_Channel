@@ -39,6 +39,9 @@ ENV/
 # Instagram session cookies (IMPORTANT - contains login session!)
 instagram_session_cookies.pkl
 instagram_cookies.json
+burner_instagram_cookies.pkl
+instagram_cookies_burner2.pkl
+instagram_cookies_burner3.pkl
 
 # Discord Bot (IMPORTANT - contains bot token and user data!)
 discord_bot/.env
@@ -53,6 +56,14 @@ discord_bot/discord_links.json  # User privacy - Discord to Instagram mappings
 *.mov
 *.png
 *.jpg
+!website/public/api/avatars/
+!website/public/api/avatars/*.jpg
+!website/public/api/avatars/*.jpeg
+!website/public/api/avatars/*.png
+!website/public/api/avatars/*.webp
+!assets/jetpack_followers/
+!assets/jetpack_followers/*.png
+assets/Super_Mario_Bros_Underground_Theme_3dd3ef00.wav
 
 # Large monolithic stats files (we use partitioned API files instead)
 # These files are kept local only to avoid LFS budget issues
@@ -60,6 +71,10 @@ player_statistics.json
 game_history.json
 website/public/player_statistics_web.json
 website/public/game_history_web.json
+# Heavy API partitions now synced directly to R2 from local pipeline.
+# Keep ignored so they are not accidentally reintroduced as new tracked files.
+website/public/api/games/
+website/public/api/player_history/
 
 # Followers export dumps (keep local only)
 Followers/exports/
@@ -79,6 +94,23 @@ nohup.out
 
 # Environment variables (secrets)
 .env
+email.env
+facebook_page_publish.local.env
+snapchat_publish.local.env
+snapchat_cookies.json
+x_publish.local.env
+x_cookies.json
+lemon8_publish.local.env
+lemon8_cookies.json
+rednote_publish.local.env
+rednote_cookies.json
+burner_accounts.txt
+automation_state.json
+ig_state.json
+instagrapi_session.json
+followers_with_pics_*.json
+dataset_instagram-profile-scraper-*.json
+.game_history.json.tmp.*
 Followers/all_followers_fresh_backup_20251220_000534.json
 Followers/all_followers_fresh_backup_20251221_232346.json
 Followers/all_followers_fresh_backup_20251222_232332.json
@@ -124,18 +156,16 @@ Followers/missing_profile_pics/missing_profile_pics_001.json
 Followers/missing_profile_pics/missing_profile_pics_002.json
 Followers/missing_profile_pics/missing_profile_pics_003.json
 Followers/missing_profile_pics/missing_profile_pics_004.json
-
-# Local temp/recovery JSON dumps (not for remote)
-tmp_*.json
-tmp_*_games.json
-tmp_*_game_history.json
-tmp_backup_day_*_games.json
-tmp_recovered_day_*_games.json
-tmp_stash1_day_*_games.json
-tmp_stash1_game_history.json
-game_history_backup_*.json
-game_history_recovered.json
-day_*_games.json
+# Local backups / temp follower files
+Followers/*backup*.json
+Followers/*copy*.json
+Followers/*_backup_*.json
+Followers/all_followers_backup_*.json
+Followers/all_followers_fresh_backup_*.json
+Followers/new_followers_fresh_backup_*.json
+Followers/new_followers_fresh*copy*.json
+Followers/**/*.json
+Followers/missing_profile_pic_batches/summary.txt
 
 # Local bot runtime artifacts
 discord_bot/*.pid
@@ -145,11 +175,17 @@ discord_bot/discord_links.json
 backups/
 logs/
 Videos/**/*.meta.json
+tmp_*.json
 tmp_*.py
 tmp_mario_level_1/
+day_*_games.json
+game_history_backup_*.json
+game_history_recovered.json
 Followers/new_followers_fresh.json
 secrets/
 sessions/
 tiktok_follower_account_sessionid.json
+tmp_unreachable_commits.txt
+tmp_unreachable_commit_subjects.tsv
 tools/cloudflared-windows-amd64.exe
 nul
