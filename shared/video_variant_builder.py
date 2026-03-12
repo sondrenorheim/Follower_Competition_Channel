@@ -1,5 +1,5 @@
 """
-Build non-Instagram video variants with a JOIN footer overlay.
+Build non-Instagram video variants with JOIN prompt overlays.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import config
 
-_SIGNATURE_VERSION = 1
+_SIGNATURE_VERSION = 6
 _LAST_VARIANT_BUILD_INFO = None
 
 
@@ -80,10 +80,11 @@ def _escape_drawtext_text(text: str) -> str:
 
 def _resolve_placement_mode() -> str:
     mode = str(
-        getattr(config, "NON_IG_JOIN_FOOTER_PLACEMENT_MODE", "auto_best_fit") or "auto_best_fit"
+        getattr(config, "NON_IG_JOIN_FOOTER_PLACEMENT_MODE", "above_result_prompt")
+        or "above_result_prompt"
     ).strip().lower()
-    if mode not in {"fixed_bottom_margin", "auto_best_fit"}:
-        mode = "auto_best_fit"
+    if mode not in {"above_result_prompt", "fixed_bottom_margin", "auto_best_fit"}:
+        mode = "above_result_prompt"
     return mode
 
 
@@ -125,6 +126,215 @@ def _probe_video_dimensions(base_video_path: Path) -> tuple[int, int, int]:
         return width, height, frame_count
     except Exception:
         return 1080, 1920, 0
+
+
+def _detect_arena_top_y(base_video_path: Path) -> int | None:
+    """
+    Estimate arena top border y-position from a representative frame.
+    Returns None if detection fails.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+
+    cap = cv2.VideoCapture(str(base_video_path))
+    if not cap.isOpened():
+        return None
+    try:
+        frame_count = max(0, _safe_int(cap.get(cv2.CAP_PROP_FRAME_COUNT), 0))
+        sample_index = int(frame_count * 0.25) if frame_count > 0 else 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, sample_index)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return None
+
+        frame_h, frame_w = frame.shape[:2]
+        if frame_h <= 10 or frame_w <= 10:
+            return None
+
+        x0 = int(frame_w * 0.12)
+        x1 = int(frame_w * 0.88)
+        x0 = max(0, min(frame_w - 2, x0))
+        x1 = max(x0 + 1, min(frame_w, x1))
+        roi = frame[:, x0:x1]
+        if roi.size == 0:
+            return None
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        dark_mask = gray < 42
+        dark_fraction = dark_mask.mean(axis=1)
+
+        search_min = max(0, int(frame_h * 0.10))
+        search_max = min(frame_h - 1, int(frame_h * 0.60))
+        if search_max <= search_min:
+            return None
+
+        window = dark_fraction[search_min : search_max + 1]
+        if window.size == 0:
+            return None
+        candidate_rel = int(np.argmax(window))
+        candidate_y = search_min + candidate_rel
+        if float(window[candidate_rel]) < 0.35:
+            return None
+        return int(candidate_y)
+    except Exception:
+        return None
+    finally:
+        cap.release()
+
+
+def _detect_result_prompt_center_y(base_video_path: Path, arena_top_hint: int | None = None) -> int | None:
+    """
+    Detect the center-y of the in-video RESULT prompt text by scanning the
+    centered header area above the arena.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+
+    cap = cv2.VideoCapture(str(base_video_path))
+    if not cap.isOpened():
+        return None
+    try:
+        frame_count = max(0, _safe_int(cap.get(cv2.CAP_PROP_FRAME_COUNT), 0))
+        sample_index = int(frame_count * 0.20) if frame_count > 0 else 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, sample_index)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return None
+
+        frame_h, frame_w = frame.shape[:2]
+        if frame_h <= 20 or frame_w <= 20:
+            return None
+
+        x0 = int(frame_w * 0.18)
+        x1 = int(frame_w * 0.82)
+        x0 = max(0, min(frame_w - 2, x0))
+        x1 = max(x0 + 1, min(frame_w, x1))
+        roi = frame[:, x0:x1]
+        if roi.size == 0:
+            return None
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        text_mask = gray < 78
+
+        # Keep only the top area where title/subtitle/result prompt live.
+        if arena_top_hint is None:
+            search_end = int(frame_h * 0.36)
+        else:
+            search_end = min(frame_h - 1, int(arena_top_hint) - 10)
+        search_end = max(20, search_end)
+
+        row_fraction = text_mask[:search_end, :].mean(axis=1)
+        active_rows = np.where(row_fraction > 0.012)[0]
+        if active_rows.size == 0:
+            return None
+
+        runs: list[tuple[int, int]] = []
+        start = int(active_rows[0])
+        prev = start
+        for raw in active_rows[1:]:
+            y = int(raw)
+            if y <= prev + 2:
+                prev = y
+                continue
+            if prev - start >= 2:
+                runs.append((start, prev))
+            start = y
+            prev = y
+        if prev - start >= 2:
+            runs.append((start, prev))
+        if not runs:
+            return None
+
+        # Prompt is the lowest text run above the arena.
+        run_start, run_end = runs[-1]
+        return int(round((run_start + run_end) / 2.0))
+    except Exception:
+        return None
+    finally:
+        cap.release()
+
+
+def _estimate_result_prompt_center_y(base_video_path: Path, frame_height: int) -> int:
+    """
+    Estimate the existing RESULT prompt center-y using arena/top-text layout.
+    """
+    screen_height = max(1, _safe_int(getattr(config, "SCREEN_HEIGHT", 960), 960))
+    scale = float(max(1, frame_height)) / float(screen_height)
+
+    default_arena_top = _safe_int(
+        getattr(
+            config,
+            "MAZE_RUSH_ARENA_RECT",
+            getattr(config, "FIGHTER_ARENA_RECT", (40, 180, 500, 500)),
+        )[1],
+        180,
+    )
+    default_arena_top_scaled = int(round(default_arena_top * scale))
+    arena_top_detected = _detect_arena_top_y(base_video_path)
+    arena_top = float(default_arena_top_scaled)
+    if arena_top_detected is not None:
+        # CV detection occasionally locks onto wrong dark rows.
+        # Only trust it when it is reasonably close to configured layout.
+        if abs(int(arena_top_detected) - int(default_arena_top_scaled)) <= max(24, int(round(32 * scale))):
+            arena_top = float(arena_top_detected)
+
+    prompt_margin = max(
+        1,
+        int(
+            round(
+                _safe_int(getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8), 8) * scale
+            )
+        ),
+    )
+    header_shift = int(round(_safe_int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4), -4) * scale))
+    subtitle_center_y = int(round(arena_top - (40.0 * scale) + header_shift))
+    subtitle_half_height = max(5, int(round(0.34 * 32 * scale)))
+    subtitle_bottom_plus_margin = subtitle_center_y + subtitle_half_height + max(2, int(round(6 * scale)))
+
+    prompt_center_y = int(round(max(arena_top - prompt_margin, subtitle_bottom_plus_margin)))
+
+    prompt_detected = _detect_result_prompt_center_y(base_video_path, int(round(arena_top)))
+    if prompt_detected is not None:
+        if abs(int(prompt_detected) - int(prompt_center_y)) <= max(20, int(round(60 * scale))):
+            prompt_center_y = int(prompt_detected)
+
+    return max(0, min(max(1, frame_height - 1), prompt_center_y))
+
+
+def _compute_join_above_result_center_y(base_video_path: Path, frame_height: int) -> int:
+    result_center_y = _estimate_result_prompt_center_y(base_video_path, frame_height)
+    screen_height = max(1, _safe_int(getattr(config, "SCREEN_HEIGHT", 960), 960))
+    scale = float(max(1, frame_height)) / float(screen_height)
+    configured_gap = max(
+        8,
+        int(
+            round(
+                _safe_int(getattr(config, "NON_IG_JOIN_ABOVE_RESULT_LINE_GAP", 20), 20) * scale
+            )
+        ),
+    )
+    join_font_px = max(
+        10,
+        int(
+            round(
+                _safe_int(getattr(config, "NON_IG_JOIN_FOOTER_FONT_SIZE", 18), 18) * scale
+            )
+        ),
+    )
+    # Approximate rendered glyph heights (text pixels are smaller than font size).
+    result_text_px = max(10, int(round(24 * scale * 0.55)))
+    join_text_px = max(8, int(round(join_font_px * 0.60)))
+    non_overlap_gap = int(round((join_text_px + result_text_px) * 0.5)) + max(2, int(round(3 * scale)))
+    line_gap = max(configured_gap, non_overlap_gap)
+
+    join_center_y = result_center_y - line_gap
+    return max(0, min(max(1, frame_height - 1), int(join_center_y)))
 
 
 def _analyze_video_occupied_rows(
@@ -320,7 +530,30 @@ def _build_filter_expression(base_video_path: Path) -> tuple[str, int, str]:
     if not text:
         return "", 0, _resolve_placement_mode()
 
-    font_size = max(12, _safe_int(getattr(config, "NON_IG_JOIN_FOOTER_FONT_SIZE", 32), 32))
+    placement_mode = _resolve_placement_mode()
+    base_font_size = max(10, _safe_int(getattr(config, "NON_IG_JOIN_FOOTER_FONT_SIZE", 18), 18))
+    escaped_text = _escape_drawtext_text(text)
+    _, frame_height, _ = _probe_video_dimensions(base_video_path)
+
+    if placement_mode == "above_result_prompt":
+        screen_height = max(1, _safe_int(getattr(config, "SCREEN_HEIGHT", 960), 960))
+        scale = float(max(1, frame_height)) / float(screen_height)
+        font_size = max(10, int(round(base_font_size * scale)))
+        anchor_center_y = _compute_join_above_result_center_y(base_video_path, frame_height)
+        font_color = str(getattr(config, "NON_IG_JOIN_ABOVE_RESULT_FONT_COLOR", "black") or "black").strip() or "black"
+        border_opacity = _clamp(
+            _safe_float(getattr(config, "NON_IG_JOIN_ABOVE_RESULT_SHADOW_OPACITY", 0.45), 0.45),
+            0.0,
+            1.0,
+        )
+        return (
+            f"drawtext=text='{escaped_text}':x=(w-text_w)/2:y={anchor_center_y}-(text_h/2):"
+            f"fontsize={font_size}:fontcolor={font_color}:borderw=2:bordercolor=white@{border_opacity}",
+            anchor_center_y,
+            placement_mode,
+        )
+
+    font_size = base_font_size
     box_height = max(24, _safe_int(getattr(config, "NON_IG_JOIN_FOOTER_BOX_HEIGHT", 56), 56))
     box_opacity = _clamp(
         _safe_float(getattr(config, "NON_IG_JOIN_FOOTER_BOX_OPACITY", 0.55), 0.55),
@@ -328,8 +561,6 @@ def _build_filter_expression(base_video_path: Path) -> tuple[str, int, str]:
         1.0,
     )
     top_y = _compute_join_footer_top_y(base_video_path, box_height)
-    placement_mode = _resolve_placement_mode()
-    escaped_text = _escape_drawtext_text(text)
     text_y_expr = f"{top_y}+(({box_height}-text_h)/2)"
     return (
         f"drawbox=x=0:y={top_y}:w=iw:h={box_height}:color=black@{box_opacity}:t=fill,"
@@ -395,7 +626,19 @@ def _build_variant_signature(base_video_path: Path) -> dict:
             ),
             "NON_IG_JOIN_FOOTER_TEXT": str(getattr(config, "NON_IG_JOIN_FOOTER_TEXT", "") or ""),
             "NON_IG_JOIN_FOOTER_FONT_SIZE": _safe_int(
-                getattr(config, "NON_IG_JOIN_FOOTER_FONT_SIZE", 32), 32
+                getattr(config, "NON_IG_JOIN_FOOTER_FONT_SIZE", 18), 18
+            ),
+            "NON_IG_JOIN_ABOVE_RESULT_LINE_GAP": _safe_int(
+                getattr(config, "NON_IG_JOIN_ABOVE_RESULT_LINE_GAP", 20), 20
+            ),
+            "NON_IG_JOIN_ABOVE_RESULT_FONT_COLOR": str(
+                getattr(config, "NON_IG_JOIN_ABOVE_RESULT_FONT_COLOR", "black") or "black"
+            ),
+            "NON_IG_JOIN_ABOVE_RESULT_SHADOW_OPACITY": _safe_float(
+                getattr(config, "NON_IG_JOIN_ABOVE_RESULT_SHADOW_OPACITY", 0.45), 0.45
+            ),
+            "SQUARE_ARENA_HEADER_Y_SHIFT": _safe_int(
+                getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4), -4
             ),
             "NON_IG_JOIN_FOOTER_BOX_HEIGHT": _safe_int(
                 getattr(config, "NON_IG_JOIN_FOOTER_BOX_HEIGHT", 56), 56

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Statistics Persistence Module
 Handles saving and loading player statistics across games
 """
@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 import config
+from . import results_store
 
 
 class PlayerStatistics:
@@ -26,69 +27,134 @@ class PlayerStatistics:
         self.stats_file = stats_file
         self.stats: Dict[str, Dict] = {}
         self.metadata: Dict = {}  # Stores last_updated, total_games, etc.
-        self.load_statistics()
+        self.light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False))
+        self.light_disable_updates = bool(
+            getattr(config, "SIMULATION_LIGHT_DISABLE_STATS_UPDATES", True)
+        )
+        self._light_save_notice_printed = False
+
+        if self.light_mode:
+            self.metadata = {
+                "last_updated": "",
+                "total_games_recorded": 0,
+                "game_highscores": {},
+            }
+            print("SIMULATION-LIGHT MODE: Skipping player statistics load (deferred rebuild).")
+        else:
+            self.load_statistics()
 
     def load_statistics(self):
         """
-        Load statistics from JSON file
-        Creates new file if it doesn't exist
-        Supports both legacy format (dict of username->stats) and new format (with metadata)
+        Load statistics from JSON file.
+        Supports both legacy (flat dict) and new format (metadata + players).
         """
-        if os.path.exists(self.stats_file):
-            try:
-                with open(self.stats_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+        best_payload, best_source = results_store.load_best_player_stats(self.stats_file)
+        target_abs = os.path.abspath(self.stats_file)
+        loaded = False
 
-                # Check if new format with 'players' and metadata
-                if isinstance(data, dict) and "players" in data:
-                    self.stats = data.get("players", {})
-                    self.metadata = {
-                        "last_updated": data.get("last_updated", ""),
-                        "total_games_recorded": data.get("total_games_recorded", 0)
-                    }
-                else:
-                    # Legacy format: flat dict of username->stats
-                    self.stats = data
-                    self.metadata = {
-                        "last_updated": "",
-                        "total_games_recorded": 0
-                    }
-
-                print(f"Loaded statistics for {len(self.stats)} players")
-            except Exception as e:
-                print(f"Error loading statistics: {e}")
-                self.stats = {}
+        if isinstance(best_payload, dict):
+            if "players" in best_payload and isinstance(best_payload.get("players"), dict):
+                self.stats = best_payload.get("players", {})
+                self.metadata = {key: value for key, value in best_payload.items() if key != "players"}
+                self.metadata.setdefault("last_updated", "")
+                self.metadata.setdefault("total_games_recorded", 0)
+                loaded = True
+            elif best_payload:
+                self.stats = best_payload
                 self.metadata = {"last_updated": "", "total_games_recorded": 0}
-        else:
-            print("No existing statistics file, starting fresh")
+                loaded = True
+
+        if not loaded:
+            if os.path.exists(self.stats_file):
+                print(f"Error loading statistics: could not parse valid payload from {self.stats_file}")
+            else:
+                print("No existing statistics file, starting fresh")
             self.stats = {}
             self.metadata = {"last_updated": "", "total_games_recorded": 0}
+        else:
+            print(f"Loaded statistics for {len(self.stats)} players")
+
+        if best_source and os.path.abspath(best_source) != target_abs:
+            try:
+                payload = dict(self.metadata)
+                payload["players"] = self.stats
+                results_store.atomic_write_json(self.stats_file, payload)
+                results_store.write_recovery_log(
+                    {
+                        "type": "stats_recovered",
+                        "target_file": self.stats_file,
+                        "source": best_source,
+                        "player_count": len(self.stats),
+                    }
+                )
+                print(f"Recovered {self.stats_file} from {best_source}")
+            except Exception as e:
+                print(f"Warning: failed to persist recovered statistics: {e}")
+
+        if "game_highscores" not in self.metadata:
+            self.metadata["game_highscores"] = {}
 
     def save_statistics(self):
         """
-        Save statistics to JSON file in new format with metadata
-        Skips saving if TEST_MODE is enabled in config
+        Save statistics to JSON file in new format with metadata.
+        Skips saving if TEST_MODE is enabled in config.
         """
+        if self.light_mode:
+            if not self._light_save_notice_printed:
+                print(
+                    "SIMULATION-LIGHT MODE: Statistics not persisted now "
+                    "(run rebuild post-step)."
+                )
+                self._light_save_notice_printed = True
+            return
+
         if config.TEST_MODE:
-            print("🧪 TEST MODE: Statistics not saved")
+            print("TEST MODE: Statistics not saved")
             return
 
         try:
-            # Update metadata
             self.metadata["last_updated"] = datetime.now().isoformat()
+            if "total_games_recorded" not in self.metadata:
+                self.metadata["total_games_recorded"] = 0
 
-            # Create new format with metadata
-            data = {
-                "last_updated": self.metadata.get("last_updated"),
-                "total_games_recorded": self.metadata.get("total_games_recorded", 0),
-                "players": self.stats
-            }
+            data = dict(self.metadata)
+            data["players"] = self.stats
 
-            with open(self.stats_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"💾 Statistics saved for {len(self.stats)} players")
+            results_store.atomic_write_json(self.stats_file, data)
+            results_store.create_snapshot("stats_save", ["game_history.json", self.stats_file])
+            print(f"Statistics saved for {len(self.stats)} players")
         except Exception as e:
-            print(f"❌ Error saving statistics: {e}")
+            print(f"Error saving statistics: {e}")
+
+    def get_game_highscore(self, game_type: str) -> Dict[str, object]:
+        if not game_type:
+            return {"score": 0, "username": "", "label": ""}
+        highscores = self.metadata.get("game_highscores", {})
+        record = highscores.get(game_type)
+        if not record:
+            return {"score": 0, "username": "", "label": ""}
+        return record
+
+    def update_game_highscore(self, game_type: str, score: float, username: str, label: str = "") -> bool:
+        if not game_type:
+            return False
+
+        highscores = self.metadata.setdefault("game_highscores", {})
+        current = highscores.get(game_type, {})
+        try:
+            current_score = float(current.get("score", 0) or 0)
+        except (TypeError, ValueError):
+            current_score = 0.0
+
+        if score > current_score:
+            highscores[game_type] = {
+                "score": score,
+                "username": username or "",
+                "label": label or "",
+            }
+            return True
+
+        return False
 
     # List index reference for player stats:
     # [0] total_points, [1] games_played, [2] best_placement, [3] total_placements,
@@ -209,6 +275,9 @@ class PlayerStatistics:
             game_type: Type of game (e.g., "battle_royale", "platformer_race")
             game_id: Unique game session ID for tracking
         """
+        if self.light_mode and self.light_disable_updates:
+            return
+
         s = self.get_player_stats(username)
 
         # Update basic stats
@@ -308,7 +377,7 @@ class PlayerStatistics:
         game_history_file = "game_history.json"
 
         if not os.path.exists(game_history_file):
-            print(f"⚠️  Monthly leaderboard: game_history.json not found")
+            print(f"âš ï¸  Monthly leaderboard: game_history.json not found")
             return []
 
         try:
@@ -328,7 +397,7 @@ class PlayerStatistics:
             ]
 
             if not monthly_games:
-                print(f"⚠️  No games found for {year}-{month:02d}")
+                print(f"âš ï¸  No games found for {year}-{month:02d}")
                 return []
 
             # Aggregate points per player for the month
@@ -350,12 +419,12 @@ class PlayerStatistics:
             # Sort by monthly points descending
             leaderboard.sort(key=lambda x: monthly_points[x[0]], reverse=True)
 
-            print(f"📊 Monthly leaderboard for {year}-{month:02d}: {len(leaderboard)} players")
+            print(f"ðŸ“Š Monthly leaderboard for {year}-{month:02d}: {len(leaderboard)} players")
 
             return leaderboard[:top_n]
 
         except Exception as e:
-            print(f"❌ Error loading monthly leaderboard: {e}")
+            print(f"âŒ Error loading monthly leaderboard: {e}")
             return []
 
     def get_current_game_leaderboard(
@@ -432,7 +501,7 @@ class PlayerStatistics:
         print("  ALL-TIME LEADERBOARD")
         print("=" * 70)
 
-        medals = ["🥇", "🥈", "🥉"]
+        medals = ["ðŸ¥‡", "ðŸ¥ˆ", "ðŸ¥‰"]
         for i, (username, total_points, stats) in enumerate(leaderboard):
             rank = i + 1
             medal = medals[i] if i < 3 else f"{rank}."
@@ -451,9 +520,9 @@ class PlayerStatistics:
             if best_streak > 1 or first_out > 0:
                 extras = []
                 if best_streak > 1:
-                    extras.append(f"🔥 Streak: {best_streak}")
+                    extras.append(f"ðŸ”¥ Streak: {best_streak}")
                 if first_out > 0:
-                    extras.append(f"💀 First out: {first_out}")
+                    extras.append(f"ðŸ’€ First out: {first_out}")
                 print(f"   {' | '.join(extras)}")
 
         print("=" * 70)
@@ -517,6 +586,9 @@ class PlayerStatistics:
             "gorillas_vs_followers": "gv",
             "heads_or_tails": "ht",
             "wheel_spinner": "ws",
+            "mini_golf": "mg",
+            "math_drop": "md",
+            "followers_io": "fio",
         }
 
         compact_players = {}
@@ -564,6 +636,9 @@ class PlayerStatistics:
             "gorillas_vs_followers": "gv",
             "heads_or_tails": "ht",
             "wheel_spinner": "ws",
+            "mini_golf": "mg",
+            "math_drop": "md",
+            "followers_io": "fio",
         }
 
         # Group players by first letter
@@ -697,3 +772,86 @@ class PlayerStatistics:
         print(f"   {len(players_by_letter)} letter files -> {players_dir}/")
         print(f"   Index file -> {index_file}")
         print(f"   Total players: {len(player_index)}")
+
+    @staticmethod
+    def rebuild_from_games(
+        games: List[Dict],
+        stats_file: str = "player_statistics.json",
+        preserve_highscores: bool = True,
+        progress_interval: int | None = None,
+    ) -> "PlayerStatistics":
+        """
+        Rebuild player statistics from a list of game dicts.
+        Returns a PlayerStatistics instance with updated stats.
+        """
+        stats = PlayerStatistics(stats_file)
+        existing_metadata = dict(stats.metadata)
+        stats.stats = {}
+        stats.metadata = {
+            "last_updated": existing_metadata.get("last_updated", ""),
+            "total_games_recorded": 0,
+            "game_highscores": existing_metadata.get("game_highscores", {}) if preserve_highscores else {},
+        }
+
+        non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+        if progress_interval is None:
+            try:
+                progress_interval = int(getattr(config, "STATS_REBUILD_PROGRESS_INTERVAL", 50))
+            except Exception:
+                progress_interval = 50
+
+        def _to_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+        def _to_float(value, default=0.0):
+            try:
+                return float(value)
+            except Exception:
+                return default
+
+        processed = 0
+        for game in games or []:
+            if not isinstance(game, dict):
+                continue
+            if game.get("non_scoring") or game.get("game_type") in non_scoring_types:
+                continue
+            results = game.get("results") or []
+            total_participants = game.get("total_participants") or len(results)
+            game_type = game.get("game_type") or ""
+            game_id = game.get("game_id") or ""
+
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                username = result.get("username")
+                if not username:
+                    continue
+                placement = result.get("placement") or result.get("rank") or 0
+                points = result.get("points", 0) or 0
+                survival_time = result.get("survival_time", 0) or 0
+                kills = result.get("kills", 0) or 0
+                damage = result.get("damage", result.get("damage_dealt", 0)) or 0
+
+                stats.update_player_stats(
+                    username=username,
+                    placement=_to_int(placement, 0),
+                    points_earned=_to_float(points, 0.0),
+                    survival_time=_to_float(survival_time, 0.0),
+                    total_participants=_to_int(total_participants, 0),
+                    kills=_to_int(kills, 0),
+                    damage_dealt=_to_float(damage, 0.0),
+                    game_type=game_type,
+                    game_id=game_id,
+                )
+
+            processed += 1
+            if progress_interval and processed % progress_interval == 0:
+                print(f"Processed {processed}/{len(games)} games for stats rebuild")
+
+        stats.metadata["total_games_recorded"] = processed
+        stats.save_statistics()
+        return stats
+

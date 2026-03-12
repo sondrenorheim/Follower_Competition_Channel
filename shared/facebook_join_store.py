@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_FB_ID_TO_USERNAME_CACHE: dict[str, str] | None = None
+_FB_ID_CACHE_MTIME: float | None = None
+_FB_ID_CACHE_PATH: str | None = None
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -53,14 +57,11 @@ def _release_lock(lock_path: Path, fd) -> None:
 def _load_followers(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, list):
-            return [entry for entry in data if isinstance(entry, dict)]
-    except Exception:
-        pass
-    return []
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, list):
+        raise ValueError(f"Follower store must be a JSON list: {path}")
+    return [entry for entry in data if isinstance(entry, dict)]
 
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
@@ -71,17 +72,56 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     os.replace(tmp_path, path)
 
 
+def _invalidate_facebook_id_cache() -> None:
+    global _FB_ID_TO_USERNAME_CACHE, _FB_ID_CACHE_MTIME, _FB_ID_CACHE_PATH
+    _FB_ID_TO_USERNAME_CACHE = None
+    _FB_ID_CACHE_MTIME = None
+    _FB_ID_CACHE_PATH = None
+
+
+def _load_facebook_id_cache(path: Path) -> dict[str, str]:
+    global _FB_ID_TO_USERNAME_CACHE, _FB_ID_CACHE_MTIME, _FB_ID_CACHE_PATH
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        _invalidate_facebook_id_cache()
+        return {}
+
+    cache_key = str(path.resolve())
+    if (
+        _FB_ID_TO_USERNAME_CACHE is not None
+        and _FB_ID_CACHE_MTIME == mtime
+        and _FB_ID_CACHE_PATH == cache_key
+    ):
+        return _FB_ID_TO_USERNAME_CACHE
+
+    mapping: dict[str, str] = {}
+    try:
+        followers = _load_followers(path)
+    except Exception:
+        _invalidate_facebook_id_cache()
+        return {}
+    for entry in followers:
+        fb_id = str(entry.get("facebook_user_id", "")).strip()
+        if not fb_id or fb_id in mapping:
+            continue
+        username = str(entry.get("username", "")).strip()
+        if username:
+            mapping[fb_id] = username
+
+    _FB_ID_TO_USERNAME_CACHE = mapping
+    _FB_ID_CACHE_MTIME = mtime
+    _FB_ID_CACHE_PATH = cache_key
+    return mapping
+
+
 def lookup_username_by_facebook_id(follower_file: Path, facebook_user_id: str | None) -> str | None:
     """Return mapped in-game username for a Facebook user id, if present."""
     fb_id = str(facebook_user_id or "").strip()
     if not fb_id:
         return None
-    for entry in _load_followers(Path(follower_file)):
-        if str(entry.get("facebook_user_id", "")).strip() == fb_id:
-            username = str(entry.get("username", "")).strip()
-            if username:
-                return username
-    return None
+    mapping = _load_facebook_id_cache(Path(follower_file))
+    return mapping.get(fb_id)
 
 
 def upsert_facebook_join(
@@ -162,6 +202,7 @@ def upsert_facebook_join(
 
         followers.sort(key=lambda item: _normalize_username(item.get("username")))
         _atomic_write_json(follower_path, followers)
+        _invalidate_facebook_id_cache()
         return {
             "ok": True,
             "status": status,

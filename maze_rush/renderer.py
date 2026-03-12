@@ -36,6 +36,7 @@ class MazeRushRenderer(RendererTemplate):
         self.day_counter_font = pygame.font.Font(None, day_counter_size)
         self.show_title = bool(getattr(config, "MAZE_RUSH_SHOW_TITLE", False))
         self.show_subtitle = bool(getattr(config, "MAZE_RUSH_SHOW_SUBTITLE", False))
+        self.header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
         self.prompt_above_arena_margin = int(getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8))
         self.endscreen_y_offset = int(getattr(config, "MAZE_RUSH_ENDSCREEN_Y_OFFSET", 24))
 
@@ -84,13 +85,13 @@ class MazeRushRenderer(RendererTemplate):
         if self.show_title:
             title_font = pygame.font.Font(None, 56)
             title_text = title_font.render(self.GAME_TITLE, True, config.COLOR_TEXT)
-            title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70))
+            title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70 + self.header_y_shift))
             self.screen.blit(title_text, title_rect)
 
         if self.show_subtitle:
             subtitle_font = pygame.font.Font(None, 32)
             subtitle_text = subtitle_font.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
-            subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40))
+            subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40 + self.header_y_shift))
             self.screen.blit(subtitle_text, subtitle_rect)
 
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")

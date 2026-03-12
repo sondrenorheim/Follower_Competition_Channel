@@ -5,10 +5,13 @@ Manages individual game session records for website display
 
 import json
 import os
+import re
+import shutil
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import config
+from . import results_store
 
 
 class GameHistory:
@@ -26,40 +29,153 @@ class GameHistory:
         """
         self.history_file = history_file
         self.history: Dict = {"games": []}
-        self.load_history()
+        self.light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False))
+        self._light_id_counter = 0
+        self._light_save_notice_printed = False
+
+        if self.light_mode:
+            print("SIMULATION-LIGHT MODE: Skipping game history load (event append only).")
+        else:
+            self.load_history()
+
+    @staticmethod
+    def resolve_history_file(preferred: str = "game_history.json") -> str:
+        """
+        Pick the most complete history file available.
+        Preference order is based on file size and valid JSON structure.
+        """
+        candidates = []
+        preferred_path = preferred
+        if os.path.exists(preferred_path):
+            candidates.append(preferred_path)
+
+        recovered = "game_history_recovered.json"
+        if os.path.exists(recovered):
+            candidates.append(recovered)
+
+        try:
+            for name in os.listdir("."):
+                if name.startswith("game_history_backup_") and name.endswith(".json"):
+                    candidates.append(name)
+        except Exception:
+            pass
+
+        def _size(path: str) -> int:
+            try:
+                return os.path.getsize(path)
+            except Exception:
+                return 0
+
+        # Try largest files first.
+        candidates = sorted(set(candidates), key=_size, reverse=True)
+
+        for path in candidates:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("games"), list):
+                    return path
+            except Exception:
+                continue
+
+        return preferred
+
+    @staticmethod
+    def merge_history_files(primary_path: str, secondary_path: str) -> Dict:
+        """
+        Merge two history files, keeping the most complete entry per game_id.
+        """
+        history = {"games": []}
+        games_by_id: Dict[str, Dict] = {}
+
+        def _load(path: str) -> Dict:
+            if not path or not os.path.exists(path):
+                return {"games": []}
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("games"), list):
+                    return data
+            except Exception:
+                pass
+            return {"games": []}
+
+        primary = _load(primary_path)
+        secondary = _load(secondary_path)
+
+        for game in secondary.get("games", []):
+            game_id = game.get("game_id")
+            if not game_id:
+                continue
+            games_by_id[game_id] = game
+
+        for game in primary.get("games", []):
+            game_id = game.get("game_id")
+            if not game_id:
+                continue
+            existing = games_by_id.get(game_id)
+            if existing is None or len(game.get("results", []) or []) > len(existing.get("results", []) or []):
+                games_by_id[game_id] = game
+
+        history["games"] = list(games_by_id.values())
+        return history
 
     def load_history(self):
         """
         Load game history from JSON file
         Creates new file if it doesn't exist
         """
-        if os.path.exists(self.history_file):
-            try:
-                with open(self.history_file, 'r', encoding='utf-8') as f:
-                    self.history = json.load(f)
-                    # Ensure 'games' key exists
-                    if "games" not in self.history:
-                        self.history["games"] = []
-                print(f"Loaded history for {len(self.history['games'])} games")
-            except Exception as e:
-                print(f"Error loading game history: {e}")
-                self.history = {"games": []}
-        else:
+        history_path = os.path.abspath(self.history_file)
+        best_payload, best_source = results_store.load_best_game_history(self.history_file)
+        if not isinstance(best_payload, dict):
+            best_payload = {"games": []}
+        if not isinstance(best_payload.get("games"), list):
+            best_payload["games"] = []
+        self.history = best_payload
+
+        game_count = len(self.history.get("games", []))
+        if game_count == 0 and not os.path.exists(self.history_file):
             print("No existing game history file, starting fresh")
-            self.history = {"games": []}
+            return
+
+        source_text = best_source or history_path
+        print(f"Loaded history for {game_count} games")
+
+        if best_source and os.path.abspath(best_source) != history_path:
+            try:
+                results_store.atomic_write_json(self.history_file, self.history)
+                results_store.write_recovery_log(
+                    {
+                        "type": "history_recovered",
+                        "target_file": self.history_file,
+                        "source": source_text,
+                        "game_count": game_count,
+                    }
+                )
+                print(f"Recovered {self.history_file} from {source_text}")
+            except Exception as e:
+                print(f"Warning: failed to persist recovered history: {e}")
 
     def save_history(self):
         """
         Save game history to JSON file
         Skips saving if TEST_MODE is enabled in config
         """
+        if self.light_mode:
+            if not self._light_save_notice_printed:
+                print(
+                    "SIMULATION-LIGHT MODE: game_history.json not persisted now "
+                    "(run rebuild post-step)."
+                )
+                self._light_save_notice_printed = True
+            return
+
         if config.TEST_MODE:
             print("TEST MODE: Game history not saved")
             return
 
         try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, separators=(',', ':'))
+            results_store.atomic_write_json(self.history_file, self.history)
             print(f"Game history saved ({len(self.history['games'])} total games)")
         except Exception as e:
             print(f"Error saving game history: {e}")
@@ -74,7 +190,7 @@ class GameHistory:
             json.dump(self.history, f, ensure_ascii=False, separators=(",", ":"))
         print(f"Exported web game history to {output_path}")
 
-    def _generate_monthly_leaderboards(self, leaderboards_dir) -> dict:
+    def _generate_monthly_leaderboards(self, leaderboards_dir) -> tuple[dict, set[str]]:
         """
         Generate pre-computed monthly leaderboards.
         Creates one file per month: leaderboards/2024-12.json, leaderboards/2025-01.json, etc.
@@ -88,6 +204,8 @@ class GameHistory:
         """
         from collections import defaultdict
         preview_limit = int(getattr(config, "WEB_RESULTS_PREVIEW_LIMIT", 200) or 0)
+
+        written_files: set[str] = set()
 
         # Aggregate stats by month (all games) and by game type
         def stats_bucket():
@@ -171,6 +289,7 @@ class GameHistory:
 
             with open(leaderboards_dir / filename, 'w', encoding='utf-8') as f:
                 json.dump(month_data, f, ensure_ascii=False, separators=(',', ':'))
+            written_files.add(filename)
 
             if preview_limit > 0 and len(leaderboard) > preview_limit:
                 preview_filename = f"{month_key}_top.json" if not game_type else f"{month_key}_{game_type}_top.json"
@@ -185,6 +304,7 @@ class GameHistory:
                 }
                 with open(leaderboards_dir / preview_filename, 'w', encoding='utf-8') as f:
                     json.dump(preview_data, f, ensure_ascii=False, separators=(',', ':'))
+                written_files.add(preview_filename)
 
         # Write monthly leaderboard files
         monthly_stats = {}
@@ -201,7 +321,7 @@ class GameHistory:
                 "games": len([g for g in self.history.get('games', []) if g.get("timestamp", "").startswith(month_key)])
             }
 
-        return monthly_stats
+        return monthly_stats, written_files
 
     def export_partitioned_history(self, base_dir: str = "website/public/api"):
         """
@@ -236,11 +356,26 @@ class GameHistory:
         types_dir.mkdir(exist_ok=True)
         leaderboards_dir.mkdir(exist_ok=True)
 
+        def remove_stale_json(directory: Path, expected_files: set[str], pattern: Optional[re.Pattern] = None):
+            removed = 0
+            for path in directory.glob("*.json"):
+                if pattern is not None and not pattern.match(path.name):
+                    continue
+                if path.name in expected_files:
+                    continue
+                try:
+                    path.unlink()
+                    removed += 1
+                except Exception:
+                    continue
+            return removed
+
         # Organize games
         games_by_day = defaultdict(list)
         games_by_type = defaultdict(list)
         all_days = set()
         all_types = set()
+        expected_game_files: set[str] = set()
 
         # Step 1: Export individual game files
         for game in self.history.get("games", []):
@@ -255,6 +390,7 @@ class GameHistory:
             game_file = games_dir / f"{game_id}.json"
             with open(game_file, 'w', encoding='utf-8') as f:
                 json.dump(game, f, ensure_ascii=False, separators=(',', ':'))
+            expected_game_files.add(game_file.name)
 
             if preview_limit > 0:
                 results = game.get("results") or []
@@ -274,6 +410,7 @@ class GameHistory:
                 preview_file = games_dir / f"{game_id}_top.json"
                 with open(preview_file, 'w', encoding='utf-8') as f:
                     json.dump(preview_game, f, ensure_ascii=False, separators=(',', ':'))
+                expected_game_files.add(preview_file.name)
 
             # Organize for aggregation
             if day is not None:
@@ -284,8 +421,11 @@ class GameHistory:
                 games_by_type[game_type].append(game)
                 all_types.add(game_type)
 
+        remove_stale_json(games_dir, expected_game_files)
+
         # Step 2: Export day summary files (metadata only, not full results)
         day_metadata = []
+        expected_day_files: set[str] = set()
         for day_num in sorted(all_days):
             day_games = games_by_day[day_num]
             day_file = days_dir / f"{day_num}.json"
@@ -308,6 +448,7 @@ class GameHistory:
 
             with open(day_file, 'w', encoding='utf-8') as f:
                 json.dump(day_summary, f, ensure_ascii=False, separators=(',', ':'))
+            expected_day_files.add(day_file.name)
 
             scoring_games = [
                 g for g in day_games
@@ -354,6 +495,7 @@ class GameHistory:
             aggregate_file = days_dir / f"{day_num}_aggregate.json"
             with open(aggregate_file, 'w', encoding='utf-8') as f:
                 json.dump(aggregate_game, f, ensure_ascii=False, separators=(',', ':'))
+            expected_day_files.add(aggregate_file.name)
 
             if preview_limit > 0:
                 aggregate_preview = {
@@ -371,6 +513,7 @@ class GameHistory:
                 aggregate_preview_file = days_dir / f"{day_num}_aggregate_top.json"
                 with open(aggregate_preview_file, 'w', encoding='utf-8') as f:
                     json.dump(aggregate_preview, f, ensure_ascii=False, separators=(',', ':'))
+                expected_day_files.add(aggregate_preview_file.name)
 
             game_types = list(set(g.get("game_type") for g in day_games if g.get("game_type")))
             total_participants = len(set(
@@ -387,8 +530,11 @@ class GameHistory:
                 "participants": total_participants
             })
 
+        remove_stale_json(days_dir, expected_day_files)
+
         # Step 3: Export game type indexes
         type_metadata = []
+        expected_type_files: set[str] = set()
         for game_type in sorted(all_types):
             type_games = games_by_type[game_type]
             type_file = types_dir / f"{game_type}.json"
@@ -409,18 +555,24 @@ class GameHistory:
 
             with open(type_file, 'w', encoding='utf-8') as f:
                 json.dump(type_index, f, ensure_ascii=False, separators=(',', ':'))
+            expected_type_files.add(type_file.name)
 
             type_metadata.append({
                 "type": game_type,
                 "games": len(type_games)
             })
 
+        remove_stale_json(types_dir, expected_type_files)
+
         # Step 4: Generate monthly leaderboards
-        monthly_stats = self._generate_monthly_leaderboards(leaderboards_dir)
+        monthly_stats, monthly_files = self._generate_monthly_leaderboards(leaderboards_dir)
+        monthly_pattern = re.compile(r"^\d{4}-\d{2}(?:_.+)?(?:_top)?\.json$")
+        remove_stale_json(leaderboards_dir, monthly_files, monthly_pattern)
 
         # Step 5: Export player history index (compact, per-letter)
         player_history_dir = base_path / "player_history"
         player_history_dir.mkdir(exist_ok=True)
+        expected_player_history_files: set[str] = set()
 
         points_scale = 10
         player_histories = defaultdict(lambda: defaultdict(list))
@@ -475,6 +627,7 @@ class GameHistory:
             letter_file = player_history_dir / f"{letter}.json"
             with open(letter_file, 'w', encoding='utf-8') as f:
                 json.dump(letter_data, f, ensure_ascii=False, separators=(',', ':'))
+            expected_player_history_files.add(letter_file.name)
 
         history_index = {
             "lu": datetime.now().isoformat(),
@@ -485,6 +638,8 @@ class GameHistory:
         history_index_file = player_history_dir / "index.json"
         with open(history_index_file, 'w', encoding='utf-8') as f:
             json.dump(history_index, f, ensure_ascii=False, separators=(',', ':'))
+        expected_player_history_files.add(history_index_file.name)
+        remove_stale_json(player_history_dir, expected_player_history_files)
 
         # Step 6: Create master index
         # Load follower count from all_followers_fresh.json
@@ -528,13 +683,154 @@ class GameHistory:
         print(f"   Player history index -> {history_index_file}")
         print(f"   Master index -> {index_file}")
 
+    def export_hall_of_fame(
+        self,
+        base_dir: str = "website/public/api",
+        avatar_cache_dir: str = "avatar_cache",
+    ):
+        """
+        Export Hall of Fame data for daily and monthly champions.
+
+        Outputs:
+            - {base_dir}/hall_of_fame.json
+            - {base_dir}/avatars/{username}.jpg (copied from avatar_cache when available)
+        """
+        from collections import defaultdict
+        from pathlib import Path
+
+        base_path = Path(base_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+        avatars_dir = base_path / "avatars"
+        avatars_dir.mkdir(exist_ok=True)
+
+        non_scoring_types = set(getattr(config, "NON_SCORING_GAME_TYPES", []) or [])
+
+        daily_points = defaultdict(lambda: defaultdict(float))
+        daily_timestamps = {}
+        monthly_points = defaultdict(lambda: defaultdict(float))
+
+        for game in self.history.get("games", []):
+            if game.get("non_scoring") or game.get("game_type") in non_scoring_types:
+                continue
+
+            day_number = game.get("day_number")
+            timestamp = game.get("timestamp") or ""
+
+            if day_number is not None:
+                if timestamp and (day_number not in daily_timestamps or timestamp > daily_timestamps[day_number]):
+                    daily_timestamps[day_number] = timestamp
+                for result in game.get("results", []):
+                    username = result.get("username")
+                    if not username:
+                        continue
+                    points = result.get("points", 0) or 0
+                    daily_points[day_number][username] += points
+
+            if timestamp and len(timestamp) >= 7:
+                month_key = timestamp[:7]
+                for result in game.get("results", []):
+                    username = result.get("username")
+                    if not username:
+                        continue
+                    points = result.get("points", 0) or 0
+                    monthly_points[month_key][username] += points
+
+        def pick_champion(points_map: dict) -> tuple[str, float]:
+            sorted_entries = sorted(points_map.items(), key=lambda x: (-x[1], x[0]))
+            return sorted_entries[0]
+
+        daily_champions = []
+        for day_number, totals in daily_points.items():
+            if not totals:
+                continue
+            winner, points = pick_champion(totals)
+            daily_champions.append({
+                "day": day_number,
+                "username": winner,
+                "points": round(points, 2),
+                "timestamp": daily_timestamps.get(day_number, "")
+            })
+
+        daily_champions.sort(key=lambda x: x["day"], reverse=True)
+
+        monthly_champions = []
+        for month_key, totals in monthly_points.items():
+            if not totals:
+                continue
+            winner, points = pick_champion(totals)
+            monthly_champions.append({
+                "month": month_key,
+                "username": winner,
+                "points": round(points, 2)
+            })
+
+        monthly_champions.sort(key=lambda x: x["month"], reverse=True)
+
+        def safe_filename(value: str) -> str:
+            cleaned = []
+            for char in value:
+                if char.isalnum() or char in ("_", "-", "."):
+                    cleaned.append(char)
+                else:
+                    cleaned.append("_")
+            return "".join(cleaned) or "user"
+
+        def find_avatar_file(cache_dir: Path, username: str) -> Optional[Path]:
+            for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                candidate = cache_dir / f"{username}{ext}"
+                if candidate.exists():
+                    return candidate
+            matches = list(cache_dir.glob(f"{username}.*"))
+            if matches:
+                return matches[0]
+            return None
+
+        avatar_cache = Path(avatar_cache_dir)
+        avatar_map = {}
+        champions = {entry["username"] for entry in daily_champions}
+        champions.update(entry["username"] for entry in monthly_champions)
+
+        for username in champions:
+            if not avatar_cache.exists():
+                break
+            src = find_avatar_file(avatar_cache, username)
+            if not src:
+                continue
+            safe_name = safe_filename(username)
+            dest = avatars_dir / f"{safe_name}{src.suffix.lower()}"
+            try:
+                if not dest.exists() or src.stat().st_mtime > dest.stat().st_mtime:
+                    shutil.copy2(src, dest)
+                avatar_map[username] = f"api/avatars/{dest.name}"
+            except Exception:
+                continue
+
+        for entry in daily_champions:
+            entry["avatar"] = avatar_map.get(entry["username"])
+
+        for entry in monthly_champions:
+            entry["avatar"] = avatar_map.get(entry["username"])
+
+        output_path = base_path / "hall_of_fame.json"
+        payload = {
+            "last_updated": datetime.now().isoformat(),
+            "daily_champions": daily_champions,
+            "monthly_champions": monthly_champions
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+
+        print(f"Exported hall of fame data -> {output_path}")
+
     def record_game_session(
         self,
         game_type: str,
         game_display_name: str,
         day_number: int,
         results: List[Dict],
-        non_scoring: bool = False
+        non_scoring: bool = False,
+        extra_data: Optional[Dict] = None,
     ):
         """
         Record a complete game session with all player results
@@ -555,16 +851,20 @@ class GameHistory:
         # Generate unique game ID
         timestamp = datetime.now().isoformat()
         date_prefix = datetime.now().strftime("%Y%m%d")
-
-        # Count games of this type today to create unique ID
-        games_today = [
-            g for g in self.history["games"]
-            if g.get("game_id", "").startswith(f"{date_prefix}_") and
-            g.get("game_type") == game_type
-        ]
-        game_sequence = len(games_today) + 1
-
-        game_id = f"{date_prefix}_{game_sequence:03d}_{game_type}"
+        if self.light_mode:
+            # In simulation-light mode, history is not loaded, so use time+counter for uniqueness.
+            self._light_id_counter += 1
+            time_token = datetime.now().strftime("%H%M%S%f")
+            game_id = f"{date_prefix}_{time_token}_{self._light_id_counter:03d}_{game_type}"
+        else:
+            # Count games of this type today to create unique ID
+            games_today = [
+                g for g in self.history["games"]
+                if g.get("game_id", "").startswith(f"{date_prefix}_") and
+                g.get("game_type") == game_type
+            ]
+            game_sequence = len(games_today) + 1
+            game_id = f"{date_prefix}_{game_sequence:03d}_{game_type}"
 
         # Sort results by placement
         sorted_results = sorted(results, key=lambda x: x.get("placement", 999))
@@ -584,15 +884,36 @@ class GameHistory:
             "results": sorted_results,
             "non_scoring": non_scoring
         }
+        if extra_data:
+            for key, value in extra_data.items():
+                if key not in game_record:
+                    game_record[key] = value
 
-        # Add to history
-        self.history["games"].append(game_record)
+        # Add to in-memory history.
+        # In simulation-light mode we keep a compact in-memory record to limit RAM growth.
+        if self.light_mode:
+            self.history["games"].append({
+                "game_id": game_id,
+                "game_type": game_type,
+                "game_display_name": game_display_name,
+                "day_number": day_number,
+                "timestamp": timestamp,
+                "total_participants": len(results),
+                "non_scoring": non_scoring,
+            })
+        else:
+            self.history["games"].append(game_record)
 
         print(f"\nGame session recorded:")
         print(f"   ID: {game_id}")
         print(f"   Type: {game_display_name}")
         print(f"   Day: {day_number}")
         print(f"   Participants: {len(results)}")
+
+        try:
+            results_store.append_game_event(game_record)
+        except Exception as e:
+            print(f"Warning: failed to append event backup for {game_id}: {e}")
 
         # Save to file
         self.save_history()

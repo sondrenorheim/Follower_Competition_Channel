@@ -85,6 +85,7 @@ class MathDropRenderer(RendererTemplate):
             )
         )
         self.day_counter_font = pygame.font.Font(None, day_counter_size)
+        self.header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
         self.prompt_above_arena_margin = int(
             getattr(
                 config,
@@ -121,11 +122,11 @@ class MathDropRenderer(RendererTemplate):
         subtitle_rect = None
 
         title_text = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
-        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70))
+        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70 + self.header_y_shift))
         self.screen.blit(title_text, title_rect)
 
         subtitle_text = self.font_subtitle.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
-        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40))
+        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40 + self.header_y_shift))
         self.screen.blit(subtitle_text, subtitle_rect)
 
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")

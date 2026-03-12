@@ -107,8 +107,9 @@ class SideChoiceRenderer(RendererTemplate):
 
     def _draw_title_and_subtitle(self):
         center_x = self.width // 2
-        title_y = self.game_top - 70
-        subtitle_y = self.game_top - 40
+        header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
+        title_y = self.game_top - 70 + header_y_shift
+        subtitle_y = self.game_top - 40 + header_y_shift
 
         title_surface = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
         title_rect = title_surface.get_rect(center=(center_x, title_y))

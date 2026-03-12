@@ -558,17 +558,18 @@ class ObstacleCourseRenderer:
         arena_rect = getattr(config, "MAZE_RUSH_ARENA_RECT", config.FIGHTER_ARENA_RECT)
         arena_top = int(arena_rect[1])
         arena_bottom = int(arena_rect[1] + arena_rect[3])
+        header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
 
         # Draw title above track.
         title_text = "OBSTACLE COURSE RACE"
         title_surface = self.font_title.render(title_text, True, (0, 0, 0))
-        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 70))
+        title_rect = title_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 70 + header_y_shift))
         self.screen.blit(title_surface, title_rect)
 
         # Draw subtitle above track.
         subtitle_text = "Making my followers battle every day"
         subtitle_surface = self.font_subtitle.render(subtitle_text, True, (0, 0, 0))
-        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 40))
+        subtitle_rect = subtitle_surface.get_rect(center=(config.SCREEN_WIDTH // 2, arena_top - 40 + header_y_shift))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")

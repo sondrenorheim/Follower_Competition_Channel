@@ -57,8 +57,9 @@ class SnakeEscapeRenderer(RendererTemplate):
         self.game_bottom = self.game_top + self.GAME_HEIGHT
 
         # Text positions relative to arena
-        self.title_y = self.game_top - 70
-        self.subtitle_y = self.game_top - 40
+        self.header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
+        self.title_y = self.game_top - 70 + self.header_y_shift
+        self.subtitle_y = self.game_top - 40 + self.header_y_shift
         self.day_counter_offset = int(
             getattr(
                 config,

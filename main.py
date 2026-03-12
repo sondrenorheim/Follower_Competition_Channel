@@ -13,6 +13,7 @@ import random
 import math
 import time
 import importlib
+import argparse
 from datetime import datetime
 import sys
 import os
@@ -184,6 +185,35 @@ def _ensure_webhook_services():
     base_dir = Path(__file__).resolve().parent
     log_dir = Path(getattr(config, "WEBHOOK_SERVICE_LOG_DIR", "logs/webhook_services"))
     hidden = bool(getattr(config, "WEBHOOK_SERVICE_HEADLESS", False))
+
+    # Prefer the hardened restart flow to avoid duplicate webhook/tunnel instances
+    # and to enforce low-memory webhook runtime defaults.
+    restart_script = base_dir / "restart_webhook.py"
+    if restart_script.exists():
+        restart_cmd = [sys.executable, str(restart_script), "--skip-discord"]
+        if hidden:
+            restart_cmd.append("--hidden")
+        try:
+            print("Ensuring webhook+tunnel via restart_webhook.py...")
+            completed = subprocess.run(
+                restart_cmd,
+                cwd=str(base_dir),
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+            if completed.returncode == 0:
+                return
+            print(
+                "Warning: restart_webhook.py returned non-zero. "
+                "Falling back to legacy startup checks."
+            )
+            stderr = (completed.stderr or "").strip()
+            if stderr:
+                print(f"restart_webhook stderr: {stderr[-400:]}")
+        except Exception as exc:
+            print(f"Warning: restart_webhook.py failed ({exc}). Falling back to legacy startup checks.")
 
     webhook_port = int(getattr(config, "WEBHOOK_SERVER_PORT", 5000))
     webhook_ok = False
@@ -1206,6 +1236,43 @@ def _prefetch_followers_for_all() -> list:
         return []
 
 
+def _prefetch_followers_for_import(import_file: str) -> list:
+    """Prefetch followers (including avatars) once for a specific import source."""
+    previous_import = getattr(config, "FOLLOWER_IMPORT_FILE", "")
+    try:
+        config.FOLLOWER_IMPORT_FILE = import_file
+        api_client = InstagramAPI()
+        if config.TEST_MINIMAL_PLAYERS:
+            print(
+                f"TEST MODE: Prefetching {config.TEST_MINIMAL_PLAYER_COUNT} "
+                f"test players for import source '{import_file}'"
+            )
+            followers = api_client.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
+        else:
+            followers = api_client.fetch_followers(config.FOLLOWER_COUNT)
+        return followers or []
+    except Exception as e:
+        print(f"Warning: Failed to prefetch followers for import '{import_file}': {e}")
+        return []
+    finally:
+        config.FOLLOWER_IMPORT_FILE = previous_import
+
+
+def _apply_prefetched_followers_for_mode(game_mode: str, cache_by_import: dict[str, list]):
+    """Ensure mode import source is prefetched and set in shared cache."""
+    import_file = _get_follower_import_file(game_mode)
+    cache_key = str(import_file or "")
+    if cache_key not in cache_by_import:
+        cache_by_import[cache_key] = _prefetch_followers_for_import(import_file)
+
+    prefetched = cache_by_import.get(cache_key) or []
+    if prefetched:
+        shared_api.set_prefetched_followers(prefetched)
+    else:
+        shared_api.clear_prefetched_followers()
+    return prefetched
+
+
 def _run_single_mode(game_mode: str):
     """Set per-game config and run one game mode."""
     config.GAME_MODE = game_mode
@@ -1423,14 +1490,93 @@ def _log_all_mode_exception(game_mode: str, exc: Exception) -> Path:
     return log_path
 
 
+def _parse_day_range(value: str) -> tuple[int, int]:
+    """Parse --day-range START-END and validate bounds."""
+    raw = str(value or "").strip()
+    parts = raw.split("-", 1)
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("Expected START-END (example: 107-112).")
+
+    start_text = parts[0].strip()
+    end_text = parts[1].strip()
+    if not start_text.isdigit() or not end_text.isdigit():
+        raise argparse.ArgumentTypeError("Day range must contain positive integers only.")
+
+    start_day = int(start_text)
+    end_day = int(end_text)
+    if start_day <= 0 or end_day <= 0:
+        raise argparse.ArgumentTypeError("Day range values must be > 0.")
+    if start_day > end_day:
+        raise argparse.ArgumentTypeError("Day range start must be <= end.")
+
+    return start_day, end_day
+
+
+def _parse_cli_args():
+    parser = argparse.ArgumentParser(description="Follower Battlegrounds main runner")
+    parser.add_argument(
+        "--day-range",
+        type=_parse_day_range,
+        metavar="START-END",
+        help="Run an inclusive day range (example: 107-112).",
+    )
+    parser.add_argument(
+        "--simulation-light",
+        action="store_true",
+        help="Skip full history/stat loads and persist events only (rebuild later).",
+    )
+    parser.add_argument(
+        "--no-simulation-light",
+        action="store_true",
+        help="Force full history/stat mode for this run.",
+    )
+    return parser.parse_args()
+
+
 def main():
     """
     Entry point for the game
     Selects game mode based on config.GAME_MODE
     """
+    args = _parse_cli_args()
+    if args.simulation_light and args.no_simulation_light:
+        print("Error: --simulation-light and --no-simulation-light cannot be used together.")
+        sys.exit(2)
+
+    original_day_number = int(getattr(config, "DAY_NUMBER", 1) or 1)
+    original_auto_push_stats = bool(getattr(config, "AUTO_PUSH_STATS", False))
+    original_follower_import_file = getattr(config, "FOLLOWER_IMPORT_FILE", _DEFAULT_FOLLOWER_IMPORT_FILE)
+    original_simulation_light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False))
+    range_mode = args.day_range is not None
+    simulation_light_mode = original_simulation_light_mode
+    if range_mode and bool(getattr(config, "SIMULATION_LIGHT_AUTO_FOR_DAY_RANGE", True)):
+        simulation_light_mode = True
+    if args.simulation_light:
+        simulation_light_mode = True
+    if args.no_simulation_light:
+        simulation_light_mode = False
+    config.SIMULATION_LIGHT_MODE = simulation_light_mode
+
+    day_values = [original_day_number]
+    if range_mode:
+        start_day, end_day = args.day_range
+        day_values = list(range(start_day, end_day + 1))
+        print(
+            f"Day-range mode enabled: {start_day}-{end_day} (inclusive). "
+            "Sim-only side effects are active."
+        )
+    if simulation_light_mode:
+        print("Simulation-light mode enabled: events/results append only; full rebuild deferred.")
+
+    prefetched_by_import: dict[str, list] = {}
+    run_completed = False
+
     try:
-        _ensure_webhook_services()
-        _ensure_discord_bot()
+        if simulation_light_mode:
+            print("Simulation-light mode: skipping webhook and Discord autostart.")
+        else:
+            _ensure_webhook_services()
+            _ensure_discord_bot()
 
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
@@ -1443,6 +1589,9 @@ def main():
             config.LOAD_PROFILE_PICTURES = True
             config.TEST_MINIMAL_PLAYERS = False
 
+        if range_mode or simulation_light_mode:
+            config.AUTO_PUSH_STATS = False
+
         if game_mode == "ALL":
             print("Running ALL game modes sequentially:")
             all_modes = list(getattr(config, "ALL_GAME_MODES", []))
@@ -1451,54 +1600,55 @@ def main():
                 getattr(config, "AUTO_PUSH_ALL_MODE_STRATEGY", "every_n_games")
             )
             push_batch_size = max(1, int(getattr(config, "AUTO_PUSH_ALL_MODE_BATCH_SIZE", 5) or 5))
-            push_checkpoints = _compute_all_mode_batch_checkpoints(len(all_modes), push_batch_size)
+            total_run_items = len(all_modes) * len(day_values)
+            push_checkpoints = _compute_all_mode_batch_checkpoints(total_run_items, push_batch_size)
             print(
                 f"ALL-mode stats push strategy: {push_strategy}"
                 + (f" (every {push_batch_size} games)" if push_strategy == "every_n_games" else "")
             )
             all_mode_push_enabled = (
                 not config.TEST_MODE
-                and bool(getattr(config, "AUTO_PUSH_STATS", False))
+                and original_auto_push_stats
+                and not range_mode
             )
             suppress_per_game_push = (
                 all_mode_push_enabled
                 and push_strategy != "per_game"
                 and bool(getattr(config, "AUTO_PUSH_ALL_MODE_SUPPRESS_PER_GAME_PUSH", True))
             )
-            original_auto_push_stats = bool(getattr(config, "AUTO_PUSH_STATS", False))
             if suppress_per_game_push:
                 config.AUTO_PUSH_STATS = False
                 print("ALL-mode: per-game module auto-push suppressed; using batched checkpoints only.")
             default_import_file = _DEFAULT_FOLLOWER_IMPORT_FILE
             config.FOLLOWER_IMPORT_FILE = default_import_file
-            # Start scheduled uploads immediately so it can wait for the set time
-            # while games are still rendering.
-            context_path = _write_scheduled_upload_context()
-            _start_scheduled_upload_background(context_path)
-            prefetched = _prefetch_followers_for_all()
+            if range_mode or simulation_light_mode:
+                print("Simulation run: skipping scheduled upload launcher.")
+            else:
+                # Start scheduled uploads immediately so it can wait for the set time
+                # while games are still rendering.
+                context_path = _write_scheduled_upload_context()
+                _start_scheduled_upload_background(context_path)
             completed_modes = 0
             try:
                 for mode in all_modes:
-                    # Refresh the cache reference before each run
-                    mode_import_file = _get_follower_import_file(mode)
-                    if prefetched and mode_import_file == default_import_file:
-                        shared_api.set_prefetched_followers(prefetched)
-                    else:
-                        shared_api.clear_prefetched_followers()
-                    try:
-                        _run_single_mode(mode)
-                    except Exception as e:
-                        log_path = _log_all_mode_exception(mode, e)
-                        print(f"\nERROR: {mode} crashed. See log: {log_path}\n")
-                        continue
-                    completed_modes += 1
-                    if all_mode_push_enabled:
-                        if push_strategy == "per_game":
-                            # Legacy behavior: push after each game.
-                            _push_stats_background(mode, config.DAY_NUMBER)
-                        elif push_strategy == "every_n_games" and completed_modes in push_checkpoints:
-                            # Batched behavior: push every N completed games.
-                            _push_stats_background(f"ALL_batch_{completed_modes}", config.DAY_NUMBER)
+                    for day_number in day_values:
+                        config.DAY_NUMBER = day_number
+                        print(f"\n[ALL] Running {mode} for Day {day_number}")
+                        _apply_prefetched_followers_for_mode(mode, prefetched_by_import)
+                        try:
+                            _run_single_mode(mode)
+                        except Exception as e:
+                            log_path = _log_all_mode_exception(mode, e)
+                            print(f"\nERROR: {mode} crashed on Day {day_number}. See log: {log_path}\n")
+                            continue
+                        completed_modes += 1
+                        if all_mode_push_enabled:
+                            if push_strategy == "per_game":
+                                # Legacy behavior: push after each game.
+                                _push_stats_background(mode, config.DAY_NUMBER)
+                            elif push_strategy == "every_n_games" and completed_modes in push_checkpoints:
+                                # Batched behavior: push every N completed games.
+                                _push_stats_background(f"ALL_batch_{completed_modes}", config.DAY_NUMBER)
                 if (
                     all_mode_push_enabled
                     and push_strategy != "per_game"
@@ -1508,15 +1658,19 @@ def main():
                     config.GAME_MODE = "ALL"
                     _push_stats_background("ALL", config.DAY_NUMBER)
             finally:
-                shared_api.clear_prefetched_followers()
-                config.AUTO_PUSH_STATS = original_auto_push_stats
                 # Restore GAME_MODE for downstream references (e.g., manual push)
                 config.GAME_MODE = "ALL"
                 config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
                 config.FOLLOWER_IMPORT_FILE = default_import_file
 
         else:
-            _run_single_mode(game_mode)
+            for day_number in day_values:
+                config.DAY_NUMBER = day_number
+                if range_mode:
+                    print(f"\nRunning {game_mode} for Day {day_number}")
+                _apply_prefetched_followers_for_mode(game_mode, prefetched_by_import)
+                _run_single_mode(game_mode)
+        run_completed = True
     except KeyboardInterrupt:
         print("\n\nGame interrupted by user")
         pygame.quit()
@@ -1527,6 +1681,19 @@ def main():
         traceback.print_exc()
         pygame.quit()
         sys.exit(1)
+    finally:
+        shared_api.clear_prefetched_followers()
+        config.DAY_NUMBER = original_day_number
+        config.AUTO_PUSH_STATS = original_auto_push_stats
+        config.FOLLOWER_IMPORT_FILE = original_follower_import_file
+        config.SIMULATION_LIGHT_MODE = original_simulation_light_mode
+
+        if run_completed and simulation_light_mode:
+            print("\nSimulation-light run complete.")
+            print(
+                "Next step (rebuild canonical history/stats):\n"
+                "  python maintenance/rebuild_history_stats_from_events.py"
+            )
 
 
 if __name__ == "__main__":

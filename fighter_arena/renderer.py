@@ -501,17 +501,18 @@ class FighterRenderer:
         )
         arena_top = arena_rect[1]
         arena_bottom = arena_rect[1] + arena_rect[3]
+        header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
 
         # === TOP: FIGHTER ARENA title ===
         title_font = pygame.font.Font(None, 56)
         title_text = title_font.render("FIGHTER ARENA", True, config.COLOR_TEXT)
-        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70))
+        title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70 + header_y_shift))
         self.screen.blit(title_text, title_rect)
 
         # "Making my followers battle every day" subtitle
         subtitle_font = pygame.font.Font(None, 32)
         subtitle_text = subtitle_font.render("Making my followers battle every day", True, config.COLOR_TEXT)
-        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40))
+        subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40 + header_y_shift))
         self.screen.blit(subtitle_text, subtitle_rect)
 
         prompt_text = getattr(config, "COMMENT_RESULT_PROMPT_TEXT", "")

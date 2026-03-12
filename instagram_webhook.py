@@ -17,6 +17,7 @@ import sys
 import re
 import time
 import random
+import subprocess
 from datetime import datetime, timezone, timedelta
 import threading
 import queue
@@ -55,6 +56,7 @@ if os.name == "nt":
 
 # Load environment variables from .env file (always relative to this file)
 BASE_DIR = Path(__file__).resolve().parent
+RESULT_LOOKUP_WORKER_PATH = BASE_DIR / "shared" / "result_lookup_worker.py"
 
 
 def _load_module_from_path(module_name: str, module_path: Path):
@@ -257,7 +259,7 @@ FACEBOOK_UPLOAD_JOIN_COMMENT_TEXT = str(
     or getattr(
         config,
         "FACEBOOK_UPLOAD_JOIN_COMMENT_TEXT",
-        'Comment "JOIN" in order to be added to future games',
+        'Comment "JOIN" in order to be added to future games. Comment "RESULT" to see how you did in this game.',
     )
 ).strip()
 YOUTUBE_ENABLE_JOIN_CAPTURE = _parse_bool(
@@ -618,12 +620,146 @@ WEBHOOK_USE_LOCAL_HISTORY = os.getenv(
     "1" if _local_history_default else "0",
 ).strip().lower() not in ("0", "false", "no")
 WEBHOOK_LOCAL_HISTORY_FILE = os.getenv("WEBHOOK_LOCAL_HISTORY_FILE", "game_history.json").strip() or "game_history.json"
+WEBHOOK_LOCAL_HISTORY_MAX_MB = int(
+    os.getenv(
+        "WEBHOOK_LOCAL_HISTORY_MAX_MB",
+        str(getattr(config, "WEBHOOK_LOCAL_HISTORY_MAX_MB", 512)),
+    )
+)
+WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE = _parse_bool(
+    os.getenv("WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE"),
+    default=bool(getattr(config, "WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE", False)),
+)
+WEBHOOK_EVENTS_FALLBACK = _parse_bool(
+    os.getenv("WEBHOOK_EVENTS_FALLBACK"),
+    default=bool(getattr(config, "WEBHOOK_EVENTS_FALLBACK", True)),
+)
+WEBHOOK_EVENTS_DIR = Path(
+    str(
+        os.getenv("WEBHOOK_EVENTS_DIR")
+        or getattr(config, "WEBHOOK_EVENTS_DIR", "backups/game_results/events")
+        or "backups/game_results/events"
+    ).strip()
+)
+if not WEBHOOK_EVENTS_DIR.is_absolute():
+    WEBHOOK_EVENTS_DIR = BASE_DIR / WEBHOOK_EVENTS_DIR
+WEBHOOK_EVENTS_DAY_CACHE_MAX = int(
+    os.getenv(
+        "WEBHOOK_EVENTS_DAY_CACHE_MAX",
+        str(getattr(config, "WEBHOOK_EVENTS_DAY_CACHE_MAX", 256)),
+    )
+)
+WEBHOOK_EVENTS_GAME_CACHE_MAX = int(
+    os.getenv(
+        "WEBHOOK_EVENTS_GAME_CACHE_MAX",
+        str(getattr(config, "WEBHOOK_EVENTS_GAME_CACHE_MAX", 1024)),
+    )
+)
+WEBHOOK_EVENTS_RECENT_DAYS_WINDOW = max(
+    0,
+    int(
+        os.getenv(
+            "WEBHOOK_EVENTS_RECENT_DAYS_WINDOW",
+            str(getattr(config, "WEBHOOK_EVENTS_RECENT_DAYS_WINDOW", 3)),
+        )
+    ),
+)
+WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY = _parse_bool(
+    os.getenv("WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY"),
+    default=bool(getattr(config, "WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY", True)),
+)
+WEBHOOK_EVENTS_DAY_REFRESH_SECONDS = max(
+    5.0,
+    float(
+        os.getenv(
+            "WEBHOOK_EVENTS_DAY_REFRESH_SECONDS",
+            str(getattr(config, "WEBHOOK_EVENTS_DAY_REFRESH_SECONDS", 60)),
+        )
+    ),
+)
+WEBHOOK_EVENTS_SCAN_MAX_FILES = int(
+    os.getenv(
+        "WEBHOOK_EVENTS_SCAN_MAX_FILES",
+        str(getattr(config, "WEBHOOK_EVENTS_SCAN_MAX_FILES", 0)),
+    )
+)
+WEBHOOK_ISOLATE_RESULT_LOOKUP = _parse_bool(
+    os.getenv("WEBHOOK_ISOLATE_RESULT_LOOKUP"),
+    default=bool(getattr(config, "WEBHOOK_ISOLATE_RESULT_LOOKUP", True)),
+)
+WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS = max(
+    5,
+    int(
+        os.getenv(
+            "WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS",
+            str(getattr(config, "WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS", 60)),
+        )
+    ),
+)
+WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY = max(
+    1,
+    int(
+        os.getenv(
+            "WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY",
+            str(getattr(config, "WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY", 1)),
+        )
+    ),
+)
+WEBHOOK_LOG_FULL_EVENTS = _parse_bool(
+    os.getenv("WEBHOOK_LOG_FULL_EVENTS"),
+    default=bool(getattr(config, "WEBHOOK_LOG_FULL_EVENTS", False)),
+)
+WEBHOOK_MAX_CONTENT_LENGTH_MB = max(
+    1,
+    int(
+        os.getenv(
+            "WEBHOOK_MAX_CONTENT_LENGTH_MB",
+            str(getattr(config, "WEBHOOK_MAX_CONTENT_LENGTH_MB", 1)),
+        )
+    ),
+)
+WEBHOOK_THREADED = _parse_bool(
+    os.getenv("WEBHOOK_THREADED"),
+    default=bool(getattr(config, "WEBHOOK_THREADED", False)),
+)
+WEBHOOK_EVENT_QUEUE_MAX = max(
+    100,
+    int(
+        os.getenv(
+            "WEBHOOK_EVENT_QUEUE_MAX",
+            str(getattr(config, "WEBHOOK_EVENT_QUEUE_MAX", 2000)),
+        )
+    ),
+)
+WEBHOOK_EVENT_WORKERS = max(
+    1,
+    int(
+        os.getenv(
+            "WEBHOOK_EVENT_WORKERS",
+            str(getattr(config, "WEBHOOK_EVENT_WORKERS", 1)),
+        )
+    ),
+)
+
+app.config["MAX_CONTENT_LENGTH"] = WEBHOOK_MAX_CONTENT_LENGTH_MB * 1024 * 1024
 
 _LOCAL_HISTORY = None
 _LOCAL_HISTORY_MTIME = None
 _LOCAL_GAME_INDEX = {}
 _LOCAL_DAY_INDEX = {}
 _LOCAL_HISTORY_LOCK = threading.Lock()
+_RESULT_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY)
+_LOCAL_HISTORY_DISABLED_REASON = ""
+_WEBHOOK_EVENT_QUEUE = queue.Queue(maxsize=WEBHOOK_EVENT_QUEUE_MAX)
+_WEBHOOK_EVENT_WORKERS_STARTED = False
+_WEBHOOK_EVENT_WORKERS_LOCK = threading.Lock()
+_WEBHOOK_EVENT_STATS_LOCK = threading.Lock()
+_WEBHOOK_EVENT_STATS = {
+    "enqueued": 0,
+    "processed": 0,
+    "dropped": 0,
+    "errors": 0,
+}
 REQUEST_TIMEOUT_SECONDS = 20
 LOG_DIR = BASE_DIR / "logs" / "webhook_services"
 QUEUE_STATE_PATH = LOG_DIR / "reply_queue_state.json"
@@ -748,36 +884,116 @@ def verify_webhook():
 @app.route('/webhook', methods=['POST'])
 def handle_webhook():
     """Handle incoming webhook events (comments, mentions, etc.)"""
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     print("\n" + "=" * 50)
-    print("Received webhook event:")
-    print(json.dumps(data, indent=2))
+    if WEBHOOK_LOG_FULL_EVENTS:
+        print("Received webhook event:")
+        print(json.dumps(data, indent=2))
+    else:
+        entry_count = len(data.get("entry") or []) if isinstance(data, dict) else 0
+        change_count = 0
+        if isinstance(data, dict):
+            for entry in data.get("entry", []) or []:
+                if isinstance(entry, dict):
+                    change_count += len(entry.get("changes") or [])
+        print(
+            "Received webhook event summary: "
+            f"object={str(data.get('object') or '').strip().lower()} "
+            f"entries={entry_count} changes={change_count}"
+        )
     print("=" * 50 + "\n")
 
+    _start_webhook_event_workers_if_needed()
+    queued = _enqueue_webhook_event(data)
+    if not queued:
+        print("WARNING: Webhook inbound queue full; dropped oldest event to keep service responsive.")
+
+    # Always ACK quickly so Meta/YouTube don't retry flood us while heavy lookups run.
+    return jsonify({'status': 'ok', 'queued': queued}), 200
+
+
+def _record_webhook_event_stat(key, delta=1):
+    with _WEBHOOK_EVENT_STATS_LOCK:
+        _WEBHOOK_EVENT_STATS[key] = int(_WEBHOOK_EVENT_STATS.get(key, 0)) + int(delta)
+
+
+def _enqueue_webhook_event(payload) -> bool:
     try:
-        object_type = str(data.get("object") or "").strip().lower()
+        _WEBHOOK_EVENT_QUEUE.put_nowait(payload)
+        _record_webhook_event_stat("enqueued")
+        return True
+    except queue.Full:
+        try:
+            _WEBHOOK_EVENT_QUEUE.get_nowait()
+            _WEBHOOK_EVENT_QUEUE.task_done()
+            _record_webhook_event_stat("dropped")
+        except Exception:
+            pass
+        try:
+            _WEBHOOK_EVENT_QUEUE.put_nowait(payload)
+            _record_webhook_event_stat("enqueued")
+            return False
+        except Exception:
+            _record_webhook_event_stat("dropped")
+            return False
 
-        # Process each entry in the webhook payload
-        for entry in data.get('entry', []):
-            for change in entry.get('changes', []):
-                field = change.get('field')
-                value = change.get('value', {})
 
-                if object_type == "page":
-                    handle_page_change(field, value)
-                    continue
+def _process_webhook_payload(data):
+    object_type = str(data.get("object") or "").strip().lower()
 
-                if field == 'comments':
-                    handle_comment(value)
-                elif field == 'mentions':
-                    handle_mention(value)
-                elif field == 'messages':
-                    handle_message(value)
+    for entry in data.get("entry", []):
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes", []):
+            if not isinstance(change, dict):
+                continue
+            field = change.get("field")
+            value = change.get("value", {})
 
-    except Exception as e:
-        print(f"Error processing webhook: {e}")
+            if object_type == "page":
+                handle_page_change(field, value)
+                continue
 
-    return jsonify({'status': 'ok'}), 200
+            if field == "comments":
+                handle_comment(value)
+            elif field == "mentions":
+                handle_mention(value)
+            elif field == "messages":
+                handle_message(value)
+
+
+def _start_webhook_event_workers_if_needed():
+    global _WEBHOOK_EVENT_WORKERS_STARTED
+    if _WEBHOOK_EVENT_WORKERS_STARTED:
+        return
+    with _WEBHOOK_EVENT_WORKERS_LOCK:
+        if _WEBHOOK_EVENT_WORKERS_STARTED:
+            return
+
+        def _worker():
+            while True:
+                payload = _WEBHOOK_EVENT_QUEUE.get()
+                try:
+                    _process_webhook_payload(payload or {})
+                    _record_webhook_event_stat("processed")
+                except Exception as exc:
+                    _record_webhook_event_stat("errors")
+                    print(f"Error processing queued webhook event: {exc}")
+                finally:
+                    _WEBHOOK_EVENT_QUEUE.task_done()
+
+        for idx in range(max(1, WEBHOOK_EVENT_WORKERS)):
+            thread = threading.Thread(
+                target=_worker,
+                name=f"webhook-event-worker-{idx + 1}",
+                daemon=True,
+            )
+            thread.start()
+        _WEBHOOK_EVENT_WORKERS_STARTED = True
+        print(
+            "Webhook inbound event worker started "
+            f"(workers={WEBHOOK_EVENT_WORKERS}, max_queue={WEBHOOK_EVENT_QUEUE_MAX})"
+        )
 
 
 # ============== EVENT HANDLERS ==============
@@ -871,6 +1087,43 @@ def _extract_facebook_post_id(value):
         if normalized:
             return normalized
     return ""
+
+
+def _derive_post_id_from_comment_id(comment_id):
+    comment_ref = str(comment_id or "").strip()
+    if "_" not in comment_ref:
+        return ""
+    return comment_ref.split("_", 1)[0].strip()
+
+
+def _facebook_post_id_candidates(*values):
+    candidates = []
+    seen = set()
+
+    def _add(value):
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        if "_" in raw:
+            _add(raw)
+            suffix = raw.split("_", 1)[1].strip()
+            if suffix:
+                _add(suffix)
+                if FACEBOOK_PAGE_ID:
+                    _add(f"{FACEBOOK_PAGE_ID}_{suffix}")
+        else:
+            if FACEBOOK_PAGE_ID:
+                _add(f"{FACEBOOK_PAGE_ID}_{raw}")
+            _add(raw)
+
+    return candidates
 
 
 def _facebook_post_has_comment(post_id, expected_message):
@@ -1063,6 +1316,11 @@ def handle_facebook_comment(comment_data):
     marked_processed = False
     try:
         comment_text = str(comment_data.get("text") or "").strip()
+        derived_post_id = _derive_post_id_from_comment_id(comment_id)
+        if not comment_data.get("post_id") and derived_post_id:
+            comment_data["post_id"] = derived_post_id
+        if not comment_data.get("parent_id") and comment_data.get("post_id"):
+            comment_data["parent_id"] = str(comment_data.get("post_id") or "").strip()
         if not comment_text:
             comment_text = str(fetch_facebook_comment_text(comment_id) or "").strip()
         if not comment_data.get("post_id") or not comment_data.get("created_time"):
@@ -1076,6 +1334,10 @@ def handle_facebook_comment(comment_data):
                     comment_data["created_time"] = comment_meta.get("created_time")
                 if not comment_text:
                     comment_text = str(comment_meta.get("message") or "").strip()
+        if not comment_data.get("post_id") and derived_post_id:
+            comment_data["post_id"] = derived_post_id
+        if not comment_data.get("parent_id") and comment_data.get("post_id"):
+            comment_data["parent_id"] = str(comment_data.get("post_id") or "").strip()
         comment_text_lower = comment_text.lower()
         print(f"New Facebook comment from '{commenter_name}' ({commenter_id or 'no-id'}): {comment_text_lower}")
 
@@ -1485,8 +1747,251 @@ def _local_history_path() -> Path:
     return path
 
 
+def _local_history_enabled() -> bool:
+    global _LOCAL_HISTORY_DISABLED_REASON
+    if not WEBHOOK_USE_LOCAL_HISTORY:
+        return False
+    if _LOCAL_HISTORY_DISABLED_REASON:
+        return False
+
+    path = _local_history_path()
+    if not path.exists():
+        _LOCAL_HISTORY_DISABLED_REASON = f"missing:{path}"
+        return False
+
+    if WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE:
+        return True
+
+    if WEBHOOK_LOCAL_HISTORY_MAX_MB <= 0:
+        return True
+
+    try:
+        size_mb = path.stat().st_size / (1024 * 1024)
+    except Exception:
+        return True
+
+    if size_mb > float(WEBHOOK_LOCAL_HISTORY_MAX_MB):
+        _LOCAL_HISTORY_DISABLED_REASON = (
+            f"disabled_huge_history:{size_mb:.1f}MB>{WEBHOOK_LOCAL_HISTORY_MAX_MB}MB"
+        )
+        print(
+            "WARNING: Local in-memory history disabled to protect RAM "
+            f"({size_mb:.1f}MB > {WEBHOOK_LOCAL_HISTORY_MAX_MB}MB). "
+            "Using API/events fallback instead."
+        )
+        return False
+
+    return True
+
+
+def _coerce_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _event_files_desc() -> list[Path]:
+    if not WEBHOOK_EVENTS_FALLBACK:
+        return []
+    if not WEBHOOK_EVENTS_DIR.exists():
+        return []
+    try:
+        files = sorted(
+            WEBHOOK_EVENTS_DIR.rglob("*.ndjson"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        )
+    except Exception:
+        return []
+    if WEBHOOK_EVENTS_SCAN_MAX_FILES > 0:
+        return files[:WEBHOOK_EVENTS_SCAN_MAX_FILES]
+    return files
+
+
+def _cache_set_lru(cache: OrderedDict, key, value, max_entries: int) -> None:
+    try:
+        limit = int(max_entries)
+    except Exception:
+        limit = 1
+    if limit <= 0:
+        cache.pop(key, None)
+        return
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > limit:
+        cache.popitem(last=False)
+
+
+def _load_day_summary_from_events(day_number: int):
+    cache_key = int(day_number)
+    cached = _EVENT_DAY_SUMMARY_CACHE.get(cache_key)
+    if cached is not None:
+        _EVENT_DAY_SUMMARY_CACHE.move_to_end(cache_key)
+        return cached
+
+    files = _event_files_desc()
+    if not files:
+        _cache_set_lru(_EVENT_DAY_SUMMARY_CACHE, cache_key, None, WEBHOOK_EVENTS_DAY_CACHE_MAX)
+        return None
+
+    games_by_id = {}
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    payload_day = _coerce_int(payload.get("day_number"))
+                    if payload_day != cache_key:
+                        continue
+                    game_id = str(payload.get("game_id") or "").strip()
+                    game_type = normalize_game_mode(payload.get("game_type"))
+                    if not game_id or not game_type:
+                        continue
+
+                    previous = games_by_id.get(game_id)
+                    if previous:
+                        prev_ts = str(previous.get("timestamp") or "")
+                        next_ts = str(payload.get("timestamp") or "")
+                        if next_ts <= prev_ts:
+                            continue
+                    games_by_id[game_id] = payload
+        except Exception:
+            continue
+
+    if not games_by_id:
+        _cache_set_lru(_EVENT_DAY_SUMMARY_CACHE, cache_key, None, WEBHOOK_EVENTS_DAY_CACHE_MAX)
+        return None
+
+    day_games = []
+    for game in games_by_id.values():
+        day_games.append(
+            {
+                "game_id": game.get("game_id"),
+                "game_type": normalize_game_mode(game.get("game_type")),
+                "game_display_name": game.get("game_display_name"),
+                "timestamp": game.get("timestamp"),
+                "total_participants": game.get("total_participants") or len(game.get("results", []) or []),
+                "non_scoring": bool(game.get("non_scoring", False)),
+            }
+        )
+    day_games.sort(key=lambda item: str(item.get("timestamp") or ""))
+    payload = {
+        "day_number": cache_key,
+        "total_games": len(day_games),
+        "games": day_games,
+    }
+    _cache_set_lru(_EVENT_DAY_SUMMARY_CACHE, cache_key, payload, WEBHOOK_EVENTS_DAY_CACHE_MAX)
+    return payload
+
+
+def _build_placement_index(results):
+    index = {}
+    if not isinstance(results, list):
+        return index
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        username = str(entry.get("username") or "").strip().lower()
+        if not username or username in index:
+            continue
+        index[username] = entry.get("placement")
+    return index
+
+
+def _should_cache_game_results_payload(payload) -> bool:
+    if not isinstance(payload, dict):
+        return True
+    if not WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY:
+        return True
+    return _is_recent_cache_day(payload.get("day_number"))
+
+
+def _compact_game_payload_for_cache(payload):
+    if not isinstance(payload, dict):
+        return payload
+    compact = dict(payload)
+    results = compact.pop("results", None)
+    has_results = isinstance(results, list) and len(results) > 0
+    compact["_has_results"] = has_results
+    if has_results:
+        compact["_placement_index"] = _build_placement_index(results)
+    return compact
+
+
+def _load_game_results_from_events(game_id: str):
+    game_key = str(game_id or "").strip()
+    if not game_key:
+        return None
+    if game_key in _EVENT_GAME_RESULTS_CACHE:
+        value = _EVENT_GAME_RESULTS_CACHE.get(game_key)
+        _EVENT_GAME_RESULTS_CACHE.move_to_end(game_key)
+        return value
+
+    files = _event_files_desc()
+    if not files:
+        _cache_set_lru(_EVENT_GAME_RESULTS_CACHE, game_key, None, WEBHOOK_EVENTS_GAME_CACHE_MAX)
+        return None
+
+    best_payload = None
+    best_ts = ""
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    if str(payload.get("game_id") or "").strip() != game_key:
+                        continue
+                    next_ts = str(payload.get("timestamp") or "")
+                    if best_payload is None or next_ts > best_ts:
+                        best_payload = payload
+                        best_ts = next_ts
+        except Exception:
+            continue
+
+    if best_payload is None:
+        _cache_set_lru(
+            _EVENT_GAME_RESULTS_CACHE,
+            game_key,
+            None,
+            WEBHOOK_EVENTS_GAME_CACHE_MAX,
+        )
+        return None
+
+    if _should_cache_game_results_payload(best_payload):
+        compact_payload = _compact_game_payload_for_cache(best_payload)
+        _cache_set_lru(
+            _EVENT_GAME_RESULTS_CACHE,
+            game_key,
+            compact_payload,
+            WEBHOOK_EVENTS_GAME_CACHE_MAX,
+        )
+        return compact_payload
+
+    _EVENT_GAME_RESULTS_CACHE.pop(game_key, None)
+    return best_payload
+
+
 def _load_local_history() -> dict:
     global _LOCAL_HISTORY, _LOCAL_HISTORY_MTIME, _LOCAL_GAME_INDEX, _LOCAL_DAY_INDEX
+    if not _local_history_enabled():
+        return {"games": []}
     path = _local_history_path()
     if not path.exists():
         return {"games": []}
@@ -1568,10 +2073,14 @@ def load_day_summary(day_number):
     if key in _DAY_SUMMARY_CACHE:
         return _DAY_SUMMARY_CACHE[key]
     payload = None
-    if WEBHOOK_USE_LOCAL_HISTORY:
+    if _local_history_enabled():
         payload = _build_day_summary_from_history(key)
     if payload is None:
         payload = load_json_file(DATA_ROOT / "days" / f"{key}.json")
+    if payload is None:
+        payload = _load_day_summary_from_events(key)
+        if payload:
+            print(f"Loaded day {key} summary from events fallback")
     _DAY_SUMMARY_CACHE[key] = payload
     return payload
 
@@ -1817,7 +2326,7 @@ def _backfill_media_mapping_from_recent_media(force: bool = False):
 
 
 def _available_day_numbers():
-    if WEBHOOK_USE_LOCAL_HISTORY:
+    if _local_history_enabled():
         _load_local_history()
         day_numbers = list(_LOCAL_DAY_INDEX.keys())
         day_numbers.sort()
@@ -1833,6 +2342,36 @@ def _available_day_numbers():
             continue
     day_numbers.sort()
     return day_numbers
+
+
+def _latest_available_day_number():
+    global _LATEST_DAY_CACHE_VALUE, _LATEST_DAY_CACHE_AT
+    now = time.time()
+    if (
+        _LATEST_DAY_CACHE_AT > 0
+        and (now - _LATEST_DAY_CACHE_AT) < WEBHOOK_EVENTS_DAY_REFRESH_SECONDS
+    ):
+        return _LATEST_DAY_CACHE_VALUE
+
+    day_numbers = _available_day_numbers()
+    _LATEST_DAY_CACHE_VALUE = day_numbers[-1] if day_numbers else None
+    _LATEST_DAY_CACHE_AT = now
+    return _LATEST_DAY_CACHE_VALUE
+
+
+def _is_recent_cache_day(day_number):
+    if not WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY:
+        return True
+    if WEBHOOK_EVENTS_RECENT_DAYS_WINDOW <= 0:
+        return False
+    candidate = _coerce_int(day_number)
+    if candidate is None:
+        return False
+    latest = _latest_available_day_number()
+    if latest is None:
+        return True
+    min_day = int(latest) - int(WEBHOOK_EVENTS_RECENT_DAYS_WINDOW) + 1
+    return candidate >= max(1, min_day)
 
 
 _UPLOAD_FILE_RE = re.compile(r"^(.+?)_day_(\d+)\.mp4$", re.IGNORECASE)
@@ -2116,18 +2655,125 @@ def _find_nearby_day_with_game(game_type, day_number, media_ts):
 def load_game_results(game_id):
     if not game_id:
         return None
-    if WEBHOOK_USE_LOCAL_HISTORY:
+    if _local_history_enabled():
         _load_local_history()
         game = _LOCAL_GAME_INDEX.get(game_id)
         if isinstance(game, dict):
             return game
-    return load_json_file(DATA_ROOT / "games" / f"{game_id}.json")
+    payload = load_json_file(DATA_ROOT / "games" / f"{game_id}.json")
+    if isinstance(payload, dict):
+        return payload
+    payload = _load_game_results_from_events(game_id)
+    if payload:
+        print(f"Loaded game {game_id} from events fallback")
+    return payload
+
+
+def _game_payload_has_results(game_data) -> bool:
+    if not isinstance(game_data, dict):
+        return False
+    if bool(game_data.get("_has_results", False)):
+        return True
+    placement_index = game_data.get("_placement_index")
+    if isinstance(placement_index, dict) and len(placement_index) > 0:
+        return True
+    results = game_data.get("results")
+    return isinstance(results, list) and len(results) > 0
+
+
+def _lookup_placement_for_candidates(game_id, candidates):
+    game_ref = str(game_id or "").strip()
+    cleaned_candidates = []
+    seen = set()
+    for candidate in candidates or []:
+        text = str(candidate or "").strip()
+        key = text.lstrip("@").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned_candidates.append(text)
+
+    if not game_ref:
+        return {
+            "data_ready": False,
+            "found": False,
+            "placement": None,
+            "matched_username": None,
+            "day_number": None,
+        }
+
+    with _RESULT_LOOKUP_SEMAPHORE:
+        if WEBHOOK_ISOLATE_RESULT_LOOKUP and RESULT_LOOKUP_WORKER_PATH.exists():
+            request_payload = {
+                "repo_root": str(BASE_DIR),
+                "game_id": game_ref,
+                "candidates": cleaned_candidates,
+                "events_dir": str(WEBHOOK_EVENTS_DIR),
+                "events_scan_max_files": int(WEBHOOK_EVENTS_SCAN_MAX_FILES),
+            }
+            try:
+                completed = subprocess.run(
+                    [sys.executable, str(RESULT_LOOKUP_WORKER_PATH)],
+                    input=json.dumps(request_payload, separators=(",", ":")),
+                    capture_output=True,
+                    text=True,
+                    timeout=WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if completed.returncode == 0 and completed.stdout.strip():
+                    payload = json.loads(completed.stdout.strip())
+                    if isinstance(payload, dict):
+                        return {
+                            "data_ready": bool(payload.get("data_ready")),
+                            "found": bool(payload.get("found")),
+                            "placement": payload.get("placement"),
+                            "matched_username": payload.get("matched_username"),
+                            "day_number": payload.get("day_number"),
+                        }
+                else:
+                    stderr = (completed.stderr or "").strip()
+                    if stderr:
+                        print(f"Result lookup worker failed: {stderr[:400]}")
+            except Exception as exc:
+                print(f"Result lookup worker error: {exc}")
+
+        game_data = load_game_results(game_ref)
+        if not game_data or not _game_payload_has_results(game_data):
+            return {
+                "data_ready": False,
+                "found": False,
+                "placement": None,
+                "matched_username": None,
+                "day_number": game_data.get("day_number") if isinstance(game_data, dict) else None,
+            }
+        for candidate in cleaned_candidates:
+            placement = get_user_placement(game_data, candidate)
+            if placement is not None:
+                return {
+                    "data_ready": True,
+                    "found": True,
+                    "placement": placement,
+                    "matched_username": candidate,
+                    "day_number": game_data.get("day_number"),
+                }
+        return {
+            "data_ready": True,
+            "found": False,
+            "placement": None,
+            "matched_username": None,
+            "day_number": game_data.get("day_number"),
+        }
 
 
 def get_user_placement(game_data, username):
     if not game_data or not username:
         return None
     target = username.lstrip("@").lower()
+    placement_index = game_data.get("_placement_index")
+    if isinstance(placement_index, dict):
+        if target in placement_index:
+            return placement_index.get(target)
+        return None
     for entry in game_data.get("results", []):
         entry_name = str(entry.get("username", "")).lower()
         if entry_name == target:
@@ -2220,6 +2866,8 @@ _CLUB_MEMBER_SET = None
 _FOLLOWER_USERNAME_SET = None
 _FOLLOWER_USERNAME_MTIME = None
 _DAY_SUMMARY_CACHE = {}
+_EVENT_DAY_SUMMARY_CACHE = OrderedDict()
+_EVENT_GAME_RESULTS_CACHE = OrderedDict()
 _GAME_TIMELINE = None
 _UPLOAD_TIMELINE = None
 _MEDIA_GAME_MAP = OrderedDict()
@@ -2230,6 +2878,8 @@ _PROCESSED_COMMENT_IDS = OrderedDict()
 _PROCESSED_COMMENT_IDS_LOADED = False
 _PROCESSED_LOCK = threading.Lock()
 _PROCESSING_COMMENT_KEYS = set()
+_LATEST_DAY_CACHE_VALUE = None
+_LATEST_DAY_CACHE_AT = 0.0
 _YOUTUBE_CLIENT = None
 _YOUTUBE_CLIENT_LOCK = threading.Lock()
 _YOUTUBE_POLLER_STARTED = False
@@ -3050,27 +3700,42 @@ def _resolve_youtube_game_day(comment_data):
 
 
 def _resolve_facebook_game_day(comment_data):
+    comment_id = str(comment_data.get("id") or "").strip()
     post_id = str(comment_data.get("post_id") or "").strip()
     parent_id = str(comment_data.get("parent_id") or "").strip()
+    derived_post_id = _derive_post_id_from_comment_id(comment_id)
+    post_id_candidates = _facebook_post_id_candidates(post_id, parent_id, derived_post_id)
     created_time = comment_data.get("created_time")
     media_ts = _parse_timestamp(created_time)
 
     mapped = None
     if lookup_facebook_media_mapping is not None:
-        mapped = lookup_facebook_media_mapping(FACEBOOK_MEDIA_GAME_MAP_PATH, post_id=post_id)
-        if not mapped and parent_id:
-            mapped = lookup_facebook_media_mapping(FACEBOOK_MEDIA_GAME_MAP_PATH, post_id=parent_id)
+        for candidate in post_id_candidates:
+            mapped = lookup_facebook_media_mapping(
+                FACEBOOK_MEDIA_GAME_MAP_PATH,
+                post_id=candidate,
+            )
+            if mapped:
+                break
 
     if mapped:
         return (
             mapped.get("game_type"),
             mapped.get("day_number"),
             "facebook_map",
-            None,
+            media_ts,
         )
 
-    resolved_post_id = post_id or parent_id
-    post_meta = fetch_facebook_object_metadata(resolved_post_id) if resolved_post_id else {}
+    resolved_post_id = ""
+    post_meta = {}
+    for candidate in post_id_candidates:
+        payload = fetch_facebook_object_metadata(candidate)
+        if payload:
+            post_meta = payload
+            resolved_post_id = str(payload.get("id") or candidate).strip() or candidate
+            break
+    if not resolved_post_id and post_id_candidates:
+        resolved_post_id = post_id_candidates[0]
     caption_text = _extract_caption_like_text(post_meta)
     game_type, day_number = parse_game_info(caption_text)
     source = "facebook_post_meta"
@@ -3103,7 +3768,10 @@ def _resolve_facebook_game_day(comment_data):
                 "facebook_map_video",
                 media_ts,
             )
-        video_meta = fetch_facebook_object_metadata(attachment_video_id)
+        if not game_type or not day_number or not media_ts:
+            video_meta = fetch_facebook_object_metadata(attachment_video_id)
+        else:
+            video_meta = {}
     else:
         video_meta = {}
     if not game_type or not day_number:
@@ -3201,29 +3869,32 @@ def build_youtube_results_message(comment_data, comment_text=None):
         print(f"YouTube RESULT no game entry for day {day_number} game {game_type}")
         return format_results_not_ready_message()
 
-    game_data = load_game_results(game_entry.get("game_id"))
-    if not game_data:
+    candidates = []
+    if commenter_name:
+        candidates.append(commenter_name)
+
+    lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), candidates)
+    if not lookup.get("data_ready"):
         return format_results_not_ready_message()
 
-    candidates = []
+    placement = lookup.get("placement") if lookup.get("found") else None
+    chosen_username = lookup.get("matched_username")
+    day_value = lookup.get("day_number") or day_number
+
     mapped_username = None
-    if lookup_username_by_youtube_channel_id is not None:
+    if placement is None and lookup_username_by_youtube_channel_id is not None:
         mapped_username = lookup_username_by_youtube_channel_id(
             FOLLOWER_STORE_PATH,
             commenter_id,
         )
-    if mapped_username:
-        candidates.append(mapped_username)
-    if commenter_name:
-        candidates.append(commenter_name)
-
-    placement = None
-    chosen_username = None
-    for candidate in candidates:
-        placement = get_user_placement(game_data, candidate)
-        if placement is not None:
-            chosen_username = candidate
-            break
+        if mapped_username and mapped_username.lower() != str(commenter_name or "").strip().lower():
+            mapped_lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), [mapped_username])
+            if not mapped_lookup.get("data_ready"):
+                return format_results_not_ready_message()
+            if mapped_lookup.get("found"):
+                placement = mapped_lookup.get("placement")
+                chosen_username = mapped_lookup.get("matched_username")
+                day_value = mapped_lookup.get("day_number") or day_value
 
     if placement is None:
         print(
@@ -3241,7 +3912,6 @@ def build_youtube_results_message(comment_data, comment_text=None):
             return format_youtube_future_games_message()
         return format_not_following_message()
 
-    day_value = game_data.get("day_number", day_number)
     game_display = _smb_display_name(game_type) or GAME_DISPLAY_NAMES.get(
         game_type,
         game_type.replace("_", " ").title(),
@@ -3288,26 +3958,29 @@ def build_facebook_results_message(comment_data, comment_text=None):
         print(f"FB RESULT no game entry for day {day_number} game {game_type}")
         return format_results_not_ready_message()
 
-    game_data = load_game_results(game_entry.get("game_id"))
-    if not game_data:
-        return format_results_not_ready_message()
-
     candidates = []
-    mapped_username = None
-    if lookup_username_by_facebook_id is not None:
-        mapped_username = lookup_username_by_facebook_id(FOLLOWER_STORE_PATH, commenter_id)
-    if mapped_username:
-        candidates.append(mapped_username)
     if commenter_name:
         candidates.append(commenter_name)
 
-    placement = None
-    chosen_username = None
-    for candidate in candidates:
-        placement = get_user_placement(game_data, candidate)
-        if placement is not None:
-            chosen_username = candidate
-            break
+    lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), candidates)
+    if not lookup.get("data_ready"):
+        return format_results_not_ready_message()
+
+    placement = lookup.get("placement") if lookup.get("found") else None
+    chosen_username = lookup.get("matched_username")
+    day_value = lookup.get("day_number") or day_number
+
+    mapped_username = None
+    if placement is None and lookup_username_by_facebook_id is not None:
+        mapped_username = lookup_username_by_facebook_id(FOLLOWER_STORE_PATH, commenter_id)
+        if mapped_username and mapped_username.lower() != str(commenter_name or "").strip().lower():
+            mapped_lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), [mapped_username])
+            if not mapped_lookup.get("data_ready"):
+                return format_results_not_ready_message()
+            if mapped_lookup.get("found"):
+                placement = mapped_lookup.get("placement")
+                chosen_username = mapped_lookup.get("matched_username")
+                day_value = mapped_lookup.get("day_number") or day_value
 
     if placement is None:
         print(
@@ -3325,7 +3998,6 @@ def build_facebook_results_message(comment_data, comment_text=None):
             return format_facebook_future_games_message()
         return format_not_following_message()
 
-    day_value = game_data.get("day_number", day_number)
     game_display = _smb_display_name(game_type) or GAME_DISPLAY_NAMES.get(
         game_type,
         game_type.replace("_", " ").title(),
@@ -3431,11 +4103,6 @@ def build_results_message(comment_data, comment_text=None):
         print(f"No game entry found for day {day_number} and game {game_type} (media {media_id})")
         return format_results_not_ready_message()
 
-    game_data = load_game_results(game_entry.get("game_id"))
-    if not game_data or not game_data.get("results"):
-        print(f"No results found for game {game_entry.get('game_id')}")
-        return format_results_not_ready_message()
-
     lookup_username = commenter_username
     candidates = []
     if game_type in DISCORD_ONLY_GAMES:
@@ -3449,12 +4116,14 @@ def build_results_message(comment_data, comment_text=None):
     else:
         candidates.append(lookup_username)
 
-    placement = None
-    for candidate in candidates:
-        placement = get_user_placement(game_data, candidate)
-        if placement is not None:
-            lookup_username = candidate
-            break
+    lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), candidates)
+    if not lookup.get("data_ready"):
+        print(f"No results found for game {game_entry.get('game_id')}")
+        return format_results_not_ready_message()
+
+    placement = lookup.get("placement") if lookup.get("found") else None
+    if placement is not None:
+        lookup_username = lookup.get("matched_username") or lookup_username
     if placement is None:
         print(f"User @{lookup_username} not found in results")
         if game_type in DISCORD_ONLY_GAMES:
@@ -3465,7 +4134,7 @@ def build_results_message(comment_data, comment_text=None):
                 return mention_prefix + format_club_not_member_message()
         return mention_prefix + format_not_following_message()
 
-    day_value = game_data.get("day_number", day_number)
+    day_value = lookup.get("day_number") or day_number
     game_display = _smb_display_name(game_type) or GAME_DISPLAY_NAMES.get(
         game_type,
         game_type.replace("_", " ").title(),
@@ -3486,21 +4155,40 @@ def fetch_facebook_object_metadata(object_id):
 
     version = str(FACEBOOK_GRAPH_API_VERSION or "v18.0").strip().lstrip("/")
     url = f"https://graph.facebook.com/{version}/{object_ref}"
-    params = {
-        "fields": (
-            "id,message,description,created_time,permalink_url,post_id,parent_id,"
+    field_candidates = [
+        (
+            "id,message,created_time,permalink_url,post_id,parent_id,from{id,name},"
             "attachments{target{id},media_type,url,unshimmed_url}"
         ),
-        "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
-    }
+        "id,message,created_time,permalink_url,from{id,name},attachments{target{id},media_type,url,unshimmed_url}",
+        "id,message,created_time,permalink_url,from{id,name},parent{id}",
+        "id,message,created_time,from{id,name},parent{id}",
+        "id,message,created_time",
+    ]
+    last_error = ""
     try:
-        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
-        if response.status_code == 200:
-            payload = response.json()
-            if isinstance(payload, dict):
-                return payload
-            return {}
-        print(f"Failed to fetch Facebook object {object_ref}: {response.status_code} - {response.text[:400]}")
+        for fields in field_candidates:
+            params = {
+                "fields": fields,
+                "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
+            }
+            response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    return payload
+                return {}
+            error_code = None
+            try:
+                error_code = response.json().get("error", {}).get("code")
+            except Exception:
+                pass
+            last_error = f"{response.status_code} - {response.text[:400]}"
+            if response.status_code == 400 and str(error_code) in {"12", "100"}:
+                continue
+            break
+        if last_error:
+            print(f"Failed to fetch Facebook object {object_ref}: {last_error}")
     except Exception as exc:
         print(f"Error fetching Facebook object {object_ref}: {exc}")
     return {}
@@ -3851,10 +4539,18 @@ def status_check():
     with _PROCESSED_LOCK:
         _load_processed_comment_ids()
         processed_count = len(_PROCESSED_COMMENT_IDS)
+    with _WEBHOOK_EVENT_STATS_LOCK:
+        inbound_stats = dict(_WEBHOOK_EVENT_STATS)
     return jsonify({
         'status': 'running',
         'pid': os.getpid(),
         'uptime_seconds': int(now - _START_TIME),
+        'inbound': {
+            'workers': WEBHOOK_EVENT_WORKERS,
+            'queue_size': _WEBHOOK_EVENT_QUEUE.qsize(),
+            'queue_max': WEBHOOK_EVENT_QUEUE_MAX,
+            'stats': inbound_stats,
+        },
         'queue': {
             'size': _REPLY_QUEUE.qsize(),
             'pending_persisted': pending_count,
@@ -3888,6 +4584,22 @@ def status_check():
             'client_secret_exists': bool(YOUTUBE_CLIENT_SECRET_PATH.exists()),
             'token_exists': bool(YOUTUBE_COMMENT_TOKEN_PATH.exists() or YOUTUBE_UPLOAD_TOKEN_PATH.exists()),
         },
+        'local_history': {
+            'configured_enabled': WEBHOOK_USE_LOCAL_HISTORY,
+            'runtime_enabled': _local_history_enabled(),
+            'file': str(_local_history_path()),
+            'max_mb': WEBHOOK_LOCAL_HISTORY_MAX_MB,
+            'allow_huge': WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE,
+            'disabled_reason': _LOCAL_HISTORY_DISABLED_REASON,
+            'events_fallback_enabled': WEBHOOK_EVENTS_FALLBACK,
+            'events_recent_days_window': WEBHOOK_EVENTS_RECENT_DAYS_WINDOW,
+            'events_game_cache_recent_only': WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY,
+            'events_day_cache_entries': len(_EVENT_DAY_SUMMARY_CACHE),
+            'events_game_cache_entries': len(_EVENT_GAME_RESULTS_CACHE),
+            'latest_available_day': _latest_available_day_number(),
+            'isolate_result_lookup': WEBHOOK_ISOLATE_RESULT_LOOKUP,
+            'lookup_worker_timeout_seconds': WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS,
+        },
     }), 200
 
 
@@ -3897,6 +4609,7 @@ if __name__ == '__main__':
     _ensure_log_dir()
     _restore_queue_from_state()
     _start_heartbeat()
+    _start_webhook_event_workers_if_needed()
     _facebook_capability_check()
     _youtube_capability_check()
     _start_youtube_comment_poller_if_needed()
@@ -3924,6 +4637,45 @@ if __name__ == '__main__':
     )
     print(f"YouTube JOIN keywords: {YOUTUBE_JOIN_KEYWORDS}")
     print(f"YouTube RESULT keywords: {YOUTUBE_RESULT_KEYWORDS}")
+    local_history_path = _local_history_path()
+    local_history_enabled_runtime = _local_history_enabled()
+    if local_history_enabled_runtime:
+        print(
+            "Local history mode: ON "
+            f"({local_history_path}, max_mb={WEBHOOK_LOCAL_HISTORY_MAX_MB}, allow_huge={WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE})"
+        )
+    else:
+        print(
+            "Local history mode: OFF "
+            f"(configured={WEBHOOK_USE_LOCAL_HISTORY}, reason={_LOCAL_HISTORY_DISABLED_REASON or 'disabled'})"
+        )
+    print(
+        f"Events fallback: {'ON' if WEBHOOK_EVENTS_FALLBACK else 'OFF'} "
+        f"({WEBHOOK_EVENTS_DIR})"
+    )
+    print(
+        "Events game-cache policy: "
+        f"recent_only={WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY}, "
+        f"window_days={WEBHOOK_EVENTS_RECENT_DAYS_WINDOW}, "
+        f"max_entries={WEBHOOK_EVENTS_GAME_CACHE_MAX}"
+    )
+    print(
+        "Result lookup mode: "
+        + (
+            f"isolated_worker (timeout={WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS}s)"
+            if WEBHOOK_ISOLATE_RESULT_LOOKUP
+            else "in_process"
+        )
+    )
+    print(
+        "Webhook runtime: "
+        f"threaded={WEBHOOK_THREADED}, "
+        f"lookup_concurrency={WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY}, "
+        f"log_full_events={WEBHOOK_LOG_FULL_EVENTS}, "
+        f"max_body_mb={WEBHOOK_MAX_CONTENT_LENGTH_MB}, "
+        f"inbound_workers={WEBHOOK_EVENT_WORKERS}, "
+        f"inbound_queue_max={WEBHOOK_EVENT_QUEUE_MAX}"
+    )
     print("=" * 60)
     print("\nNext steps:")
     tunnel_provider = str(getattr(config, "TUNNEL_PROVIDER", "ngrok")).strip().lower()
@@ -3952,4 +4704,9 @@ if __name__ == '__main__':
         print("4. Click 'Verify and save'")
     print("=" * 60 + "\n")
 
-    app.run(port=5000, debug=WEBHOOK_DEBUG, use_reloader=WEBHOOK_USE_RELOADER)
+    app.run(
+        port=5000,
+        debug=WEBHOOK_DEBUG,
+        use_reloader=WEBHOOK_USE_RELOADER,
+        threaded=WEBHOOK_THREADED,
+    )

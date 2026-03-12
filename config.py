@@ -71,9 +71,12 @@ SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO
 
 # Maximum delta time cap - prevents huge jumps when system lags
 MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
+# ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner"] 
 
-ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner", "mini_golf", "flappy_followers", "doodle_followers", "super_follower_bros_1_2", "jetpack_followers", "discord_signal"] 
-# ALL_GAME_MODES = ["beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic",]
+ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "mini_golf", "snake_escape", "flappy_followers", "discord_signal", "doodle_followers"] 
+# ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner", "jetpack_followers", "flappy_followers", "super_follower_bros_1_2", "discord_signal", "doodle_followers", "mini_golf", "snake_escape"] 
+
+# ALL_GAME_MODES = ["beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic",] 
 # ALL_GAME_MODES = ["discord_signal"]
 NON_SCORING_GAME_TYPES = ["mingle", "lava_platform", "plinko", "moon_stack"]
 YOUTUBE_SKIP_GAME_MODES = ["super_follower_bros"]
@@ -84,7 +87,7 @@ TOP10_SKIP_GAME_MODES = ["super_follower_bros", "super_follower_bros_1_2", "jetp
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "followers_io", "maze_rush", "math_drop", "plinko", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "lava_platform", "mini_golf", "flappy_followers", "tiny_followers", "jetpack_followers", "doodle_followers", "crossy_followers", "super_follower_bros", "subway_followers", "subway_followers_3d", "beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic", "moon_stack", "ALL"
 TEST_MODE = False  # Set to True to enable test mode (won't save results to leaderboard)
 EXPORT_VIDEO = True
-DAY_NUMBER = 104 # Increment  this each time you record a new video
+DAY_NUMBER = 111 # Increment  this each time you record a new video
 COMMENT_RESULT_PROMPT_TEXT = 'Comment "RESULT" to see how you did'
 WEB_RESULTS_PREVIEW_LIMIT = 200  # Top N results to include in web preview files
 
@@ -219,6 +222,16 @@ AUTO_PUSH_ALL_MODE_BATCH_SIZE = 5
 # When running GAME_MODE="ALL" with batched pushes, temporarily disable
 # per-game push calls inside individual game modules.
 AUTO_PUSH_ALL_MODE_SUPPRESS_PER_GAME_PUSH = True
+
+# Simulation-light mode:
+# - Skip full history/stat loads and full-file persistence during simulation runs.
+# - Still append per-game event backups to backups/game_results/events/.
+# - Run a separate rebuild step later to regenerate canonical history/stat files.
+SIMULATION_LIGHT_MODE = False
+# Auto-enable simulation-light when running `main.py --day-range ...`.
+SIMULATION_LIGHT_AUTO_FOR_DAY_RANGE = True
+# In simulation-light mode, skip in-memory all-time stats updates to reduce RAM.
+SIMULATION_LIGHT_DISABLE_STATS_UPDATES = True
 
 # Local audio controls:
 # Keep gameplay audio in exported videos, but mute local live playback while processing.
@@ -401,11 +414,14 @@ NON_IG_VARIANT_ENABLED = True
 NON_IG_VARIANT_SUFFIX = "_non_ig_join"
 NON_IG_JOIN_FOOTER_TEXT = 'Comment "JOIN" to join future games'
 NON_IG_JOIN_FOOTER_ENABLED = True
-NON_IG_JOIN_FOOTER_FONT_SIZE = 32
+NON_IG_JOIN_FOOTER_FONT_SIZE = 16
 NON_IG_JOIN_FOOTER_BOTTOM_MARGIN = 10
 NON_IG_JOIN_FOOTER_BOX_HEIGHT = 56
 NON_IG_JOIN_FOOTER_BOX_OPACITY = 0.55
-NON_IG_JOIN_FOOTER_PLACEMENT_MODE = "auto_best_fit"  # fixed_bottom_margin | auto_best_fit
+NON_IG_JOIN_FOOTER_PLACEMENT_MODE = "above_result_prompt"  # above_result_prompt | fixed_bottom_margin | auto_best_fit
+NON_IG_JOIN_ABOVE_RESULT_LINE_GAP = 15
+NON_IG_JOIN_ABOVE_RESULT_FONT_COLOR = "black"
+NON_IG_JOIN_ABOVE_RESULT_SHADOW_OPACITY = 0.45
 NON_IG_JOIN_FOOTER_FIXED_BOTTOM_MARGIN = 10
 NON_IG_JOIN_FOOTER_AUTO_CENTER_X_MIN_PCT = 0.20
 NON_IG_JOIN_FOOTER_AUTO_CENTER_X_MAX_PCT = 0.80
@@ -417,7 +433,7 @@ NON_IG_JOIN_FOOTER_AUTO_MIN_TOP_PX = 1480
 NON_IG_JOIN_FOOTER_AUTO_MAX_TOP_PX = 1760
 NON_IG_JOIN_FOOTER_AUTO_ROW_GAP_PX = 10
 NON_IG_JOIN_FOOTER_AUTO_FALLBACK_BOTTOM_MARGIN = 220
-NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS = ["facebook", "tiktok", "youtube"]
+NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS = ["facebook", "tiktok", "youtube", "snapchat", "x", "lemon8", "rednote"]
 NON_IG_VARIANT_GENERATE_AFTER_EXPORT = True
 NON_IG_VARIANT_GENERATE_ON_UPLOAD_IF_MISSING = False
 
@@ -526,6 +542,87 @@ YOUTUBE_CHANNEL_ID = ""
 YOUTUBE_CLIENT_SECRET_PATH = "secrets/youtube_client_secret.json"
 YOUTUBE_COMMENT_TOKEN_PATH = "secrets/youtube_comment_token.pickle"
 YOUTUBE_MEDIA_GAME_MAP_PATH = "logs/webhook_services/youtube_media_game_mapping.json"
+
+# Webhook memory guards (events fallback cache behavior)
+WEBHOOK_EVENTS_RECENT_DAYS_WINDOW = 0
+WEBHOOK_EVENTS_GAME_CACHE_RECENT_ONLY = True
+WEBHOOK_EVENTS_DAY_REFRESH_SECONDS = 60
+WEBHOOK_EVENTS_DAY_CACHE_MAX = 256
+WEBHOOK_EVENTS_GAME_CACHE_MAX = 0
+WEBHOOK_EVENTS_SCAN_MAX_FILES = 0
+WEBHOOK_LOCAL_HISTORY_MAX_MB = 512
+WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE = False
+WEBHOOK_EVENTS_FALLBACK = True
+WEBHOOK_ISOLATE_RESULT_LOOKUP = True
+WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS = 60
+WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY = 1
+WEBHOOK_LOG_FULL_EVENTS = False
+WEBHOOK_MAX_CONTENT_LENGTH_MB = 1
+WEBHOOK_THREADED = False
+WEBHOOK_EVENT_QUEUE_MAX = 2000
+WEBHOOK_EVENT_WORKERS = 1
+
+# Snapchat upload automation (Story + Spotlight)
+SNAPCHAT_ENABLE = True
+SNAPCHAT_AUTO_UPLOAD = False
+SNAPCHAT_UPLOAD_ON_IG_FAILURE = False
+SNAPCHAT_UPLOADER = "safe"  # "api" or "safe"
+SNAPCHAT_COOKIES_FILE = "snapchat_cookies.json"
+SNAPCHAT_PROFILE_DIR = "sessions/snapchat_chrome_profile"
+SNAPCHAT_HEADLESS = False
+SNAPCHAT_SAFE_SPOTLIGHT_ONLY = True
+SNAPCHAT_CLIENT_ID = ""
+SNAPCHAT_CLIENT_SECRET = ""
+SNAPCHAT_REDIRECT_URI = ""
+SNAPCHAT_PROFILE_ID = ""
+SNAPCHAT_ACCESS_TOKEN_PATH = "secrets/snapchat_access_token.json"
+SNAPCHAT_REFRESH_TOKEN_PATH = "secrets/snapchat_refresh_token.json"
+SNAPCHAT_SCOPE = "snapchat-profile-api"
+SNAPCHAT_API_BASE = "https://businessapi.snapchat.com"
+SNAPCHAT_ENABLE_STORY_POST = True
+SNAPCHAT_ENABLE_SPOTLIGHT_POST = True
+SNAPCHAT_SPOTLIGHT_LOCALE = "en_US"
+SNAPCHAT_SPOTLIGHT_SKIP_SAVE_TO_PROFILE = False
+SNAPCHAT_USE_NON_IG_VARIANT = True
+SNAPCHAT_RETRY_COUNT = 3
+SNAPCHAT_TIMEOUT_SECONDS = 120
+
+# X (Twitter) upload automation
+X_ENABLE = True
+X_AUTO_UPLOAD = True
+X_UPLOAD_ON_IG_FAILURE = False
+X_CONSUMER_KEY = ""
+X_CONSUMER_SECRET = ""
+X_ACCESS_TOKEN = ""
+X_ACCESS_TOKEN_SECRET = ""
+X_API_BASE = "https://api.x.com"
+X_UPLOAD_API_URL = "https://upload.twitter.com/1.1/media/upload.json"
+X_UPLOADER = "api"  # "api" or "safe"
+X_COOKIES_FILE = "x_cookies.json"
+X_HEADLESS = False
+X_USE_NON_IG_VARIANT = True
+X_SAFE_POST_READY_TIMEOUT_SECONDS = 60
+X_SAFE_POST_CLICK_ATTEMPTS = 4
+X_RETRY_COUNT = 3
+X_TIMEOUT_SECONDS = 120
+
+# Lemon8 safe upload automation
+LEMON8_ENABLE = True
+LEMON8_AUTO_UPLOAD = False
+LEMON8_UPLOAD_ON_IG_FAILURE = False
+LEMON8_UPLOADER = "safe"  # currently supports "safe"
+LEMON8_COOKIES_FILE = "lemon8_cookies.json"
+LEMON8_HEADLESS = False
+LEMON8_USE_NON_IG_VARIANT = True
+
+# Rednote (Xiaohongshu) safe upload automation
+REDNOTE_ENABLE = True
+REDNOTE_AUTO_UPLOAD = False
+REDNOTE_UPLOAD_ON_IG_FAILURE = False
+REDNOTE_UPLOADER = "safe"  # currently supports "safe"
+REDNOTE_COOKIES_FILE = "rednote_cookies.json"
+REDNOTE_HEADLESS = False
+REDNOTE_USE_NON_IG_VARIANT = True
 
 # Account Center export defaults (used by automation)
 IG_EXPORT_ACCOUNT_CENTER_URL = "https://accountscenter.instagram.com/"
@@ -724,6 +821,7 @@ SIDE_CHOICE_ARENA_RECT = MAZE_RUSH_ARENA_RECT
 DISCORD_SIGNAL_ARENA_RECT = MAZE_RUSH_ARENA_RECT
 MAZE_RUSH_SHOW_TITLE = True
 MAZE_RUSH_SHOW_SUBTITLE = True
+SQUARE_ARENA_HEADER_Y_SHIFT = -4
 MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN = 8
 MAZE_RUSH_ENDSCREEN_Y_OFFSET = 24
 MAZE_RUSH_WALL_THICKNESS = 3

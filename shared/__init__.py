@@ -13,6 +13,8 @@ from .game_history import GameHistory
 from .audio_logger import AudioLogger, AudioEvent
 from .performance_monitor import PerformanceMonitor
 from . import auto_push
+from . import media_kit
+from . import results_store
 
 # Templates for creating new games
 from .game_template import GameTemplate
@@ -35,6 +37,8 @@ __all__ = [
     'AudioEvent',
     'PerformanceMonitor',
     'auto_push',
+    'media_kit',
+    'results_store',
     # Templates for new games
     'GameTemplate',
     'RendererTemplate',

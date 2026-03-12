@@ -45,6 +45,38 @@ try:
 except Exception:
     ensure_non_ig_join_variant = None
     get_last_non_ig_variant_build_info = None
+try:
+    from shared.snapchat_uploader import (
+        build_authorize_url as build_snapchat_authorize_url,
+        exchange_code_for_tokens as exchange_snapchat_code_for_tokens,
+        upload_snapchat,
+        write_token_payload as write_snapchat_token_payload,
+    )
+except Exception:
+    build_snapchat_authorize_url = None
+    exchange_snapchat_code_for_tokens = None
+    write_snapchat_token_payload = None
+    upload_snapchat = None
+try:
+    from safe_snapchat_uploader import SafeSnapchatUploader
+except Exception:
+    SafeSnapchatUploader = None
+try:
+    from shared.x_uploader import upload_x
+except Exception:
+    upload_x = None
+try:
+    from safe_x_uploader import SafeXUploader
+except Exception:
+    SafeXUploader = None
+try:
+    from safe_lemon8_uploader import SafeLemon8Uploader
+except Exception:
+    SafeLemon8Uploader = None
+try:
+    from safe_rednote_uploader import SafeRednoteUploader
+except Exception:
+    SafeRednoteUploader = None
 
 _LOG_HANDLES = []
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -271,7 +303,11 @@ def build_non_ig_variant_video_path(game_mode: str, day_number: int | None = Non
 
 
 def _resolve_non_ig_route_platforms() -> set[str]:
-    raw = getattr(config, "NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS", ["facebook", "tiktok", "youtube"])
+    raw = getattr(
+        config,
+        "NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS",
+        ["facebook", "tiktok", "youtube", "snapchat", "x", "lemon8", "rednote"],
+    )
     values: list[str]
     if isinstance(raw, str):
         values = [part.strip().lower() for part in raw.split(",")]
@@ -476,6 +512,70 @@ def format_top_users_block(usernames: list[str]) -> str:
     return "\n".join(lines)
 
 
+def build_x_post_text(caption: str, game_mode: str, day_number: int) -> str:
+    first_line = ""
+    for line in str(caption or "").splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            first_line = cleaned
+            break
+    if not first_line:
+        first_line = f"Day {day_number} of making my followers battle every day."
+    mode_label = str(game_mode or "").replace("_", " ").strip().title() or "Follower Battlegrounds"
+    text = f"{first_line}\nGame: {mode_label} | Day {day_number}\n#followerbattlegrounds"
+    return text[:280]
+
+
+def build_snapchat_post_text(caption: str, game_mode: str, day_number: int) -> str:
+    first_line = ""
+    for line in str(caption or "").splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            first_line = cleaned
+            break
+    if not first_line:
+        first_line = f"Day {day_number} of making my followers battle every day."
+    mode_label = str(game_mode or "").replace("_", " ").strip().title() or "Follower Battlegrounds"
+    text = f"{first_line}\nGame: {mode_label} | Day {day_number}"
+    return text[:160]
+
+
+def build_lemon8_post_text(caption: str, game_mode: str, day_number: int) -> str:
+    first_line = ""
+    for line in str(caption or "").splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            first_line = cleaned
+            break
+    if not first_line:
+        first_line = f"Day {day_number} of making my followers battle every day."
+    mode_label = str(game_mode or "").replace("_", " ").strip().title() or "Follower Battlegrounds"
+    text = (
+        f"{first_line}\n"
+        f"Game: {mode_label} | Day {day_number}\n"
+        "#followerbattlegrounds #dailygame #creator"
+    )
+    return text[:400]
+
+
+def build_rednote_post_text(caption: str, game_mode: str, day_number: int) -> str:
+    first_line = ""
+    for line in str(caption or "").splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            first_line = cleaned
+            break
+    if not first_line:
+        first_line = f"Day {day_number} of making my followers battle every day."
+    mode_label = str(game_mode or "").replace("_", " ").strip().title() or "Follower Battlegrounds"
+    text = (
+        f"{first_line}\n"
+        f"Game: {mode_label} | Day {day_number}\n"
+        "#followerbattlegrounds #dailygame #rednote"
+    )
+    return text[:1000]
+
+
 def load_client(session_file: Path) -> Client:
     if not session_file.exists():
         raise FileNotFoundError(f"Session file not found: {session_file}")
@@ -585,6 +685,218 @@ def upload_instagram_safe(
     return uploader.upload_reel(str(video_path), caption, game_mode=game_mode)
 
 
+def _facebook_response_body(response: requests.Response) -> dict:
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {"raw": str(getattr(response, "text", "") or "")[:500]}
+
+
+def _upload_facebook_page_video_single_request(
+    endpoint: str,
+    video_path: Path,
+    payload: dict,
+) -> dict | None:
+    try:
+        with video_path.open("rb") as source_file:
+            response = requests.post(
+                endpoint,
+                data=payload,
+                files={"source": (video_path.name, source_file, "video/mp4")},
+                timeout=(30, 1800),
+            )
+    except Exception as e:
+        print(f"[ERROR] FB upload request failed for {video_path.name}: {e}")
+        return None
+
+    body = _facebook_response_body(response)
+    if not response.ok:
+        print(f"[ERROR] FB upload failed for {video_path.name}: HTTP {response.status_code} {body}")
+        return None
+
+    return {
+        "body": body,
+        "video_id": str(body.get("id") or body.get("video_id") or "").strip(),
+        "post_id": str(body.get("post_id") or "").strip(),
+    }
+
+
+def _upload_facebook_page_video_resumable(
+    endpoint: str,
+    video_path: Path,
+    access_token: str,
+    title: str,
+    description: str,
+) -> dict | None:
+    try:
+        file_size = int(video_path.stat().st_size)
+    except Exception as exc:
+        print(f"[ERROR] FB resumable upload stat failed for {video_path.name}: {exc}")
+        return None
+
+    start_payload = {
+        "upload_phase": "start",
+        "file_size": str(file_size),
+        "access_token": access_token,
+    }
+    try:
+        start_response = requests.post(endpoint, data=start_payload, timeout=(30, 120))
+    except Exception as exc:
+        print(f"[ERROR] FB resumable start failed for {video_path.name}: {exc}")
+        return None
+
+    start_body = _facebook_response_body(start_response)
+    if not start_response.ok:
+        print(
+            f"[ERROR] FB resumable start failed for {video_path.name}: "
+            f"HTTP {start_response.status_code} {start_body}"
+        )
+        return None
+
+    upload_session_id = str(start_body.get("upload_session_id") or "").strip()
+    if not upload_session_id:
+        print(f"[ERROR] FB resumable start missing upload_session_id for {video_path.name}: {start_body}")
+        return None
+
+    start_offset = str(start_body.get("start_offset") or "0").strip()
+    end_offset = str(start_body.get("end_offset") or "0").strip()
+    chunk_count = 0
+    print(f"[INFO] FB resumable upload started: {video_path.name} ({file_size / (1024 * 1024):.1f} MB)")
+
+    try:
+        with video_path.open("rb") as source_file:
+            # Guard against unexpected offset loops.
+            for _ in range(100000):
+                if start_offset == end_offset:
+                    break
+
+                try:
+                    start_int = int(start_offset)
+                    end_int = int(end_offset)
+                except Exception:
+                    print(
+                        f"[ERROR] FB resumable transfer invalid offsets for {video_path.name}: "
+                        f"start={start_offset} end={end_offset}"
+                    )
+                    return None
+
+                if end_int <= start_int:
+                    print(
+                        f"[ERROR] FB resumable transfer non-increasing offsets for {video_path.name}: "
+                        f"start={start_int} end={end_int}"
+                    )
+                    return None
+
+                source_file.seek(start_int)
+                chunk = source_file.read(end_int - start_int)
+                if not chunk:
+                    print(
+                        f"[ERROR] FB resumable transfer empty chunk for {video_path.name}: "
+                        f"start={start_int} end={end_int}"
+                    )
+                    return None
+
+                transfer_payload = {
+                    "upload_phase": "transfer",
+                    "upload_session_id": upload_session_id,
+                    "start_offset": start_offset,
+                    "access_token": access_token,
+                }
+                transfer_response = requests.post(
+                    endpoint,
+                    data=transfer_payload,
+                    files={"video_file_chunk": ("chunk.bin", chunk, "application/octet-stream")},
+                    timeout=(30, 900),
+                )
+                transfer_body = _facebook_response_body(transfer_response)
+                if not transfer_response.ok:
+                    print(
+                        f"[ERROR] FB resumable transfer failed for {video_path.name}: "
+                        f"HTTP {transfer_response.status_code} {transfer_body}"
+                    )
+                    return None
+
+                next_start = str(transfer_body.get("start_offset") or "").strip()
+                next_end = str(transfer_body.get("end_offset") or "").strip()
+                if not next_start or not next_end:
+                    print(
+                        f"[ERROR] FB resumable transfer response missing offsets for {video_path.name}: "
+                        f"{transfer_body}"
+                    )
+                    return None
+                if next_start == start_offset and next_end == end_offset:
+                    print(
+                        f"[ERROR] FB resumable transfer stalled for {video_path.name}: "
+                        f"start={start_offset} end={end_offset}"
+                    )
+                    return None
+
+                chunk_count += 1
+                start_offset, end_offset = next_start, next_end
+                if chunk_count % 5 == 0 or start_offset == end_offset:
+                    try:
+                        uploaded = min(file_size, int(start_offset))
+                    except Exception:
+                        uploaded = 0
+                    pct = (uploaded / file_size * 100.0) if file_size > 0 else 100.0
+                    print(
+                        f"[INFO] FB transfer progress: {pct:.1f}% "
+                        f"({uploaded // (1024 * 1024)}MB/{file_size // (1024 * 1024)}MB)"
+                    )
+            else:
+                print(f"[ERROR] FB resumable transfer loop overflow for {video_path.name}")
+                return None
+    except Exception as exc:
+        print(f"[ERROR] FB resumable transfer exception for {video_path.name}: {exc}")
+        return None
+
+    finish_payload = {
+        "upload_phase": "finish",
+        "upload_session_id": upload_session_id,
+        "title": title,
+        "description": description,
+        "published": "true",
+        "access_token": access_token,
+    }
+    try:
+        finish_response = requests.post(endpoint, data=finish_payload, timeout=(30, 300))
+    except Exception as exc:
+        print(f"[ERROR] FB resumable finish failed for {video_path.name}: {exc}")
+        return None
+
+    finish_body = _facebook_response_body(finish_response)
+    if not finish_response.ok:
+        print(
+            f"[ERROR] FB resumable finish failed for {video_path.name}: "
+            f"HTTP {finish_response.status_code} {finish_body}"
+        )
+        return None
+
+    video_id = str(
+        finish_body.get("video_id")
+        or finish_body.get("id")
+        or start_body.get("video_id")
+        or start_body.get("id")
+        or ""
+    ).strip()
+    post_id = str(finish_body.get("post_id") or "").strip()
+    body = dict(finish_body)
+    if video_id and not body.get("video_id") and not body.get("id"):
+        body["video_id"] = video_id
+    if upload_session_id and not body.get("upload_session_id"):
+        body["upload_session_id"] = upload_session_id
+    body["resumable"] = True
+
+    return {
+        "body": body,
+        "video_id": video_id,
+        "post_id": post_id,
+    }
+
+
 def upload_facebook_page_video(
     video_path: Path,
     caption: str,
@@ -626,29 +938,26 @@ def upload_facebook_page_video(
         "access_token": access_token,
     }
 
-    try:
-        with video_path.open("rb") as source_file:
-            response = requests.post(
-                endpoint,
-                data=payload,
-                files={"source": (video_path.name, source_file, "video/mp4")},
-                timeout=(30, 1800),
-            )
-    except Exception as e:
-        print(f"[ERROR] FB upload request failed for {video_path.name}: {e}")
+    upload_result = _upload_facebook_page_video_resumable(
+        endpoint=endpoint,
+        video_path=video_path,
+        access_token=access_token,
+        title=title,
+        description=description,
+    )
+    if upload_result is None:
+        print(f"[WARN] FB resumable upload failed for {video_path.name}; trying single-request fallback.")
+        upload_result = _upload_facebook_page_video_single_request(
+            endpoint=endpoint,
+            video_path=video_path,
+            payload=payload,
+        )
+    if upload_result is None:
         return None
 
-    try:
-        body = response.json()
-    except Exception:
-        body = {"raw": response.text[:500]}
-
-    if not response.ok:
-        print(f"[ERROR] FB upload failed for {video_path.name}: HTTP {response.status_code} {body}")
-        return None
-
-    video_id = str(body.get("id") or body.get("video_id") or "").strip()
-    post_id = str(body.get("post_id") or "").strip()
+    body = upload_result.get("body") or {}
+    video_id = str(upload_result.get("video_id") or "").strip()
+    post_id = str(upload_result.get("post_id") or "").strip()
     metadata = fetch_facebook_object_metadata(video_id or post_id, access_token, api_version=version)
     if metadata:
         post_id = post_id or str(metadata.get("post_id") or "").strip()
@@ -994,10 +1303,21 @@ def push_stats(commit_message: str | None):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Push stats to GitHub and upload generated videos as Reels.")
+    default_snapchat_uploader = str(getattr(config, "SNAPCHAT_UPLOADER", "safe") or "safe").strip().lower()
+    if default_snapchat_uploader not in {"api", "safe"}:
+        default_snapchat_uploader = "safe"
+    default_x_uploader = str(getattr(config, "X_UPLOADER", "api") or "api").strip().lower()
+    if default_x_uploader not in {"api", "safe"}:
+        default_x_uploader = "api"
     parser.add_argument(
         "--enable-uploads",
         action="store_true",
-        help="Enable Instagram/TikTok/YouTube uploads (default: stats only).",
+        help="Enable Instagram/TikTok/YouTube/Snapchat/X/Lemon8/Rednote uploads (default: stats only).",
+    )
+    parser.add_argument(
+        "--skip-instagram",
+        action="store_true",
+        help="Skip Instagram uploads (useful for Snapchat-only/platform-specific tests).",
     )
     parser.add_argument(
         "--wait-for-login",
@@ -1146,9 +1466,15 @@ def parse_args():
         help="Override day number for video paths/captions.",
     )
     parser.add_argument(
+        "--max-videos",
+        type=int,
+        default=0,
+        help="Limit number of videos processed this run (0 = no limit).",
+    )
+    parser.add_argument(
         "--skip-youtube",
         action="store_true",
-        help="Skip YouTube uploads (only upload to Instagram/TikTok).",
+        help="Skip YouTube uploads.",
     )
     parser.add_argument(
         "--youtube-privacy",
@@ -1192,6 +1518,248 @@ def parse_args():
         default="facebook_page_publish.local.env",
         help="Local env-style file for Facebook publish credentials (default: facebook_page_publish.local.env).",
     )
+    parser.add_argument(
+        "--enable-snapchat-upload",
+        action="store_true",
+        help="Upload each eligible video to Snapchat (API or safe uploader).",
+    )
+    parser.add_argument(
+        "--snapchat-uploader",
+        choices=["api", "safe"],
+        default=default_snapchat_uploader,
+        help="Snapchat uploader backend (default from config.SNAPCHAT_UPLOADER or safe).",
+    )
+    parser.add_argument(
+        "--snapchat-upload-on-ig-failure",
+        action="store_true",
+        help="Attempt Snapchat upload even when Instagram upload is not explicitly confirmed.",
+    )
+    parser.add_argument(
+        "--skip-snapchat",
+        action="store_true",
+        help="Skip Snapchat uploads even if config/env enables them.",
+    )
+    parser.add_argument(
+        "--snapchat-secrets-file",
+        default="snapchat_publish.local.env",
+        help="Local env-style file for Snapchat credentials (default: snapchat_publish.local.env).",
+    )
+    parser.add_argument(
+        "--snapchat-cookies-file",
+        type=Path,
+        default=Path(getattr(config, "SNAPCHAT_COOKIES_FILE", "snapchat_cookies.json")),
+        help="Path to Snapchat cookies JSON for --snapchat-uploader safe.",
+    )
+    parser.add_argument(
+        "--snapchat-profile-dir",
+        default=str(getattr(config, "SNAPCHAT_PROFILE_DIR", "sessions/snapchat_chrome_profile")),
+        help="Persistent Chrome profile dir for Snapchat safe uploader session reuse.",
+    )
+    parser.add_argument(
+        "--snapchat-headless",
+        action="store_true",
+        help="Run safe Snapchat uploader in headless mode.",
+    )
+    parser.add_argument(
+        "--snapchat-save-cookies",
+        action="store_true",
+        help="Open Snapchat login flow and save cookies for --snapchat-uploader safe, then exit.",
+    )
+    parser.add_argument(
+        "--snapchat-client-id",
+        default="",
+        help="Snapchat OAuth client id (or set SNAPCHAT_CLIENT_ID).",
+    )
+    parser.add_argument(
+        "--snapchat-client-secret",
+        default="",
+        help="Snapchat OAuth client secret (or set SNAPCHAT_CLIENT_SECRET).",
+    )
+    parser.add_argument(
+        "--snapchat-redirect-uri",
+        default="",
+        help="Snapchat OAuth redirect URI (or set SNAPCHAT_REDIRECT_URI).",
+    )
+    parser.add_argument(
+        "--snapchat-profile-id",
+        default="",
+        help="Snapchat Public Profile ID for posting (or set SNAPCHAT_PROFILE_ID).",
+    )
+    parser.add_argument(
+        "--snapchat-print-auth-url",
+        action="store_true",
+        help="Print Snapchat OAuth authorize URL and exit.",
+    )
+    parser.add_argument(
+        "--snapchat-auth-code",
+        default="",
+        help="Exchange Snapchat OAuth authorization code and save tokens, then exit.",
+    )
+    parser.add_argument(
+        "--snapchat-auth-state",
+        default="",
+        help="Optional OAuth state for --snapchat-print-auth-url.",
+    )
+    parser.add_argument(
+        "--enable-x-upload",
+        action="store_true",
+        help="Upload each eligible video to X.",
+    )
+    parser.add_argument(
+        "--x-uploader",
+        choices=["api", "safe"],
+        default=default_x_uploader,
+        help="X uploader backend (default from config.X_UPLOADER or api).",
+    )
+    parser.add_argument(
+        "--x-cookies-file",
+        type=Path,
+        default=Path(getattr(config, "X_COOKIES_FILE", "x_cookies.json")),
+        help="Path to X cookies JSON for --x-uploader safe (or set X_COOKIES_FILE).",
+    )
+    parser.add_argument(
+        "--x-headless",
+        action="store_true",
+        help="Run safe X uploader in headless mode (only with --x-uploader safe).",
+    )
+    parser.add_argument(
+        "--x-save-cookies",
+        action="store_true",
+        help="Open X login flow and save cookies for --x-uploader safe, then exit.",
+    )
+    parser.add_argument(
+        "--x-upload-on-ig-failure",
+        action="store_true",
+        help="Attempt X upload even when Instagram upload is not explicitly confirmed.",
+    )
+    parser.add_argument(
+        "--x-upload-before-instagram",
+        action="store_true",
+        help=(
+            "Attempt X upload before Instagram for each video. "
+            "If X still requires IG success, upload is deferred until after IG."
+        ),
+    )
+    parser.add_argument(
+        "--skip-x",
+        action="store_true",
+        help="Skip X uploads even if config/env enables them.",
+    )
+    parser.add_argument(
+        "--x-secrets-file",
+        default="x_publish.local.env",
+        help="Local env-style file for X credentials (default: x_publish.local.env).",
+    )
+    parser.add_argument(
+        "--x-consumer-key",
+        default="",
+        help="X API consumer key (or set X_CONSUMER_KEY).",
+    )
+    parser.add_argument(
+        "--x-consumer-secret",
+        default="",
+        help="X API consumer secret (or set X_CONSUMER_SECRET).",
+    )
+    parser.add_argument(
+        "--x-access-token",
+        default="",
+        help="X access token (or set X_ACCESS_TOKEN).",
+    )
+    parser.add_argument(
+        "--x-access-token-secret",
+        default="",
+        help="X access token secret (or set X_ACCESS_TOKEN_SECRET).",
+    )
+    default_lemon8_uploader = str(getattr(config, "LEMON8_UPLOADER", "safe") or "safe").strip().lower()
+    if default_lemon8_uploader not in {"safe"}:
+        default_lemon8_uploader = "safe"
+    parser.add_argument(
+        "--enable-lemon8-upload",
+        action="store_true",
+        help="Upload each eligible video to Lemon8.",
+    )
+    parser.add_argument(
+        "--lemon8-uploader",
+        choices=["safe"],
+        default=default_lemon8_uploader,
+        help="Lemon8 uploader backend (currently only safe).",
+    )
+    parser.add_argument(
+        "--lemon8-cookies-file",
+        type=Path,
+        default=Path(getattr(config, "LEMON8_COOKIES_FILE", "lemon8_cookies.json")),
+        help="Path to Lemon8 cookies JSON for safe uploads.",
+    )
+    parser.add_argument(
+        "--lemon8-headless",
+        action="store_true",
+        help="Run Lemon8 safe uploader in headless mode.",
+    )
+    parser.add_argument(
+        "--lemon8-save-cookies",
+        action="store_true",
+        help="Open Lemon8 login flow and save cookies, then exit.",
+    )
+    parser.add_argument(
+        "--lemon8-upload-on-ig-failure",
+        action="store_true",
+        help="Attempt Lemon8 upload even when Instagram upload is not explicitly confirmed.",
+    )
+    parser.add_argument(
+        "--skip-lemon8",
+        action="store_true",
+        help="Skip Lemon8 uploads even if config/env enables them.",
+    )
+    parser.add_argument(
+        "--lemon8-secrets-file",
+        default="lemon8_publish.local.env",
+        help="Local env-style file for Lemon8 settings (default: lemon8_publish.local.env).",
+    )
+    default_rednote_uploader = str(getattr(config, "REDNOTE_UPLOADER", "safe") or "safe").strip().lower()
+    if default_rednote_uploader not in {"safe"}:
+        default_rednote_uploader = "safe"
+    parser.add_argument(
+        "--enable-rednote-upload",
+        action="store_true",
+        help="Upload each eligible video to Rednote (Xiaohongshu).",
+    )
+    parser.add_argument(
+        "--rednote-uploader",
+        choices=["safe"],
+        default=default_rednote_uploader,
+        help="Rednote uploader backend (currently only safe).",
+    )
+    parser.add_argument(
+        "--rednote-cookies-file",
+        type=Path,
+        default=Path(getattr(config, "REDNOTE_COOKIES_FILE", "rednote_cookies.json")),
+        help="Path to Rednote cookies JSON for safe uploads.",
+    )
+    parser.add_argument(
+        "--rednote-headless",
+        action="store_true",
+        help="Run Rednote safe uploader in headless mode.",
+    )
+    parser.add_argument(
+        "--rednote-save-cookies",
+        action="store_true",
+        help="Open Rednote login flow and save cookies, then exit.",
+    )
+    parser.add_argument(
+        "--rednote-upload-on-ig-failure",
+        action="store_true",
+        help="Attempt Rednote upload even when Instagram upload is not explicitly confirmed.",
+    )
+    parser.add_argument(
+        "--skip-rednote",
+        action="store_true",
+        help="Skip Rednote uploads even if config/env enables them.",
+    )
+    parser.add_argument(
+        "--rednote-secrets-file",
+        default="rednote_publish.local.env",
+        help="Local env-style file for Rednote settings (default: rednote_publish.local.env).",
+    )
     return parser.parse_args()
 
 
@@ -1208,6 +1776,13 @@ def _parse_bool(value, default: bool = False) -> bool:
     return default
 
 
+def _coerce_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def load_env_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -1215,6 +1790,8 @@ def load_env_values(path: Path) -> dict[str, str]:
             return values
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
+            if line.startswith("\ufeff"):
+                line = line.lstrip("\ufeff").strip()
             if not line or line.startswith("#"):
                 continue
             if line.lower().startswith("export "):
@@ -1222,7 +1799,7 @@ def load_env_values(path: Path) -> dict[str, str]:
             if "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            key = key.strip()
+            key = key.lstrip("\ufeff").strip()
             if not key:
                 continue
             value = value.strip()
@@ -1307,6 +1884,32 @@ def _resolve_youtube_upload_token_path() -> Path:
         os.getenv("YOUTUBE_TOKEN_PATH")
         or getattr(config, "YOUTUBE_TOKEN_PATH", "secrets/youtube_token.json")
         or "secrets/youtube_token.json"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_snapchat_access_token_path(raw_value: str | None = None) -> Path:
+    raw_path = str(
+        raw_value
+        or os.getenv("SNAPCHAT_ACCESS_TOKEN_PATH")
+        or getattr(config, "SNAPCHAT_ACCESS_TOKEN_PATH", "secrets/snapchat_access_token.json")
+        or "secrets/snapchat_access_token.json"
+    ).strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_snapchat_refresh_token_path(raw_value: str | None = None) -> Path:
+    raw_path = str(
+        raw_value
+        or os.getenv("SNAPCHAT_REFRESH_TOKEN_PATH")
+        or getattr(config, "SNAPCHAT_REFRESH_TOKEN_PATH", "secrets/snapchat_refresh_token.json")
+        or "secrets/snapchat_refresh_token.json"
     ).strip()
     path = Path(raw_path)
     if not path.is_absolute():
@@ -1692,8 +2295,677 @@ def main():
         else:
             print(f"[INFO] FB page upload enabled (requires IG success): {fb_page_id}")
 
+    snap_secrets_path = Path(args.snapchat_secrets_file)
+    snap_local_env = load_env_values(snap_secrets_path)
+    snap_client_id = (
+        args.snapchat_client_id
+        or os.getenv("SNAPCHAT_CLIENT_ID")
+        or snap_local_env.get("SNAPCHAT_CLIENT_ID")
+        or getattr(config, "SNAPCHAT_CLIENT_ID", "")
+    ).strip()
+    snap_client_secret = (
+        args.snapchat_client_secret
+        or os.getenv("SNAPCHAT_CLIENT_SECRET")
+        or snap_local_env.get("SNAPCHAT_CLIENT_SECRET")
+        or getattr(config, "SNAPCHAT_CLIENT_SECRET", "")
+    ).strip()
+    snap_redirect_uri = (
+        args.snapchat_redirect_uri
+        or os.getenv("SNAPCHAT_REDIRECT_URI")
+        or snap_local_env.get("SNAPCHAT_REDIRECT_URI")
+        or getattr(config, "SNAPCHAT_REDIRECT_URI", "")
+    ).strip()
+    snap_profile_id = (
+        args.snapchat_profile_id
+        or os.getenv("SNAPCHAT_PROFILE_ID")
+        or snap_local_env.get("SNAPCHAT_PROFILE_ID")
+        or getattr(config, "SNAPCHAT_PROFILE_ID", "")
+    ).strip()
+    snap_scope = (
+        os.getenv("SNAPCHAT_SCOPE")
+        or snap_local_env.get("SNAPCHAT_SCOPE")
+        or getattr(config, "SNAPCHAT_SCOPE", "snapchat-profile-api")
+        or "snapchat-profile-api"
+    ).strip() or "snapchat-profile-api"
+    snap_api_base = (
+        os.getenv("SNAPCHAT_API_BASE")
+        or snap_local_env.get("SNAPCHAT_API_BASE")
+        or getattr(config, "SNAPCHAT_API_BASE", "https://businessapi.snapchat.com")
+        or "https://businessapi.snapchat.com"
+    ).strip() or "https://businessapi.snapchat.com"
+    snap_access_token_path = _resolve_snapchat_access_token_path(
+        raw_value=snap_local_env.get("SNAPCHAT_ACCESS_TOKEN_PATH"),
+    )
+    snap_refresh_token_path = _resolve_snapchat_refresh_token_path(
+        raw_value=snap_local_env.get("SNAPCHAT_REFRESH_TOKEN_PATH"),
+    )
+
+    snap_enable_env = os.getenv("SNAPCHAT_ENABLE")
+    if snap_enable_env is not None:
+        snap_feature_enabled = _parse_bool(snap_enable_env, default=True)
+    elif "SNAPCHAT_ENABLE" in snap_local_env:
+        snap_feature_enabled = _parse_bool(
+            snap_local_env.get("SNAPCHAT_ENABLE"),
+            default=bool(getattr(config, "SNAPCHAT_ENABLE", True)),
+        )
+    else:
+        snap_feature_enabled = bool(getattr(config, "SNAPCHAT_ENABLE", True))
+
+    snap_auto_upload_env = os.getenv("SNAPCHAT_AUTO_UPLOAD")
+    if snap_auto_upload_env is not None:
+        snap_auto_upload = _parse_bool(snap_auto_upload_env, default=False)
+    elif "SNAPCHAT_AUTO_UPLOAD" in snap_local_env:
+        snap_auto_upload = _parse_bool(
+            snap_local_env.get("SNAPCHAT_AUTO_UPLOAD"),
+            default=bool(getattr(config, "SNAPCHAT_AUTO_UPLOAD", False)),
+        )
+    else:
+        snap_auto_upload = bool(getattr(config, "SNAPCHAT_AUTO_UPLOAD", False))
+
+    snap_upload_enabled = bool(snap_feature_enabled and (args.enable_snapchat_upload or snap_auto_upload))
+    if args.skip_snapchat:
+        snap_upload_enabled = False
+
+    snap_on_fail_env = os.getenv("SNAPCHAT_UPLOAD_ON_IG_FAILURE")
+    if args.snapchat_upload_on_ig_failure:
+        snap_upload_on_ig_failure = True
+    elif snap_on_fail_env is not None:
+        snap_upload_on_ig_failure = _parse_bool(snap_on_fail_env, default=False)
+    elif "SNAPCHAT_UPLOAD_ON_IG_FAILURE" in snap_local_env:
+        snap_upload_on_ig_failure = _parse_bool(
+            snap_local_env.get("SNAPCHAT_UPLOAD_ON_IG_FAILURE"),
+            default=bool(getattr(config, "SNAPCHAT_UPLOAD_ON_IG_FAILURE", False)),
+        )
+    else:
+        snap_upload_on_ig_failure = bool(getattr(config, "SNAPCHAT_UPLOAD_ON_IG_FAILURE", False))
+
+    snap_story_enabled = _parse_bool(
+        os.getenv("SNAPCHAT_ENABLE_STORY_POST", snap_local_env.get("SNAPCHAT_ENABLE_STORY_POST")),
+        default=bool(getattr(config, "SNAPCHAT_ENABLE_STORY_POST", True)),
+    )
+    snap_spotlight_enabled = _parse_bool(
+        os.getenv("SNAPCHAT_ENABLE_SPOTLIGHT_POST", snap_local_env.get("SNAPCHAT_ENABLE_SPOTLIGHT_POST")),
+        default=bool(getattr(config, "SNAPCHAT_ENABLE_SPOTLIGHT_POST", True)),
+    )
+    snap_spotlight_locale = str(
+        os.getenv("SNAPCHAT_SPOTLIGHT_LOCALE")
+        or snap_local_env.get("SNAPCHAT_SPOTLIGHT_LOCALE")
+        or getattr(config, "SNAPCHAT_SPOTLIGHT_LOCALE", "en_US")
+        or "en_US"
+    ).strip() or "en_US"
+    snap_spotlight_skip_save = _parse_bool(
+        os.getenv("SNAPCHAT_SPOTLIGHT_SKIP_SAVE_TO_PROFILE", snap_local_env.get("SNAPCHAT_SPOTLIGHT_SKIP_SAVE_TO_PROFILE")),
+        default=bool(getattr(config, "SNAPCHAT_SPOTLIGHT_SKIP_SAVE_TO_PROFILE", False)),
+    )
+    snap_use_non_ig_variant = _parse_bool(
+        os.getenv("SNAPCHAT_USE_NON_IG_VARIANT", snap_local_env.get("SNAPCHAT_USE_NON_IG_VARIANT")),
+        default=bool(getattr(config, "SNAPCHAT_USE_NON_IG_VARIANT", True)),
+    )
+    snap_retry_count = _coerce_int(
+        os.getenv("SNAPCHAT_RETRY_COUNT") or snap_local_env.get("SNAPCHAT_RETRY_COUNT") or getattr(config, "SNAPCHAT_RETRY_COUNT", 3),
+        3,
+    )
+    snap_timeout_seconds = _coerce_int(
+        os.getenv("SNAPCHAT_TIMEOUT_SECONDS") or snap_local_env.get("SNAPCHAT_TIMEOUT_SECONDS") or getattr(config, "SNAPCHAT_TIMEOUT_SECONDS", 120),
+        120,
+    )
+    snap_uploader = str(
+        args.snapchat_uploader
+        or os.getenv("SNAPCHAT_UPLOADER")
+        or snap_local_env.get("SNAPCHAT_UPLOADER")
+        or getattr(config, "SNAPCHAT_UPLOADER", "safe")
+        or "safe"
+    ).strip().lower()
+    if snap_uploader not in {"api", "safe"}:
+        snap_uploader = "safe"
+    snap_cookies_path = Path(
+        os.getenv("SNAPCHAT_COOKIES_FILE")
+        or snap_local_env.get("SNAPCHAT_COOKIES_FILE")
+        or str(args.snapchat_cookies_file)
+    )
+    snap_profile_dir = str(
+        os.getenv("SNAPCHAT_PROFILE_DIR")
+        or snap_local_env.get("SNAPCHAT_PROFILE_DIR")
+        or args.snapchat_profile_dir
+        or getattr(config, "SNAPCHAT_PROFILE_DIR", "sessions/snapchat_chrome_profile")
+        or ""
+    ).strip()
+    snap_headless = bool(
+        args.snapchat_headless
+        or _parse_bool(
+            os.getenv("SNAPCHAT_HEADLESS", snap_local_env.get("SNAPCHAT_HEADLESS")),
+            default=bool(getattr(config, "SNAPCHAT_HEADLESS", False)),
+        )
+    )
+    snap_safe_spotlight_only = _parse_bool(
+        os.getenv("SNAPCHAT_SAFE_SPOTLIGHT_ONLY", snap_local_env.get("SNAPCHAT_SAFE_SPOTLIGHT_ONLY")),
+        default=bool(getattr(config, "SNAPCHAT_SAFE_SPOTLIGHT_ONLY", True)),
+    )
+
+    if args.snapchat_save_cookies:
+        if SafeSnapchatUploader is None:
+            raise SystemExit("safe_snapchat_uploader is unavailable. Ensure selenium is installed.")
+        snap_cookie_helper = SafeSnapchatUploader(
+            cookies_file=str(snap_cookies_path),
+            headless=snap_headless,
+            spotlight_only=snap_safe_spotlight_only,
+            profile_dir=snap_profile_dir,
+        )
+        ok = snap_cookie_helper.save_cookies()
+        raise SystemExit(0 if ok else 1)
+
+    if args.snapchat_print_auth_url or args.snapchat_auth_code:
+        if build_snapchat_authorize_url is None or exchange_snapchat_code_for_tokens is None or write_snapchat_token_payload is None:
+            raise SystemExit("Snapchat helper is unavailable. Ensure shared/snapchat_uploader.py imports successfully.")
+        if not snap_client_id or not snap_redirect_uri:
+            raise SystemExit("Snapchat auth helper needs SNAPCHAT_CLIENT_ID and SNAPCHAT_REDIRECT_URI.")
+        if args.snapchat_print_auth_url:
+            auth_url = build_snapchat_authorize_url(
+                client_id=snap_client_id,
+                redirect_uri=snap_redirect_uri,
+                scope=snap_scope,
+                state=args.snapchat_auth_state,
+            )
+            print("Snapchat authorize URL:")
+            print(auth_url)
+        auth_code = str(args.snapchat_auth_code or "").strip()
+        if auth_code:
+            if not snap_client_secret:
+                raise SystemExit("Snapchat token exchange needs SNAPCHAT_CLIENT_SECRET.")
+            token_payload = exchange_snapchat_code_for_tokens(
+                client_id=snap_client_id,
+                client_secret=snap_client_secret,
+                redirect_uri=snap_redirect_uri,
+                auth_code=auth_code,
+            )
+            write_snapchat_token_payload(
+                access_token_path=snap_access_token_path,
+                refresh_token_path=snap_refresh_token_path,
+                token_payload=token_payload,
+            )
+            print(f"[OK] Snapchat tokens saved: {snap_access_token_path}")
+        return
+
+    if snap_upload_enabled and snap_uploader == "api" and upload_snapchat is None:
+        print("[WARN] Snapchat API upload enabled, but shared.snapchat_uploader is unavailable.")
+        snap_upload_enabled = False
+    if snap_upload_enabled and snap_uploader == "safe" and SafeSnapchatUploader is None:
+        print("[WARN] Snapchat safe upload enabled, but safe_snapchat_uploader is unavailable.")
+        snap_upload_enabled = False
+
+    if snap_upload_enabled:
+        if snap_uploader == "api":
+            missing_fields = []
+            if not snap_profile_id:
+                missing_fields.append("SNAPCHAT_PROFILE_ID")
+            if not snap_client_id:
+                missing_fields.append("SNAPCHAT_CLIENT_ID")
+            if not snap_client_secret:
+                missing_fields.append("SNAPCHAT_CLIENT_SECRET")
+            if not snap_redirect_uri:
+                missing_fields.append("SNAPCHAT_REDIRECT_URI")
+            if missing_fields:
+                print(
+                    "[WARN] Snapchat API upload enabled but missing required settings: "
+                    + ", ".join(missing_fields)
+                    + f". Provide via args, env, or {snap_secrets_path}."
+                )
+                snap_upload_enabled = False
+            elif not snap_access_token_path.exists() and not snap_refresh_token_path.exists():
+                print(
+                    "[WARN] Snapchat API upload enabled but token files are missing. "
+                    "Run --snapchat-print-auth-url and --snapchat-auth-code first."
+                )
+                snap_upload_enabled = False
+        else:
+            if not snap_cookies_path.exists() and not snap_profile_dir:
+                print(
+                    f"[WARN] Snapchat safe upload enabled but cookie file is missing: {snap_cookies_path}. "
+                    "Run with --snapchat-save-cookies first, or configure --snapchat-profile-dir."
+                )
+                snap_upload_enabled = False
+
+    if snap_upload_enabled:
+        if snap_upload_on_ig_failure:
+            print(
+                "[INFO] Snapchat upload enabled (will upload even if IG confirmation is missing): "
+                f"{'profile=' + snap_profile_id if snap_uploader == 'api' else 'safe_session'}"
+            )
+        else:
+            print(
+                "[INFO] Snapchat upload enabled (requires IG success): "
+                f"{'profile=' + snap_profile_id if snap_uploader == 'api' else 'safe_session'}"
+            )
+        if snap_uploader == "safe":
+            print(
+                f"[INFO] Snapchat settings: uploader=safe, cookies={snap_cookies_path}, "
+                f"profile_dir={snap_profile_dir or '-'}, headless={snap_headless}, spotlight_only={snap_safe_spotlight_only}, "
+                f"use_non_ig_variant={snap_use_non_ig_variant}"
+            )
+        else:
+            print(
+                f"[INFO] Snapchat settings: uploader=api, story={snap_story_enabled}, "
+                f"spotlight={snap_spotlight_enabled}, locale={snap_spotlight_locale}, "
+                f"use_non_ig_variant={snap_use_non_ig_variant}"
+            )
+
+    x_secrets_path = Path(args.x_secrets_file)
+    x_local_env = load_env_values(x_secrets_path)
+    x_consumer_key = (
+        args.x_consumer_key
+        or os.getenv("X_CONSUMER_KEY")
+        or x_local_env.get("X_CONSUMER_KEY")
+        or getattr(config, "X_CONSUMER_KEY", "")
+    ).strip()
+    x_consumer_secret = (
+        args.x_consumer_secret
+        or os.getenv("X_CONSUMER_SECRET")
+        or x_local_env.get("X_CONSUMER_SECRET")
+        or getattr(config, "X_CONSUMER_SECRET", "")
+    ).strip()
+    x_access_token = (
+        args.x_access_token
+        or os.getenv("X_ACCESS_TOKEN")
+        or x_local_env.get("X_ACCESS_TOKEN")
+        or getattr(config, "X_ACCESS_TOKEN", "")
+    ).strip()
+    x_access_token_secret = (
+        args.x_access_token_secret
+        or os.getenv("X_ACCESS_TOKEN_SECRET")
+        or x_local_env.get("X_ACCESS_TOKEN_SECRET")
+        or getattr(config, "X_ACCESS_TOKEN_SECRET", "")
+    ).strip()
+    x_upload_api_url = (
+        os.getenv("X_UPLOAD_API_URL")
+        or x_local_env.get("X_UPLOAD_API_URL")
+        or getattr(config, "X_UPLOAD_API_URL", "https://upload.twitter.com/1.1/media/upload.json")
+        or "https://upload.twitter.com/1.1/media/upload.json"
+    ).strip() or "https://upload.twitter.com/1.1/media/upload.json"
+    x_api_base = (
+        os.getenv("X_API_BASE")
+        or x_local_env.get("X_API_BASE")
+        or getattr(config, "X_API_BASE", "https://api.x.com")
+        or "https://api.x.com"
+    ).strip() or "https://api.x.com"
+
+    x_enable_env = os.getenv("X_ENABLE")
+    if x_enable_env is not None:
+        x_feature_enabled = _parse_bool(x_enable_env, default=True)
+    elif "X_ENABLE" in x_local_env:
+        x_feature_enabled = _parse_bool(
+            x_local_env.get("X_ENABLE"),
+            default=bool(getattr(config, "X_ENABLE", True)),
+        )
+    else:
+        x_feature_enabled = bool(getattr(config, "X_ENABLE", True))
+
+    x_auto_upload_env = os.getenv("X_AUTO_UPLOAD")
+    if x_auto_upload_env is not None:
+        x_auto_upload = _parse_bool(x_auto_upload_env, default=False)
+    elif "X_AUTO_UPLOAD" in x_local_env:
+        x_auto_upload = _parse_bool(
+            x_local_env.get("X_AUTO_UPLOAD"),
+            default=bool(getattr(config, "X_AUTO_UPLOAD", False)),
+        )
+    else:
+        x_auto_upload = bool(getattr(config, "X_AUTO_UPLOAD", False))
+
+    x_upload_enabled = bool(x_feature_enabled and (args.enable_x_upload or x_auto_upload))
+    if args.skip_x:
+        x_upload_enabled = False
+
+    x_on_fail_env = os.getenv("X_UPLOAD_ON_IG_FAILURE")
+    if args.x_upload_on_ig_failure:
+        x_upload_on_ig_failure = True
+    elif x_on_fail_env is not None:
+        x_upload_on_ig_failure = _parse_bool(x_on_fail_env, default=False)
+    elif "X_UPLOAD_ON_IG_FAILURE" in x_local_env:
+        x_upload_on_ig_failure = _parse_bool(
+            x_local_env.get("X_UPLOAD_ON_IG_FAILURE"),
+            default=bool(getattr(config, "X_UPLOAD_ON_IG_FAILURE", False)),
+        )
+    else:
+        x_upload_on_ig_failure = bool(getattr(config, "X_UPLOAD_ON_IG_FAILURE", False))
+
+    x_order_env = os.getenv("X_UPLOAD_BEFORE_INSTAGRAM")
+    if args.x_upload_before_instagram:
+        x_upload_before_instagram = True
+    elif x_order_env is not None:
+        x_upload_before_instagram = _parse_bool(x_order_env, default=False)
+    elif "X_UPLOAD_BEFORE_INSTAGRAM" in x_local_env:
+        x_upload_before_instagram = _parse_bool(
+            x_local_env.get("X_UPLOAD_BEFORE_INSTAGRAM"),
+            default=bool(getattr(config, "X_UPLOAD_BEFORE_INSTAGRAM", False)),
+        )
+    else:
+        # Auto-choose pre-IG order when X is allowed independently of IG success.
+        x_upload_before_instagram = bool(
+            getattr(config, "X_UPLOAD_BEFORE_INSTAGRAM", x_upload_on_ig_failure)
+        )
+
+    x_use_non_ig_variant = _parse_bool(
+        os.getenv("X_USE_NON_IG_VARIANT", x_local_env.get("X_USE_NON_IG_VARIANT")),
+        default=bool(getattr(config, "X_USE_NON_IG_VARIANT", True)),
+    )
+    x_retry_count = _coerce_int(
+        os.getenv("X_RETRY_COUNT")
+        or x_local_env.get("X_RETRY_COUNT")
+        or getattr(config, "X_RETRY_COUNT", 3),
+        3,
+    )
+    x_timeout_seconds = _coerce_int(
+        os.getenv("X_TIMEOUT_SECONDS")
+        or x_local_env.get("X_TIMEOUT_SECONDS")
+        or getattr(config, "X_TIMEOUT_SECONDS", 120),
+        120,
+    )
+    x_uploader = str(
+        args.x_uploader
+        or os.getenv("X_UPLOADER")
+        or x_local_env.get("X_UPLOADER")
+        or getattr(config, "X_UPLOADER", "api")
+        or "api"
+    ).strip().lower()
+    if x_uploader not in {"api", "safe"}:
+        x_uploader = "api"
+    x_cookies_path = Path(
+        os.getenv("X_COOKIES_FILE")
+        or x_local_env.get("X_COOKIES_FILE")
+        or str(args.x_cookies_file)
+    )
+    x_headless = bool(
+        args.x_headless
+        or _parse_bool(
+            os.getenv("X_HEADLESS", x_local_env.get("X_HEADLESS")),
+            default=bool(getattr(config, "X_HEADLESS", False)),
+        )
+    )
+    x_safe_post_ready_timeout = _coerce_int(
+        os.getenv("X_SAFE_POST_READY_TIMEOUT_SECONDS")
+        or x_local_env.get("X_SAFE_POST_READY_TIMEOUT_SECONDS")
+        or getattr(config, "X_SAFE_POST_READY_TIMEOUT_SECONDS", 60),
+        60,
+    )
+    if x_safe_post_ready_timeout < 20:
+        x_safe_post_ready_timeout = 20
+    x_safe_post_click_attempts = _coerce_int(
+        os.getenv("X_SAFE_POST_CLICK_ATTEMPTS")
+        or x_local_env.get("X_SAFE_POST_CLICK_ATTEMPTS")
+        or getattr(config, "X_SAFE_POST_CLICK_ATTEMPTS", 4),
+        4,
+    )
+    if x_safe_post_click_attempts < 1:
+        x_safe_post_click_attempts = 1
+
+    if args.x_save_cookies:
+        if SafeXUploader is None:
+            raise SystemExit("safe_x_uploader is unavailable. Ensure selenium is installed.")
+        x_cookie_helper = SafeXUploader(
+            cookies_file=str(x_cookies_path),
+            headless=x_headless,
+            post_ready_timeout_seconds=x_safe_post_ready_timeout,
+            post_click_attempts=x_safe_post_click_attempts,
+        )
+        ok = x_cookie_helper.save_cookies()
+        raise SystemExit(0 if ok else 1)
+
+    if x_upload_enabled and x_uploader == "api" and upload_x is None:
+        print("[WARN] X upload enabled, but shared.x_uploader is unavailable.")
+        x_upload_enabled = False
+    if x_upload_enabled and x_uploader == "safe" and SafeXUploader is None:
+        print("[WARN] X safe upload enabled, but safe_x_uploader is unavailable.")
+        x_upload_enabled = False
+
+    if x_upload_enabled:
+        if x_uploader == "api":
+            missing_fields = []
+            if not x_consumer_key:
+                missing_fields.append("X_CONSUMER_KEY")
+            if not x_consumer_secret:
+                missing_fields.append("X_CONSUMER_SECRET")
+            if not x_access_token:
+                missing_fields.append("X_ACCESS_TOKEN")
+            if not x_access_token_secret:
+                missing_fields.append("X_ACCESS_TOKEN_SECRET")
+            if missing_fields:
+                print(
+                    "[WARN] X upload enabled but missing required settings: "
+                    + ", ".join(missing_fields)
+                    + f". Provide via args, env, or {x_secrets_path}."
+                )
+                x_upload_enabled = False
+        else:
+            if not x_cookies_path.exists():
+                print(
+                    f"[WARN] X safe upload enabled but cookie file is missing: {x_cookies_path}. "
+                    "Run with --x-save-cookies first."
+                )
+                x_upload_enabled = False
+
+    if x_upload_enabled:
+        if x_upload_on_ig_failure:
+            print("[INFO] X upload enabled (will upload even if IG confirmation is missing).")
+        else:
+            print("[INFO] X upload enabled (requires IG success).")
+        if x_uploader == "safe":
+            print(
+                f"[INFO] X settings: uploader=safe, cookies={x_cookies_path}, "
+                f"headless={x_headless}, use_non_ig_variant={x_use_non_ig_variant}, "
+                f"order={'before_ig' if x_upload_before_instagram else 'after_ig'}, "
+                f"post_ready_timeout={x_safe_post_ready_timeout}s, "
+                f"post_click_attempts={x_safe_post_click_attempts}"
+            )
+        else:
+            print(
+                f"[INFO] X settings: uploader=api, use_non_ig_variant={x_use_non_ig_variant}, "
+                f"retry_count={x_retry_count}, timeout={x_timeout_seconds}s, "
+                f"order={'before_ig' if x_upload_before_instagram else 'after_ig'}"
+            )
+
+    lemon8_secrets_path = Path(args.lemon8_secrets_file)
+    lemon8_local_env = load_env_values(lemon8_secrets_path)
+    lemon8_enable_env = os.getenv("LEMON8_ENABLE")
+    if lemon8_enable_env is not None:
+        lemon8_feature_enabled = _parse_bool(lemon8_enable_env, default=True)
+    elif "LEMON8_ENABLE" in lemon8_local_env:
+        lemon8_feature_enabled = _parse_bool(
+            lemon8_local_env.get("LEMON8_ENABLE"),
+            default=bool(getattr(config, "LEMON8_ENABLE", True)),
+        )
+    else:
+        lemon8_feature_enabled = bool(getattr(config, "LEMON8_ENABLE", True))
+
+    lemon8_auto_env = os.getenv("LEMON8_AUTO_UPLOAD")
+    if lemon8_auto_env is not None:
+        lemon8_auto_upload = _parse_bool(lemon8_auto_env, default=False)
+    elif "LEMON8_AUTO_UPLOAD" in lemon8_local_env:
+        lemon8_auto_upload = _parse_bool(
+            lemon8_local_env.get("LEMON8_AUTO_UPLOAD"),
+            default=bool(getattr(config, "LEMON8_AUTO_UPLOAD", False)),
+        )
+    else:
+        lemon8_auto_upload = bool(getattr(config, "LEMON8_AUTO_UPLOAD", False))
+
+    lemon8_upload_enabled = bool(lemon8_feature_enabled and (args.enable_lemon8_upload or lemon8_auto_upload))
+    if args.skip_lemon8:
+        lemon8_upload_enabled = False
+
+    lemon8_on_fail_env = os.getenv("LEMON8_UPLOAD_ON_IG_FAILURE")
+    if args.lemon8_upload_on_ig_failure:
+        lemon8_upload_on_ig_failure = True
+    elif lemon8_on_fail_env is not None:
+        lemon8_upload_on_ig_failure = _parse_bool(lemon8_on_fail_env, default=False)
+    elif "LEMON8_UPLOAD_ON_IG_FAILURE" in lemon8_local_env:
+        lemon8_upload_on_ig_failure = _parse_bool(
+            lemon8_local_env.get("LEMON8_UPLOAD_ON_IG_FAILURE"),
+            default=bool(getattr(config, "LEMON8_UPLOAD_ON_IG_FAILURE", False)),
+        )
+    else:
+        lemon8_upload_on_ig_failure = bool(getattr(config, "LEMON8_UPLOAD_ON_IG_FAILURE", False))
+
+    lemon8_uploader = str(
+        args.lemon8_uploader
+        or os.getenv("LEMON8_UPLOADER")
+        or lemon8_local_env.get("LEMON8_UPLOADER")
+        or getattr(config, "LEMON8_UPLOADER", "safe")
+        or "safe"
+    ).strip().lower()
+    if lemon8_uploader not in {"safe"}:
+        lemon8_uploader = "safe"
+    lemon8_cookies_path = Path(
+        os.getenv("LEMON8_COOKIES_FILE")
+        or lemon8_local_env.get("LEMON8_COOKIES_FILE")
+        or str(args.lemon8_cookies_file)
+    )
+    lemon8_headless = bool(
+        args.lemon8_headless
+        or _parse_bool(
+            os.getenv("LEMON8_HEADLESS", lemon8_local_env.get("LEMON8_HEADLESS")),
+            default=bool(getattr(config, "LEMON8_HEADLESS", False)),
+        )
+    )
+    lemon8_use_non_ig_variant = _parse_bool(
+        os.getenv("LEMON8_USE_NON_IG_VARIANT", lemon8_local_env.get("LEMON8_USE_NON_IG_VARIANT")),
+        default=bool(getattr(config, "LEMON8_USE_NON_IG_VARIANT", True)),
+    )
+
+    if args.lemon8_save_cookies:
+        if SafeLemon8Uploader is None:
+            raise SystemExit("safe_lemon8_uploader is unavailable. Ensure selenium is installed.")
+        lemon8_cookie_helper = SafeLemon8Uploader(
+            cookies_file=str(lemon8_cookies_path),
+            headless=lemon8_headless,
+        )
+        ok = lemon8_cookie_helper.save_cookies()
+        raise SystemExit(0 if ok else 1)
+
+    if lemon8_upload_enabled and SafeLemon8Uploader is None:
+        print("[WARN] Lemon8 upload enabled, but safe_lemon8_uploader is unavailable.")
+        lemon8_upload_enabled = False
+
+    if lemon8_upload_enabled and not lemon8_cookies_path.exists():
+        print(
+            f"[WARN] Lemon8 upload enabled but cookie file is missing: {lemon8_cookies_path}. "
+            "Run with --lemon8-save-cookies first."
+        )
+        lemon8_upload_enabled = False
+
+    if lemon8_upload_enabled:
+        if lemon8_upload_on_ig_failure:
+            print("[INFO] Lemon8 upload enabled (will upload even if IG confirmation is missing).")
+        else:
+            print("[INFO] Lemon8 upload enabled (requires IG success).")
+        print(
+            f"[INFO] Lemon8 settings: uploader={lemon8_uploader}, cookies={lemon8_cookies_path}, "
+            f"headless={lemon8_headless}, use_non_ig_variant={lemon8_use_non_ig_variant}"
+        )
+
+    rednote_secrets_path = Path(args.rednote_secrets_file)
+    rednote_local_env = load_env_values(rednote_secrets_path)
+    rednote_enable_env = os.getenv("REDNOTE_ENABLE")
+    if rednote_enable_env is not None:
+        rednote_feature_enabled = _parse_bool(rednote_enable_env, default=True)
+    elif "REDNOTE_ENABLE" in rednote_local_env:
+        rednote_feature_enabled = _parse_bool(
+            rednote_local_env.get("REDNOTE_ENABLE"),
+            default=bool(getattr(config, "REDNOTE_ENABLE", True)),
+        )
+    else:
+        rednote_feature_enabled = bool(getattr(config, "REDNOTE_ENABLE", True))
+
+    rednote_auto_env = os.getenv("REDNOTE_AUTO_UPLOAD")
+    if rednote_auto_env is not None:
+        rednote_auto_upload = _parse_bool(rednote_auto_env, default=False)
+    elif "REDNOTE_AUTO_UPLOAD" in rednote_local_env:
+        rednote_auto_upload = _parse_bool(
+            rednote_local_env.get("REDNOTE_AUTO_UPLOAD"),
+            default=bool(getattr(config, "REDNOTE_AUTO_UPLOAD", False)),
+        )
+    else:
+        rednote_auto_upload = bool(getattr(config, "REDNOTE_AUTO_UPLOAD", False))
+
+    rednote_upload_enabled = bool(
+        rednote_feature_enabled and (args.enable_rednote_upload or rednote_auto_upload)
+    )
+    if args.skip_rednote:
+        rednote_upload_enabled = False
+
+    rednote_on_fail_env = os.getenv("REDNOTE_UPLOAD_ON_IG_FAILURE")
+    if args.rednote_upload_on_ig_failure:
+        rednote_upload_on_ig_failure = True
+    elif rednote_on_fail_env is not None:
+        rednote_upload_on_ig_failure = _parse_bool(rednote_on_fail_env, default=False)
+    elif "REDNOTE_UPLOAD_ON_IG_FAILURE" in rednote_local_env:
+        rednote_upload_on_ig_failure = _parse_bool(
+            rednote_local_env.get("REDNOTE_UPLOAD_ON_IG_FAILURE"),
+            default=bool(getattr(config, "REDNOTE_UPLOAD_ON_IG_FAILURE", False)),
+        )
+    else:
+        rednote_upload_on_ig_failure = bool(getattr(config, "REDNOTE_UPLOAD_ON_IG_FAILURE", False))
+
+    rednote_uploader = str(
+        args.rednote_uploader
+        or os.getenv("REDNOTE_UPLOADER")
+        or rednote_local_env.get("REDNOTE_UPLOADER")
+        or getattr(config, "REDNOTE_UPLOADER", "safe")
+        or "safe"
+    ).strip().lower()
+    if rednote_uploader not in {"safe"}:
+        rednote_uploader = "safe"
+    rednote_cookies_path = Path(
+        os.getenv("REDNOTE_COOKIES_FILE")
+        or rednote_local_env.get("REDNOTE_COOKIES_FILE")
+        or str(args.rednote_cookies_file)
+    )
+    rednote_headless = bool(
+        args.rednote_headless
+        or _parse_bool(
+            os.getenv("REDNOTE_HEADLESS", rednote_local_env.get("REDNOTE_HEADLESS")),
+            default=bool(getattr(config, "REDNOTE_HEADLESS", False)),
+        )
+    )
+    rednote_use_non_ig_variant = _parse_bool(
+        os.getenv("REDNOTE_USE_NON_IG_VARIANT", rednote_local_env.get("REDNOTE_USE_NON_IG_VARIANT")),
+        default=bool(getattr(config, "REDNOTE_USE_NON_IG_VARIANT", True)),
+    )
+
+    if args.rednote_save_cookies:
+        if SafeRednoteUploader is None:
+            raise SystemExit("safe_rednote_uploader is unavailable. Ensure selenium is installed.")
+        rednote_cookie_helper = SafeRednoteUploader(
+            cookies_file=str(rednote_cookies_path),
+            headless=rednote_headless,
+        )
+        ok = rednote_cookie_helper.save_cookies()
+        raise SystemExit(0 if ok else 1)
+
+    if rednote_upload_enabled and SafeRednoteUploader is None:
+        print("[WARN] Rednote upload enabled, but safe_rednote_uploader is unavailable.")
+        rednote_upload_enabled = False
+
+    if rednote_upload_enabled and not rednote_cookies_path.exists():
+        print(
+            f"[WARN] Rednote upload enabled but cookie file is missing: {rednote_cookies_path}. "
+            "Run with --rednote-save-cookies first."
+        )
+        rednote_upload_enabled = False
+
+    if rednote_upload_enabled:
+        if rednote_upload_on_ig_failure:
+            print("[INFO] Rednote upload enabled (will upload even if IG confirmation is missing).")
+        else:
+            print("[INFO] Rednote upload enabled (requires IG success).")
+        print(
+            f"[INFO] Rednote settings: uploader={rednote_uploader}, cookies={rednote_cookies_path}, "
+            f"headless={rednote_headless}, use_non_ig_variant={rednote_use_non_ig_variant}"
+        )
+
     # Build expected videos from run context (or ALL_GAME_MODES)
     video_paths = [build_video_path(gm, day_number=run_day_number) for gm in run_game_modes]
+    if args.max_videos and args.max_videos > 0:
+        original_count = len(video_paths)
+        video_paths = video_paths[: args.max_videos]
+        print(f"[INFO] Limiting videos: {len(video_paths)}/{original_count} (--max-videos {args.max_videos})")
 
     if args.skip_stats:
         print("[WARN] Skipping stats/history push (--skip-stats).")
@@ -1717,6 +2989,10 @@ def main():
 
     ig_safe = None
     ig_export = None
+    snap_safe = None
+    x_safe = None
+    lemon8_safe = None
+    rednote_safe = None
 
     def start_export_session(existing_driver=None):
         from persistent_instagram_uploader import PersistentInstagramUploader
@@ -1734,7 +3010,7 @@ def main():
         return exporter
 
     client = None
-    if args.ig_uploader == "instagrapi":
+    if args.ig_uploader == "instagrapi" and not args.skip_instagram:
         if args.wait_for_login:
             ig_profile_url = args.ig_profile_url
             if not ig_profile_url:
@@ -1752,6 +3028,46 @@ def main():
         except Exception as e:
             print(f"[WARN] TikTok session load failed: {e}. TikTok uploads will be skipped.")
 
+    if snap_upload_enabled and snap_uploader == "safe":
+        snap_safe = SafeSnapchatUploader(
+            cookies_file=str(snap_cookies_path),
+            headless=snap_headless,
+            spotlight_only=snap_safe_spotlight_only,
+            profile_dir=snap_profile_dir,
+        )
+        if not snap_safe.start_session():
+            print("[WARN] Failed to start Snapchat safe session. Snapchat uploads will be skipped.")
+            snap_upload_enabled = False
+
+    if x_upload_enabled and x_uploader == "safe":
+        x_safe = SafeXUploader(
+            cookies_file=str(x_cookies_path),
+            headless=x_headless,
+            post_ready_timeout_seconds=x_safe_post_ready_timeout,
+            post_click_attempts=x_safe_post_click_attempts,
+        )
+        if not x_safe.start_session():
+            print("[WARN] Failed to start safe X session. X uploads will be skipped.")
+            x_upload_enabled = False
+
+    if lemon8_upload_enabled and lemon8_uploader == "safe":
+        lemon8_safe = SafeLemon8Uploader(
+            cookies_file=str(lemon8_cookies_path),
+            headless=lemon8_headless,
+        )
+        if not lemon8_safe.start_session():
+            print("[WARN] Failed to start Lemon8 safe session. Lemon8 uploads will be skipped.")
+            lemon8_upload_enabled = False
+
+    if rednote_upload_enabled and rednote_uploader == "safe":
+        rednote_safe = SafeRednoteUploader(
+            cookies_file=str(rednote_cookies_path),
+            headless=rednote_headless,
+        )
+        if not rednote_safe.start_session():
+            print("[WARN] Failed to start Rednote safe session. Rednote uploads will be skipped.")
+            rednote_upload_enabled = False
+
     if args.ig_export_followers and not args.ig_export_after_uploads:
         if args.ig_uploader == "safe":
             ig_export = start_export_session()
@@ -1763,9 +3079,9 @@ def main():
         else:
             run_ig_export(None, args)
 
-    print("[INFO] Uploading videos as Reels/TikTok/YouTube...")
+    print("[INFO] Uploading videos as Reels/TikTok/YouTube/Snapchat/X/Lemon8/Rednote...")
     try:
-        if args.ig_uploader == "safe":
+        if args.ig_uploader == "safe" and not args.skip_instagram:
             from safe_instagram_uploader import SafeInstagramUploader
             ig_safe = SafeInstagramUploader(
                 cookies_file=str(ig_cookies_path),
@@ -1773,6 +3089,93 @@ def main():
             )
             if not ig_safe.start_session():
                 raise SystemExit("Failed to start safe Instagram session.")
+
+        snapchat_uploaded_keys: set[str] = set()
+        x_uploaded_keys: set[str] = set()
+        lemon8_uploaded_keys: set[str] = set()
+        rednote_uploaded_keys: set[str] = set()
+
+        def _attempt_x_upload_for_video(
+            *,
+            base_video_path: Path,
+            game_mode: str,
+            actual_day_number: int,
+            day_value: int,
+            base_caption: str,
+            pre_ig_mode: bool = False,
+        ) -> bool:
+            """Attempt one X upload for a video and return True when attempt was made."""
+            if not x_upload_enabled:
+                return False
+
+            if x_use_non_ig_variant:
+                x_video_path = resolve_platform_video_path(
+                    base_video_path=base_video_path,
+                    platform="x",
+                    game_mode=game_mode,
+                    day_number=actual_day_number,
+                )
+            else:
+                x_video_path = base_video_path
+
+            if x_video_path is None:
+                print(f"[WARN] X: Skipping {base_video_path.name} because non-IG variant is unavailable.")
+                return True
+
+            dedupe_key = f"{actual_day_number}:{game_mode}:{x_video_path.name}"
+            if dedupe_key in x_uploaded_keys:
+                print(f"[INFO] X: Skipping duplicate upload key {dedupe_key}")
+                return True
+
+            if pre_ig_mode:
+                print(f"[INFO] X: Pre-IG upload for {x_video_path.name}")
+            else:
+                print(f"[INFO] X: Uploading {x_video_path.name}")
+
+            if x_uploader == "safe":
+                x_text = build_x_post_text(
+                    caption=base_caption,
+                    game_mode=game_mode,
+                    day_number=day_value,
+                )
+                safe_ok = bool(
+                    x_safe and x_safe.upload_post(
+                        video_path=x_video_path,
+                        text=x_text,
+                        reuse_session=True,
+                    )
+                )
+                if safe_ok:
+                    print("[OK] X posted via safe uploader.")
+                else:
+                    print(f"[WARN] X safe upload failed for {x_video_path.name}")
+            else:
+                x_result = upload_x(
+                    video_path=x_video_path,
+                    caption=base_caption,
+                    game_mode=game_mode,
+                    day_number=day_value,
+                    consumer_key=x_consumer_key,
+                    consumer_secret=x_consumer_secret,
+                    access_token=x_access_token,
+                    access_token_secret=x_access_token_secret,
+                    upload_api=x_upload_api_url,
+                    api_base=x_api_base,
+                    retry_count=x_retry_count,
+                    timeout_seconds=x_timeout_seconds,
+                    logger=print,
+                )
+                if x_result.get("ok"):
+                    print(
+                        f"[OK] X posted: media_id={x_result.get('media_id')}, "
+                        f"tweet_id={x_result.get('tweet_id') or '-'}"
+                    )
+                else:
+                    errors = x_result.get("errors") or []
+                    print(f"[WARN] X upload failed for {x_video_path.name}: {errors}")
+
+            x_uploaded_keys.add(dedupe_key)
+            return True
 
         for idx, video_path in enumerate(video_paths):
             if not video_path.exists():
@@ -1797,20 +3200,40 @@ def main():
                 top_users = get_top_usernames_for_game(actual_day_number, game_mode, limit=10)
                 ig_caption = base_caption + format_top_users_block(top_users)
 
-            # Instagram upload
-            print(f"[INFO] IG: Uploading {video_path.name}")
-            ig_ok = False
-            if args.ig_uploader == "safe":
-                ig_ok = bool(
-                    ig_safe.upload_reel(
-                        str(video_path),
-                        ig_caption,
-                        reuse_session=True,
+            x_attempted_pre_ig = False
+            if x_upload_enabled and x_upload_before_instagram:
+                if x_upload_on_ig_failure or args.skip_instagram:
+                    x_attempted_pre_ig = _attempt_x_upload_for_video(
+                        base_video_path=video_path,
                         game_mode=game_mode,
+                        actual_day_number=actual_day_number,
+                        day_value=day_value,
+                        base_caption=base_caption,
+                        pre_ig_mode=True,
                     )
-                )
+                else:
+                    print(
+                        f"[INFO] X: Pre-IG order requested but IG-success gating is active for {video_path.name}; "
+                        "deferring X upload until IG result is known."
+                    )
+
+            ig_ok = False
+            if args.skip_instagram:
+                print(f"[INFO] IG: Skipping {video_path.name} (--skip-instagram)")
             else:
-                ig_ok = upload_instagram(client, video_path, ig_caption)
+                # Instagram upload
+                print(f"[INFO] IG: Uploading {video_path.name}")
+                if args.ig_uploader == "safe":
+                    ig_ok = bool(
+                        ig_safe.upload_reel(
+                            str(video_path),
+                            ig_caption,
+                            reuse_session=True,
+                            game_mode=game_mode,
+                        )
+                    )
+                else:
+                    ig_ok = upload_instagram(client, video_path, ig_caption)
 
             if fb_upload_enabled and (ig_ok or fb_upload_on_ig_failure):
                 if not ig_ok and fb_upload_on_ig_failure:
@@ -1875,6 +3298,188 @@ def main():
             elif game_mode in skip_youtube_modes:
                 print(f"Skipping YouTube upload for {game_mode} (config.YOUTUBE_SKIP_GAME_MODES).")
 
+            # Snapchat upload
+            if snap_upload_enabled and (ig_ok or snap_upload_on_ig_failure):
+                if not ig_ok and snap_upload_on_ig_failure:
+                    print(
+                        f"[WARN] IG upload not confirmed for {video_path.name}; "
+                        "attempting Snapchat upload anyway (SNAPCHAT_UPLOAD_ON_IG_FAILURE)."
+                    )
+
+                if snap_use_non_ig_variant:
+                    snapchat_video_path = resolve_platform_video_path(
+                        base_video_path=video_path,
+                        platform="snapchat",
+                        game_mode=game_mode,
+                        day_number=actual_day_number,
+                    )
+                else:
+                    snapchat_video_path = video_path
+
+                if snapchat_video_path is None:
+                    print(f"[WARN] Snapchat: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    dedupe_key = f"{actual_day_number}:{game_mode}:{snapchat_video_path.name}"
+                    if dedupe_key in snapchat_uploaded_keys:
+                        print(f"[INFO] Snapchat: Skipping duplicate upload key {dedupe_key}")
+                    else:
+                        print(f"[INFO] Snapchat: Uploading {snapchat_video_path.name}")
+                        if snap_uploader == "safe":
+                            snap_text = build_snapchat_post_text(
+                                caption=base_caption,
+                                game_mode=game_mode,
+                                day_number=day_value,
+                            )
+                            safe_ok = bool(
+                                snap_safe and snap_safe.upload_post(
+                                    video_path=snapchat_video_path,
+                                    text=snap_text,
+                                    reuse_session=True,
+                                    spotlight_only=snap_safe_spotlight_only,
+                                )
+                            )
+                            if safe_ok:
+                                print("[OK] Snapchat posted via safe uploader (Spotlight).")
+                            else:
+                                print(f"[WARN] Snapchat safe upload failed for {snapchat_video_path.name}")
+                        else:
+                            snap_result = upload_snapchat(
+                                video_path=snapchat_video_path,
+                                game_mode=game_mode,
+                                day_number=day_value,
+                                caption=base_caption,
+                                profile_id=snap_profile_id,
+                                client_id=snap_client_id,
+                                client_secret=snap_client_secret,
+                                redirect_uri=snap_redirect_uri,
+                                access_token_path=snap_access_token_path,
+                                refresh_token_path=snap_refresh_token_path,
+                                scope=snap_scope,
+                                api_base=snap_api_base,
+                                enable_story_post=snap_story_enabled,
+                                enable_spotlight_post=snap_spotlight_enabled,
+                                spotlight_locale=snap_spotlight_locale,
+                                spotlight_skip_save_to_profile=snap_spotlight_skip_save,
+                                retry_count=snap_retry_count,
+                                timeout_seconds=snap_timeout_seconds,
+                                logger=print,
+                            )
+                            if snap_result.get("ok"):
+                                story_id = str(((snap_result.get("story") or {}).get("id") or "")).strip()
+                                spotlight_id = str(((snap_result.get("spotlight") or {}).get("id") or "")).strip()
+                                print(
+                                    f"[OK] Snapchat posted: media_id={snap_result.get('media_id')}, "
+                                    f"story_id={story_id or '-'}, spotlight_id={spotlight_id or '-'}"
+                                )
+                            else:
+                                errors = snap_result.get("errors") or []
+                                print(f"[WARN] Snapchat upload failed for {snapchat_video_path.name}: {errors}")
+                        snapchat_uploaded_keys.add(dedupe_key)
+
+            # X upload
+            if x_upload_enabled and not x_attempted_pre_ig and (ig_ok or x_upload_on_ig_failure):
+                if not ig_ok and x_upload_on_ig_failure:
+                    print(
+                        f"[WARN] IG upload not confirmed for {video_path.name}; "
+                        "attempting X upload anyway (X_UPLOAD_ON_IG_FAILURE)."
+                    )
+                _attempt_x_upload_for_video(
+                    base_video_path=video_path,
+                    game_mode=game_mode,
+                    actual_day_number=actual_day_number,
+                    day_value=day_value,
+                    base_caption=base_caption,
+                    pre_ig_mode=False,
+                )
+
+            # Lemon8 upload
+            if lemon8_upload_enabled and (ig_ok or lemon8_upload_on_ig_failure):
+                if not ig_ok and lemon8_upload_on_ig_failure:
+                    print(
+                        f"[WARN] IG upload not confirmed for {video_path.name}; "
+                        "attempting Lemon8 upload anyway (LEMON8_UPLOAD_ON_IG_FAILURE)."
+                    )
+
+                if lemon8_use_non_ig_variant:
+                    lemon8_video_path = resolve_platform_video_path(
+                        base_video_path=video_path,
+                        platform="lemon8",
+                        game_mode=game_mode,
+                        day_number=actual_day_number,
+                    )
+                else:
+                    lemon8_video_path = video_path
+
+                if lemon8_video_path is None:
+                    print(f"[WARN] Lemon8: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    dedupe_key = f"{actual_day_number}:{game_mode}:{lemon8_video_path.name}"
+                    if dedupe_key in lemon8_uploaded_keys:
+                        print(f"[INFO] Lemon8: Skipping duplicate upload key {dedupe_key}")
+                    else:
+                        print(f"[INFO] Lemon8: Uploading {lemon8_video_path.name}")
+                        lemon8_text = build_lemon8_post_text(
+                            caption=base_caption,
+                            game_mode=game_mode,
+                            day_number=day_value,
+                        )
+                        lemon8_ok = bool(
+                            lemon8_safe and lemon8_safe.upload_post(
+                                video_path=lemon8_video_path,
+                                text=lemon8_text,
+                                reuse_session=True,
+                            )
+                        )
+                        if lemon8_ok:
+                            print("[OK] Lemon8 posted via safe uploader.")
+                        else:
+                            print(f"[WARN] Lemon8 upload failed for {lemon8_video_path.name}")
+                        lemon8_uploaded_keys.add(dedupe_key)
+
+            # Rednote upload
+            if rednote_upload_enabled and (ig_ok or rednote_upload_on_ig_failure):
+                if not ig_ok and rednote_upload_on_ig_failure:
+                    print(
+                        f"[WARN] IG upload not confirmed for {video_path.name}; "
+                        "attempting Rednote upload anyway (REDNOTE_UPLOAD_ON_IG_FAILURE)."
+                    )
+
+                if rednote_use_non_ig_variant:
+                    rednote_video_path = resolve_platform_video_path(
+                        base_video_path=video_path,
+                        platform="rednote",
+                        game_mode=game_mode,
+                        day_number=actual_day_number,
+                    )
+                else:
+                    rednote_video_path = video_path
+
+                if rednote_video_path is None:
+                    print(f"[WARN] Rednote: Skipping {video_path.name} because non-IG variant is unavailable.")
+                else:
+                    dedupe_key = f"{actual_day_number}:{game_mode}:{rednote_video_path.name}"
+                    if dedupe_key in rednote_uploaded_keys:
+                        print(f"[INFO] Rednote: Skipping duplicate upload key {dedupe_key}")
+                    else:
+                        print(f"[INFO] Rednote: Uploading {rednote_video_path.name}")
+                        rednote_text = build_rednote_post_text(
+                            caption=base_caption,
+                            game_mode=game_mode,
+                            day_number=day_value,
+                        )
+                        rednote_ok = bool(
+                            rednote_safe and rednote_safe.upload_post(
+                                video_path=rednote_video_path,
+                                text=rednote_text,
+                                reuse_session=True,
+                            )
+                        )
+                        if rednote_ok:
+                            print("[OK] Rednote posted via safe uploader.")
+                        else:
+                            print(f"[WARN] Rednote upload failed for {rednote_video_path.name}")
+                        rednote_uploaded_keys.add(dedupe_key)
+
             # Delay before next upload (except after last one)
             if idx < len(video_paths) - 1:
                 delay_seconds = None
@@ -1907,6 +3512,14 @@ def main():
     finally:
         if ig_safe:
             ig_safe.close_session()
+        if snap_safe:
+            snap_safe.close_session()
+        if x_safe:
+            x_safe.close_session()
+        if lemon8_safe:
+            lemon8_safe.close_session()
+        if rednote_safe:
+            rednote_safe.close_session()
         if ig_export:
             ig_export.close_session()
 
