@@ -12,6 +12,7 @@ import random
 from PIL import Image
 
 from battle_royale.follower import Follower
+from shared.avatar_initials import draw_avatar_initials
 from .combat import ATTACKS, AttackSpec, HitShape, Projectile, spawn_sparks
 from .camera_fx import AfterImage, AFTERIMAGE_INTERVAL, AFTERIMAGE_LIFETIME
 
@@ -48,13 +49,15 @@ class AnimeFighter(Follower):
 
         # Convert PIL avatar_image to pygame avatar_surface for rendering
         self.avatar_surface = None
+        avatar_size = self.radius * 2
         if self.avatar_image is not None:
             try:
-                avatar_size = self.radius * 2  # Diameter
                 self.avatar_surface = self._pil_to_pygame(self.avatar_image, avatar_size)
             except Exception as e:
                 print(f"Failed to load avatar for {self.username}: {e}")
                 self.avatar_surface = None
+        if self.avatar_surface is None:
+            self.avatar_surface = self._create_initials_avatar_surface(avatar_size)
 
         # Combat attributes
         self.max_hp = 280.0  # Doubled for longer, more intense matches
@@ -136,6 +139,14 @@ class AnimeFighter(Follower):
         circle_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
 
         return circle_surface
+
+    def _create_initials_avatar_surface(self, size: int) -> pygame.Surface:
+        """Create a circular fallback avatar with username initials."""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = (size // 2, size // 2)
+        pygame.draw.circle(surface, self.color, center, size // 2)
+        draw_avatar_initials(surface, self.username, center=center, diameter=size)
+        return surface
 
     def get_beam_data(self) -> Optional[dict]:
         """

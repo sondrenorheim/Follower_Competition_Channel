@@ -25,6 +25,9 @@ from shared import (
     AudioLogger,
     auto_push,
 )
+from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
+from shared.club_panel import draw_club_panel
+from shared.avatar_initials import draw_avatar_initials
 
 
 @dataclass
@@ -155,6 +158,8 @@ class MeteorMayhemGame:
         self.explosions: List[Explosion] = []
         self.player_surfaces = {}
         self.cached_radius = {}
+        self._club_glow_cache = {}
+        self.club_spotlight = None
         self.running = True
         self.game_over = False
         self.phase = "intro"  # intro -> countdown -> playing -> finished
@@ -184,6 +189,8 @@ class MeteorMayhemGame:
         self.font_big = pygame.font.Font(None, 28)
         self.font_small = pygame.font.Font(None, 18)
         self.font_mini = pygame.font.Font(None, 14)
+        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
+        self.font_club_panel = pygame.font.Font(None, club_text_size)
         self.font_promo = pygame.font.Font(None, 24)
         self.promo_text_left = "Join Discord, link in bio"
         self.promo_text_right = "Check your results in bio"
@@ -208,6 +215,7 @@ class MeteorMayhemGame:
         self.cached_radius.clear()
         colors = config.METEOR_PLAYER_COLORS
         color_count = len(colors)
+        club_members = load_club_member_set()
 
         for idx, data in enumerate(follower_data):
             player_id = data.get('id') or f"meteor_{idx}"
@@ -221,6 +229,8 @@ class MeteorMayhemGame:
                 color=color,
                 avatar_image=data.get('avatar')
             )
+            username = normalize_username(data.get("username"))
+            p.is_club_member = username in club_members
 
             # Spawn within the current safe zone
             angle = random.random() * math.pi * 2
@@ -230,6 +240,7 @@ class MeteorMayhemGame:
             p.set_spawn(spawn_x, spawn_y)
             self.players.append(p)
 
+        self.club_spotlight = select_club_spotlight(self.players)
         print(f"  Spawned {len(self.players)} players\n")
 
     # ------------------------------------------------------------------
@@ -577,17 +588,70 @@ class MeteorMayhemGame:
         return tuple(max(0, min(255, int(c * factor))) for c in color)
 
     def draw_players(self):
+        club_players = []
         for player in self.players:
             if not player.alive:
                 continue
-            surface = self._get_player_surface(player)
-            display_size = max(1, int(player.radius * 2))
-            if surface.get_width() != display_size:
-                display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
+            if getattr(player, "is_club_member", False):
+                club_players.append(player)
             else:
-                display_surface = surface
-            rect = display_surface.get_rect(center=(int(player.x), int(player.y)))
-            self.screen.blit(display_surface, rect)
+                self._draw_player(player)
+
+        for player in club_players:
+            self._draw_club_glow(player)
+            self._draw_player(player)
+
+    def _draw_player(self, player: MeteorPlayer):
+        surface = self._get_player_surface(player)
+        display_size = max(1, int(player.radius * 2))
+        if surface.get_width() != display_size:
+            display_surface = pygame.transform.smoothscale(surface, (display_size, display_size))
+        else:
+            display_surface = surface
+        rect = display_surface.get_rect(center=(int(player.x), int(player.y)))
+        self.screen.blit(display_surface, rect)
+
+    def _draw_club_glow(self, player: MeteorPlayer):
+        size = max(1, int(round(player.radius * 2)))
+        radius = max(1, size // 2)
+        color = getattr(config, "CLUB_GLOW_COLOR", (255, 240, 190))
+        alpha = int(getattr(config, "CLUB_GLOW_ALPHA", 180))
+        layers = int(getattr(config, "CLUB_GLOW_LAYERS", 3))
+        padding = int(getattr(config, "CLUB_GLOW_PADDING", 3))
+
+        cache_key = (radius, color, alpha, layers, padding)
+        surface = self._club_glow_cache.get(cache_key)
+        if surface is None:
+            glow_radius = radius + padding + layers
+            size_px = glow_radius * 2 + 4
+            surface = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
+            center = (size_px // 2, size_px // 2)
+
+            base_radius = radius + padding
+            for i in range(max(1, layers)):
+                layer_alpha = int(alpha * (1.0 - (i / max(1, layers))))
+                ring_radius = base_radius + i
+                pygame.draw.circle(
+                    surface,
+                    (*color, layer_alpha),
+                    center,
+                    ring_radius,
+                    width=2,
+                )
+
+            inner_alpha = min(255, alpha + 40)
+            pygame.draw.circle(
+                surface,
+                (*color, inner_alpha),
+                center,
+                radius + 1,
+                width=2,
+            )
+
+            self._club_glow_cache[cache_key] = surface
+
+        rect = surface.get_rect(center=(int(player.x), int(player.y)))
+        self.screen.blit(surface, rect)
 
     def _get_player_surface(self, player: MeteorPlayer) -> pygame.Surface:
         cache_key = (player.id, player.username)
@@ -613,7 +677,8 @@ class MeteorMayhemGame:
 
         border_width = max(1, int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier))
         inner_radius = max(1, render_radius - border_width)
-        show_profile_pic = player.radius >= getattr(config, 'PROFILE_PICTURE_MIN_RADIUS', 0)
+        is_club_member = getattr(player, "is_club_member", False)
+        show_profile_pic = is_club_member or player.radius >= getattr(config, 'PROFILE_PICTURE_MIN_RADIUS', 0)
 
         if player.avatar_image and show_profile_pic:
             avatar_surface = self._pil_to_pygame(player.avatar_image, render_size)
@@ -624,6 +689,12 @@ class MeteorMayhemGame:
                 player.color,
                 (render_radius, render_radius),
                 inner_radius
+            )
+            draw_avatar_initials(
+                surface,
+                player.username,
+                center=(render_radius, render_radius),
+                diameter=render_size,
             )
 
         pygame.draw.circle(
@@ -638,6 +709,13 @@ class MeteorMayhemGame:
         self.cached_radius[cache_key] = player.radius
         player.surface_needs_update = False
 
+        return surface
+
+    def _get_club_panel_avatar(self, player: MeteorPlayer, size: int) -> pygame.Surface:
+        surface = self._get_player_surface(player)
+        target = int(size)
+        if surface.get_width() != target:
+            surface = pygame.transform.smoothscale(surface, (target, target))
         return surface
 
     def _draw_circular_image(self, surface: pygame.Surface,
@@ -834,6 +912,12 @@ class MeteorMayhemGame:
             else:
                 center = (avatar_x + avatar_size // 2, avatar_y + avatar_size // 2)
                 pygame.draw.circle(panel, (40, 40, 40), center, avatar_size // 2)
+                draw_avatar_initials(
+                    panel,
+                    username,
+                    center=center,
+                    diameter=avatar_size,
+                )
                 pygame.draw.circle(panel, (220, 220, 230), center, avatar_size // 2, 1)
 
             name_text = self.font_mini.render(username, True, (240, 240, 245))
@@ -896,6 +980,15 @@ class MeteorMayhemGame:
         alive_text = self.font_stats.render(f"Alive: {alive}/{total}", True, config.COLOR_TEXT)
         alive_rect = alive_text.get_rect(center=(self.width // 2, int(arena_bottom + 55)))
         self.screen.blit(alive_text, alive_rect)
+
+        draw_club_panel(
+            self.screen,
+            self.club_spotlight,
+            anchor_y=alive_rect.bottom,
+            font=self.font_club_panel,
+            get_avatar_surface=self._get_club_panel_avatar,
+            glow_cache=self._club_glow_cache,
+        )
 
         if self.phase == "countdown":
             countdown_text = self.font_title.render(str(self.countdown_number), True, (255, 200, 120))

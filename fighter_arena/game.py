@@ -23,6 +23,7 @@ from shared import (
     AudioLogger,
     auto_push
 )
+from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
 from .fighter import Fighter
 from .arena import FighterArena
 from .renderer import FighterRenderer
@@ -81,6 +82,7 @@ class FighterBattleArena:
 
         # Game state
         self.fighters: List[Fighter] = []
+        self.active_fighters: List[Fighter] = []
         self.running = True
         self.game_over = False
         self.game_start_time = time.time()
@@ -107,14 +109,18 @@ class FighterBattleArena:
         # Statistics
         self.total_eliminations = 0
         self.last_alive_count = 0
+        self.current_alive_count = 0
 
         # Dynamic scaling tracking
         self.initial_total_players = 0
         self.last_fighter_radius = config.FOLLOWER_RADIUS
+        self.update_frame_counter = 0
+        self.update_batches_per_frame = max(1, int(getattr(config, "UPDATE_BATCHES_PER_FRAME", 4)))
 
         # Leaderboard data
         self.current_game_leaderboard = []
         self.all_time_leaderboard = []
+        self.club_spotlight = None
 
         print("✅ Fighter Arena initialized!\n")
 
@@ -135,19 +141,25 @@ class FighterBattleArena:
 
         # Place fighters randomly in arena
         arena_rect = self.arena.get_rect()
+        club_members = load_club_member_set()
 
         for data in follower_data:
             # Random position within arena
             x, y = self.arena.get_random_position(config.FOLLOWER_RADIUS)
 
             fighter = Fighter(data, (x, y))
+            username = normalize_username(data.get("username"))
+            fighter.is_club_member = username in club_members
             self.fighters.append(fighter)
 
         # Randomize fighter update order to ensure fair attack priority
         random.shuffle(self.fighters)
+        self.active_fighters = list(self.fighters)
 
         # Store initial values for dynamic scaling
         self.initial_total_players = len(self.fighters)
+
+        self.club_spotlight = select_club_spotlight(self.fighters)
 
         # Calculate initial dynamic radius
         if config.USE_DYNAMIC_SCALING:
@@ -168,6 +180,34 @@ class FighterBattleArena:
             print(f"🔧 Dynamic scaling: fighter radius = {initial_radius:.1f}px")
 
         print(f"✅ {len(self.fighters)} fighters ready for battle!\n")
+
+    def _prune_inactive_fighters(self, current_time: float) -> None:
+        """
+        Keep only alive fighters and fighters still fading out in the active list.
+        """
+        fade_cutoff = current_time - float(getattr(config, "FADE_DURATION", 0.5))
+        self.active_fighters = [
+            fighter for fighter in self.active_fighters
+            if fighter.alive or fighter.elimination_time >= fade_cutoff
+        ]
+
+    def _get_alive_update_batch(self, alive_fighters: List[Fighter]) -> List[Fighter]:
+        """
+        Return the subset of alive fighters to update this frame.
+        """
+        if not alive_fighters:
+            return []
+
+        if not getattr(config, "ENABLE_UPDATE_THROTTLING", False) or len(alive_fighters) <= 5000:
+            return alive_fighters
+
+        self.update_frame_counter += 1
+        batch_count = max(1, self.update_batches_per_frame)
+        batch_index = self.update_frame_counter % batch_count
+        batch_size = (len(alive_fighters) + batch_count - 1) // batch_count
+        start_idx = batch_index * batch_size
+        end_idx = min(start_idx + batch_size, len(alive_fighters))
+        return alive_fighters[start_idx:end_idx]
 
     def _get_recording_speed_multiplier(self) -> float:
         if not config.EXPORT_VIDEO:
@@ -233,6 +273,7 @@ class FighterBattleArena:
             return
 
         current_time = time.time()
+        self._prune_inactive_fighters(current_time)
 
         # Handle countdown phase
         if self.game_phase == "countdown":
@@ -281,8 +322,10 @@ class FighterBattleArena:
                 print(f"⚔️  [{time_module.time():.2f}] COMBAT ENABLED! (delay: {delay_duration:.2f}s, elapsed: {time_since_combat_start:.2f}s)")
                 self._combat_enabled_logged = True
 
-        # Precompute alive count once per frame (avoid O(n^2) alive scans inside each fighter)
-        alive_count_hint = sum(1 for f in self.fighters if f.alive)
+        # Precompute alive fighters once per frame.
+        alive_fighters = [f for f in self.active_fighters if f.alive]
+        alive_count_hint = len(alive_fighters)
+        self.current_alive_count = alive_count_hint
         simplified_mode = self._is_simplified_mode(alive_count_hint)
         if simplified_mode:
             combat_enabled = False
@@ -297,26 +340,41 @@ class FighterBattleArena:
             print(f"🎮 [{time_module.time():.2f}] Phase: {self.game_phase} | Combat: {'ENABLED' if combat_enabled else 'DISABLED'}")
             self._last_combat_state = combat_enabled
 
-        for fighter in self.fighters:
+        alive_to_update = self._get_alive_update_batch(alive_fighters)
+        for fighter in alive_to_update:
             # Always use fighter-specific update (no zone avoidance)
             fighter.update_fighter(
                 dt,
                 arena_rect,
-                self.fighters,
+                alive_fighters,
                 current_time,
                 combat_enabled,
                 alive_count_hint,
                 simplified_mode=simplified_mode,
             )
 
+        # Keep dead fighters fading smoothly until they are pruned.
+        for fighter in self.active_fighters:
+            if fighter.alive:
+                continue
+            fighter.update_fighter(
+                dt,
+                arena_rect,
+                alive_fighters,
+                current_time,
+                combat_enabled=False,
+                alive_count_hint=alive_count_hint,
+                simplified_mode=simplified_mode,
+            )
+
         if not simplified_mode:
             # Physics: collision detection and overlap resolution
-            self.physics.update(self.fighters, current_time)
+            self.physics.update(alive_fighters, current_time)
             # Overlap resolution is expensive; skip it for massive crowds and use gentle separation instead
-            if len(self.fighters) < 10000:
-                self.physics.resolve_overlaps(self.fighters)
+            if len(alive_fighters) < 10000:
+                self.physics.resolve_overlaps(alive_fighters)
             else:
-                self.physics.apply_separation_force(self.fighters, strength=0.1)
+                self.physics.apply_separation_force(alive_fighters, strength=0.1)
 
         # Update particles
         self.particles.update(dt)
@@ -326,13 +384,12 @@ class FighterBattleArena:
 
         # Only do game logic during PLAYING phase
         if self.game_phase == "playing":
-            # Check for eliminations
-            alive_fighters = [f for f in self.fighters if f.alive]
             if simplified_mode:
                 eliminated = self._apply_random_eliminations(alive_fighters, dt)
                 if eliminated:
-                    alive_fighters = [f for f in self.fighters if f.alive]
+                    alive_fighters = [f for f in alive_fighters if f.alive]
             alive_count = len(alive_fighters)
+            self.current_alive_count = alive_count
 
             if config.EXPORT_VIDEO and self.background_music_start_time is None:
                 if self._should_delay_music_until_speedup_end():
@@ -352,12 +409,14 @@ class FighterBattleArena:
 
                 # Invalidate surfaces when radius changes (even slightly)
                 if abs(new_radius - self.last_fighter_radius) > 0.01:
-                    for fighter in self.fighters:
+                    for fighter in self.active_fighters:
                         fighter.surface_needs_update = True
 
                     # Clear the renderer's cache to force complete regeneration
                     self.renderer.fighter_surfaces.clear()
                     self.renderer.cached_radius.clear()
+                    self.renderer.fighter_display_surfaces.clear()
+                    self.renderer.cached_display_radius.clear()
 
                     self.last_fighter_radius = new_radius
 
@@ -388,20 +447,26 @@ class FighterBattleArena:
         """
         Render current game state
         """
+        if self.current_alive_count <= 0 and self.active_fighters:
+            self.current_alive_count = sum(1 for f in self.active_fighters if f.alive)
+
         game_state = {
             "game_over": self.game_over,
             "total_eliminations": self.total_eliminations,
             "game_phase": self.game_phase,
             "countdown_number": self.countdown_number,
             "day_number": getattr(config, 'DAY_NUMBER', 1),
+            "alive_count": self.current_alive_count,
+            "total_count": len(self.fighters),
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "all_followers": self.fighters,
             "speedup_active": config.EXPORT_VIDEO and self._get_recording_speed_multiplier() > 1.0,
             "speedup_factor": self.export_speedup_factor,
+            "club_spotlight": self.club_spotlight,
         }
 
-        self.renderer.render_frame(self.fighters, self.arena, game_state, self.particles)
+        self.renderer.render_frame(self.active_fighters, self.arena, game_state, self.particles)
 
         # Record frame (only from countdown onwards)
         if self.game_phase in ("countdown", "playing", "finished"):
@@ -533,6 +598,7 @@ class FighterBattleArena:
         # Setup
         self.setup_fighters()
         self.last_alive_count = len(self.fighters)
+        self.current_alive_count = len(self.fighters)
 
         # Start audio logging
         self.audio_logger.start()
@@ -579,11 +645,28 @@ class FighterBattleArena:
             # Update fighters during intro (no combat, just movement)
             arena_rect = self.arena.get_rect()
             current_time = time.time()
-            for fighter in self.fighters:
+            self._prune_inactive_fighters(current_time)
+            alive_intro_fighters = [f for f in self.active_fighters if f.alive]
+            alive_intro_to_update = self._get_alive_update_batch(alive_intro_fighters)
+            self.current_alive_count = len(alive_intro_fighters)
+
+            for fighter in alive_intro_to_update:
                 fighter.update_fighter(
                     dt,
                     arena_rect,
-                    self.fighters,
+                    alive_intro_fighters,
+                    current_time,
+                    combat_enabled=False,
+                    simplified_mode=simplified_mode,
+                )
+
+            for fighter in self.active_fighters:
+                if fighter.alive:
+                    continue
+                fighter.update_fighter(
+                    dt,
+                    arena_rect,
+                    alive_intro_fighters,
                     current_time,
                     combat_enabled=False,
                     simplified_mode=simplified_mode,
@@ -591,11 +674,11 @@ class FighterBattleArena:
 
             if not simplified_mode:
                 # Physics: collision detection and overlap resolution
-                self.physics.update(self.fighters, current_time)
-                if len(self.fighters) < 10000:
-                    self.physics.resolve_overlaps(self.fighters)
+                self.physics.update(alive_intro_fighters, current_time)
+                if len(alive_intro_fighters) < 10000:
+                    self.physics.resolve_overlaps(alive_intro_fighters)
                 else:
-                    self.physics.apply_separation_force(self.fighters, strength=0.1)
+                    self.physics.apply_separation_force(alive_intro_fighters, strength=0.1)
 
             self.particles.update(dt)
             self.sound.update_music_volume()

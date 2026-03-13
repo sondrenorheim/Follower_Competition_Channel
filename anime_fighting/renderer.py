@@ -16,6 +16,7 @@ from typing import List, Tuple, Optional
 import pygame
 
 import config
+from shared.avatar_initials import draw_avatar_initials
 from .camera_fx import (
     draw_particles, draw_afterimages, draw_hitfields, draw_projectiles, clamp
 )
@@ -953,11 +954,23 @@ class AnimeFightingRenderer:
                 # Fallback circle
                 pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
                                  (avatar_x, y), avatar_size // 2)
+                draw_avatar_initials(
+                    self.screen,
+                    fighter.username if hasattr(fighter, "username") else "",
+                    center=(avatar_x, y),
+                    diameter=avatar_size,
+                )
                 pygame.draw.circle(self.screen, color, (avatar_x, y), avatar_size // 2 + 2, 2)
         else:
             # Fallback circle
             pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
                              (avatar_x, y), avatar_size // 2)
+            draw_avatar_initials(
+                self.screen,
+                fighter.username if hasattr(fighter, "username") else "",
+                center=(avatar_x, y),
+                diameter=avatar_size,
+            )
             pygame.draw.circle(self.screen, color, (avatar_x, y), avatar_size // 2 + 2, 2)
 
         # Right section: Name and title
@@ -1319,10 +1332,22 @@ class AnimeFightingRenderer:
                 # Fallback: draw colored circle
                 pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
                                  (x + size // 2, y + size // 2), size // 2 - 2)
+                draw_avatar_initials(
+                    self.screen,
+                    fighter.username if hasattr(fighter, "username") else "",
+                    center=(x + size // 2, y + size // 2),
+                    diameter=size,
+                )
         else:
             # No avatar: draw colored circle
             pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else (100, 100, 255),
                              (x + size // 2, y + size // 2), size // 2 - 2)
+            draw_avatar_initials(
+                self.screen,
+                fighter.username if hasattr(fighter, "username") else "",
+                center=(x + size // 2, y + size // 2),
+                diameter=size,
+            )
 
         # Border
         pygame.draw.rect(self.screen, border_color, (x, y, size, size), border_width, border_radius=4)
@@ -1430,10 +1455,22 @@ class AnimeFightingRenderer:
                 # Fallback to colored circle
                 pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else white,
                                  (avatar_x + avatar_size // 2, y + item_height // 2), avatar_size // 2)
+                draw_avatar_initials(
+                    self.screen,
+                    fighter.username if hasattr(fighter, "username") else "",
+                    center=(avatar_x + avatar_size // 2, y + item_height // 2),
+                    diameter=avatar_size,
+                )
         else:
             # Colored circle fallback
             pygame.draw.circle(self.screen, fighter.color if hasattr(fighter, 'color') else white,
                              (avatar_x + avatar_size // 2, y + item_height // 2), avatar_size // 2)
+            draw_avatar_initials(
+                self.screen,
+                fighter.username if hasattr(fighter, "username") else "",
+                center=(avatar_x + avatar_size // 2, y + item_height // 2),
+                diameter=avatar_size,
+            )
 
         # Fighter name
         name = fighter.username[:10] if hasattr(fighter, 'username') else "Unknown"

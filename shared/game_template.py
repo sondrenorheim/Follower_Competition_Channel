@@ -126,6 +126,7 @@ class GameTemplate:
 
         # Preload audio
         self.sound.preload_audio()
+        self.recorder.background_music_path = self.sound.background_music_path
 
         # Game state
         self.players: List[Any] = []  # Override type hint with your player class

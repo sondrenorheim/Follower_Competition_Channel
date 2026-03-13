@@ -10,6 +10,7 @@ import os
 from typing import List, Tuple, Optional
 from PIL import Image
 import config
+from shared.avatar_initials import draw_avatar_initials
 
 
 def _lerp(a: float, b: float, t: float) -> float:
@@ -798,6 +799,12 @@ class GorillasRenderer:
                 follower.color,
                 (render_radius, render_radius),
                 render_radius - int(config.FOLLOWER_BORDER_WIDTH * upscale_multiplier)
+            )
+            draw_avatar_initials(
+                surface,
+                follower.username,
+                center=(render_radius, render_radius),
+                diameter=render_size,
             )
 
         # Draw black border

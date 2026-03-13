@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 from PIL import Image
 
 import config
+from shared.avatar_initials import draw_avatar_initials
 from .team_fighter import TeamFighter, Team, TEAM_COLORS
 from .team_arena import TeamArena
 
@@ -240,6 +241,12 @@ class TeamBattleRenderer:
                     (render_radius, render_radius),
                     inner_radius
                 )
+                draw_avatar_initials(
+                    surface,
+                    fighter.username,
+                    center=(render_radius, render_radius),
+                    diameter=inner_radius * 2,
+                )
         else:
             # Always use team_color for inner circle to ensure consistent team appearance
             pygame.draw.circle(
@@ -247,6 +254,12 @@ class TeamBattleRenderer:
                 fighter.team_color,
                 (render_radius, render_radius),
                 inner_radius
+            )
+            draw_avatar_initials(
+                surface,
+                fighter.username,
+                center=(render_radius, render_radius),
+                diameter=inner_radius * 2,
             )
 
         # Cache

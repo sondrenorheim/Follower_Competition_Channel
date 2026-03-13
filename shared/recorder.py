@@ -53,6 +53,7 @@ class VideoRecorder:
         self.background_music_start_time = None
         self.include_background_music = True
         self.music_segments = []
+        self.background_music_path = None
 
         # Custom countdown audio path (empty string disables countdown audio)
         if countdown_audio_path is None:
@@ -386,8 +387,10 @@ class VideoRecorder:
             mixed_audio = AudioSegment.silent(duration=int(video_duration * 1000))
 
             # Audio file paths (cached WAV files)
+            background_default = 'assets/sydney_tour_music.wav'
+            background_override = getattr(self, "background_music_path", None) or background_default
             audio_files = {
-                'background': 'assets/sydney_tour_music.wav',
+                'background': background_override,
             }
             base_dir = Path(__file__).resolve().parents[1]
             background_path = Path(audio_files['background'])

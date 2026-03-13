@@ -148,7 +148,7 @@ export default function Header() {
                       href="https://buymeacoffee.com/followerbattlegrounds/membership"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="col-start-3 row-start-2 flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-[#120b03] font-bold rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg text-xs sm:text-sm whitespace-nowrap"
+                      className="col-start-3 row-start-3 flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-[#120b03] font-bold rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg text-xs sm:text-sm whitespace-nowrap"
                     >
                       👑 The Club
                     </a>
@@ -183,4 +183,3 @@ export default function Header() {
     </header>
   );
 }
-

@@ -7,10 +7,12 @@ import config
 
 class MazeRushPlayer:
     def __init__(self, follower_data: dict, start_cell: Tuple[int, int],
-                 start_pos: Tuple[float, float], rng_seed: int, size: float = None):
+                 start_pos: Tuple[float, float], rng_seed: int,
+                 size: float = None, is_club_member: bool = False):
         self.username = follower_data.get("username", "")
         self.avatar_image = follower_data.get("avatar_image") or follower_data.get("avatar")
         self.color = follower_data.get("color", random.choice(config.RANDOM_COLORS))
+        self.is_club_member = bool(is_club_member)
 
         if size is None:
             size = float(getattr(config, "MAZE_RUSH_PLAYER_SIZE", 12))

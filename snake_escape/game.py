@@ -24,6 +24,7 @@ from shared import (
     PhysicsEngine,
     auto_push
 )
+from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
 
 from .arena import SnakeEscapeArena
 from .snake import Snake
@@ -116,6 +117,7 @@ class SnakeEscapeGame:
         # Statistics
         self.total_eliminations = 0
         self.initial_follower_count = 0
+        self.club_spotlight = None
 
         # Performance optimization - update throttling for large player counts
         self.update_frame_counter = 0
@@ -137,6 +139,8 @@ class SnakeEscapeGame:
 
         # Store initial count for dynamic scaling
         self.initial_follower_count = len(follower_data)
+
+        club_members = load_club_member_set()
 
         # Calculate initial dynamic radius based on player count
         if config.USE_DYNAMIC_SCALING:
@@ -160,8 +164,11 @@ class SnakeEscapeGame:
         for data in follower_data:
             position = self.arena.get_random_position(config.FOLLOWER_RADIUS + 10)
             follower = SnakeEscapeFollower(data, position)
+            username = normalize_username(data.get("username"))
+            follower.is_club_member = username in club_members
             self.followers.append(follower)
 
+        self.club_spotlight = select_club_spotlight(self.followers)
         print(f"{len(self.followers)} {self.PLAYER_LABEL} ready!\n")
 
     def spawn_snakes(self):
@@ -320,6 +327,7 @@ class SnakeEscapeGame:
             'current_game_leaderboard': self.current_game_leaderboard,
             'all_time_leaderboard': self.all_time_leaderboard,
             'winner': self.winner,
+            'club_spotlight': self.club_spotlight,
         }
 
         self.renderer.render_frame(self.followers, game_state)

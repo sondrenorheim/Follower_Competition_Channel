@@ -3,10 +3,15 @@ Sound Manager Module
 Handles all sound effects and music for the battle royale game
 """
 
-import pygame
+import hashlib
 import math
-import numpy as np
+import os
+import re
+from pathlib import Path
 from typing import Optional
+
+import numpy as np
+import pygame
 
 import config
 
@@ -32,19 +37,20 @@ class SoundManager:
         self.music_channel = pygame.mixer.Channel(1)
         self.announcer_channel = pygame.mixer.Channel(2)
 
-        # Check if running in headless mode (mute playback but still log events)
-        import config
+        # Mute local playback when running headless or when explicitly requested.
         headless = getattr(config, 'HEADLESS_MODE', False)
+        mute_local_audio = getattr(config, 'MUTE_LOCAL_GAME_AUDIO', False)
+        self.local_audio_muted = bool(headless or mute_local_audio)
 
-        # Volume settings (muted in headless mode, but audio logger still works)
-        self.master_volume = 0.0 if headless else 0.5
-        self.sfx_volume = 0.0 if headless else 0.7
-        self.music_volume = 0.0 if headless else 0.3
-        self.announcer_volume = 0.0 if headless else 0.8
+        # Volume settings (audio logger still works even when local playback is muted)
+        self.master_volume = 0.0 if self.local_audio_muted else 0.5
+        self.sfx_volume = 0.0 if self.local_audio_muted else 0.7
+        self.music_volume = 0.0 if self.local_audio_muted else 0.3
+        self.announcer_volume = 0.0 if self.local_audio_muted else 0.8
 
         # Background music volume levels
-        self.music_volume_low = 0.0 if headless else 0.15   # During announcer speaking
-        self.music_volume_high = 0.0 if headless else 0.4   # During gameplay
+        self.music_volume_low = 0.0 if self.local_audio_muted else 0.15   # During announcer speaking
+        self.music_volume_high = 0.0 if self.local_audio_muted else 0.4   # During gameplay
         self.current_music_volume = self.music_volume_low
         self.target_music_volume = self.music_volume_low
 
@@ -338,11 +344,17 @@ class SoundManager:
 
     def _preload_background_music(self):
         """Preload and convert background music to WAV"""
-        music_cache = "assets/sydney_tour_music.wav"
+        raw_path = self.background_music_path
+        if raw_path:
+            stem = Path(raw_path).stem
+        else:
+            stem = "background_music"
+        safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_") or "background_music"
+        cache_hash = hashlib.md5((raw_path or "").encode("utf-8")).hexdigest()[:8]
+        music_cache = f"assets/{safe_stem}_{cache_hash}.wav"
+        self.background_music_cache_path = music_cache
 
         try:
-            import os
-
             # Check if we have a cached audio file
             if os.path.exists(music_cache):
                 self.background_music_path = music_cache
@@ -516,6 +528,9 @@ class SoundManager:
 
     def play_smash_countdown_audio(self):
         """Play the Smash Ultimate countdown audio"""
+        if self.local_audio_muted:
+            print("Audio muted: smash countdown playback disabled for local processing")
+            return
         if self.smash_countdown_sound:
             self.smash_countdown_sound.set_volume(self.announcer_volume * self.master_volume)
             self.announcer_channel.play(self.smash_countdown_sound)
@@ -534,6 +549,10 @@ class SoundManager:
                 print(f"🎵 Background music skipped during simulation (will be added during video export)")
                 return
 
+            if self.local_audio_muted:
+                print("Audio muted: background music playback disabled for local processing")
+                return
+
             if os.path.exists(self.background_music_path):
                 pygame.mixer.music.load(self.background_music_path)
                 pygame.mixer.music.set_volume(self.current_music_volume * self.master_volume)
@@ -550,6 +569,10 @@ class SoundManager:
         # Skip intro audio during simulation if we're exporting video
         if config.EXPORT_VIDEO:
             print(f"🔊 Intro audio skipped during simulation (not needed for video)")
+            return
+
+        if self.local_audio_muted:
+            print("Audio muted: intro playback disabled for local processing")
             return
 
         import threading
@@ -582,6 +605,9 @@ class SoundManager:
 
     def play_countdown_audio(self):
         """Play the countdown video audio"""
+        if self.local_audio_muted:
+            print("Audio muted: countdown playback disabled for local processing")
+            return
         if self.countdown_sound:
             self.countdown_sound.set_volume(self.announcer_volume * self.master_volume)
             self.announcer_channel.play(self.countdown_sound)
@@ -620,6 +646,10 @@ class SoundManager:
 
     def _init_tts(self):
         """Initialize text-to-speech engine"""
+        if self.local_audio_muted:
+            self.tts_engine = None
+            print("Audio muted: TTS disabled for local processing")
+            return
         try:
             import pyttsx3
             self.tts_engine = pyttsx3.init()
@@ -643,6 +673,9 @@ class SoundManager:
         # Log TTS event for post-processing
         if self.audio_logger:
             self.audio_logger.log_tts(text, wait)
+
+        if self.local_audio_muted:
+            return
 
         if self.tts_engine:
             try:
@@ -674,6 +707,9 @@ class SoundManager:
         Args:
             volume: Volume level (0.0 to 1.0)
         """
+        if self.local_audio_muted:
+            self.master_volume = 0.0
+            return
         self.master_volume = max(0.0, min(1.0, volume))
 
     def stop(self):

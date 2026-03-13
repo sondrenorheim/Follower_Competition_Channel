@@ -1,0 +1,31 @@
+﻿Here is a longer, reader-friendly presentation script:
+
+---
+
+One exciting thing I have been working on during the last couple of months here in Kongsvinger is a project that is running right now as we speak. Around October I came across Instagram videos where a channel had all their followers compete in a simple race course. They would post one video each day with the results, and the audience loved it. I realized they must be using code to make it happen, and I thought, why not build my own version?
+
+So I did. I created an Instagram channel where my followers compete against each other. The idea is similar, but I wanted to make it more interesting than just one race course. Instead of a single game, I built a whole collection of games: a fighter arena, a platformer race, a labyrinth race, mini golf, and even a Flappy Bird-style game. The fun part is that the same followers can show up in different challenges each day.
+
+The best way to describe it is: this project is a daily competition engine. Every day it goes through a full cycle. It collects the latest followers, updates their profile pictures so they appear as themselves in the games, runs a lineup of different competitions, saves all the results, exports short vertical videos, and then posts those videos online. After that, it prepares the next day’s roster so it can do it all again.
+
+What makes it special is that it looks like a fun social media channel, but behind the scenes it is a full system that runs 24/7. It is basically a content factory that creates a new set of games and results every day without me having to manually do everything.
+
+At the moment, the channel has around 10 million total views, about 150,000 followers, and it gains roughly 2,500 new followers per day. Because of that scale, the amount of data is huge. There are more than 10 games a day, with 150,000 players in each game, and each player has multiple stats. After more than 75 days of results, the total data has grown into the billions of values. That means the system has to be efficient and accurate, because if anything is wrong, the followers notice quickly.
+
+Even though the viewers see only the videos, the project has many parts working together. Here is the simple version:
+- It gathers follower lists safely so the same people can play.
+- It stores profile pictures locally so videos load fast.
+- It runs different game simulations designed for vertical video.
+- It saves placements and points for long-term rankings.
+- It updates a website and a Discord bot so people can check their stats.
+- It automatically uploads new videos on schedule.
+
+For someone without a programming background, the easiest comparison is this: imagine a sports league that runs itself. It signs up the players, schedules the matches, records the scores, publishes highlights, and updates the scoreboard every day. That is basically what this system does, but with social media followers and digital games.
+
+From an interview or skills perspective, I learned and used a lot of tools to make this possible. I worked with Python for the game engine, GitHub for version control, React for the website, and services like Cloudflare and Meta developer tools to handle webhooks and integrations. I also had to think about automation, data organization, and performance because the project is so large.
+
+I could go even deeper into the details, but the short version is this: I turned a fun idea I saw online into a full daily production system that runs on its own. It creates games, generates videos, stores massive amounts of data, and builds a community around it. And it is all built from scratch by me, using the skills I have been growing over the last few months.
+
+---
+
+If you want this adjusted for tone, length, or a specific audience, I can tailor it.

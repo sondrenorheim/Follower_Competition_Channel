@@ -17,7 +17,7 @@ class MingleRenderer(RendererTemplate):
 
     GAME_TITLE = "MINGLE"
     GAME_SUBTITLE = "Making my Discord Members battle every day"
-    GAME_SUBTITLE_LINE2 = "Join the Discord server to enter the next battle. Link in bio"
+    GAME_SUBTITLE_LINE2 = 'Comment "RESULT: yourDiscordUsername" to see how you did'
     PLAYER_LABEL = "players"
 
     def __init__(self, screen: pygame.Surface):
@@ -59,6 +59,13 @@ class MingleRenderer(RendererTemplate):
         subtitle_rect = subtitle_surface.get_rect(center=(center_x, subtitle_y))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
+        max_width = self.game_right - self.game_left
+        line2_surface = self._render_subtitle_line(self.GAME_SUBTITLE_LINE2, max_width)
+        line2_rect = line2_surface.get_rect(
+            center=(center_x, subtitle_rect.bottom + 6 + (line2_surface.get_height() // 2))
+        )
+        self.screen.blit(line2_surface, line2_rect)
+
 
     def _draw_day_counter(self, players: List, game_state: dict):
         total_count = len(players)
@@ -69,10 +76,6 @@ class MingleRenderer(RendererTemplate):
         day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, day_y))
         self.screen.blit(day_surface, day_rect)
-
-        line2_surface = self._render_subtitle_line(self.GAME_SUBTITLE_LINE2, max_width)
-        line2_rect = line2_surface.get_rect(center=(self.width // 2, day_y + (line2_surface.get_height() + 6)))
-        self.screen.blit(line2_surface, line2_rect)
 
     def _draw_game_area(self, players: List, game_state: dict):
         arena = game_state.get("arena")

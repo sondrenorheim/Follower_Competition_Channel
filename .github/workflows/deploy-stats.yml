@@ -26,7 +26,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: false  # LFS disabled - we use partitioned API files instead
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -52,13 +53,34 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_REGION: auto
           AWS_EC2_METADATA_DISABLED: true
+          AWS_MAX_ATTEMPTS: 5
+          AWS_RETRY_MODE: adaptive
         run: |
           if [ ! -d "./website/public/api" ]; then
             echo "ERROR: website/public/api not found"
             ls -la ./website/public || true
             exit 1
           fi
-          aws s3 sync ./website/public/api s3://${{ vars.R2_BUCKET }}/api --endpoint-url ${{ vars.R2_ENDPOINT }} --delete
+          max_attempts=7
+          base_delay=5
+          max_delay=120
+          for attempt in $(seq 1 $max_attempts); do
+            echo "R2 sync attempt ${attempt}/${max_attempts}..."
+            if aws s3 sync ./website/public/api s3://${{ vars.R2_BUCKET }}/api --endpoint-url ${{ vars.R2_ENDPOINT }} --delete --only-show-errors --exclude "games/*" --exclude "player_history/*"; then
+              exit 0
+            fi
+            echo "R2 sync attempt ${attempt} failed."
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              delay=$((base_delay << (attempt - 1)))
+              if [ "$delay" -gt "$max_delay" ]; then
+                delay=$max_delay
+              fi
+              jitter=$((RANDOM % 5))
+              sleep $((delay + jitter))
+            fi
+          done
+          echo "ERROR: R2 sync failed after retries."
+          exit 1
 
       - name: Remove API from Pages artifact
         run: rm -rf ./website/dist/api ./website/dist/game_history_web.json ./website/dist/player_statistics_web.json ./website/dist/game_history.json ./website/dist/player_statistics.json

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { loadIndex, loadPlayerIndex } from '../utils/dataLoader';
+import { loadIndex, loadPlayerIndex, loadMediaKit } from '../utils/dataLoader';
 
 // Animated counter component
 function AnimatedCounter({ end, duration = 2000, suffix = '', prefix = '' }) {
@@ -43,12 +43,18 @@ function AnimatedCounter({ end, duration = 2000, suffix = '', prefix = '' }) {
 }
 
 // Stat card component
-function StatCard({ icon, value, label, suffix = '', prefix = '' }) {
+function StatCard({ icon, value, label, suffix = '', prefix = '', valueText = null }) {
+  const hasValueText = valueText !== null && valueText !== undefined;
+
   return (
     <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-6 text-center transform hover:scale-105 transition-all duration-300 hover:shadow-[0_0_30px_rgba(124,128,255,0.2)]">
       <div className="text-4xl mb-3">{icon}</div>
       <div className="text-3xl md:text-4xl font-bold text-primary-bright mb-2">
-        <AnimatedCounter end={value} suffix={suffix} prefix={prefix} />
+        {hasValueText ? (
+          <span>{valueText}</span>
+        ) : (
+          <AnimatedCounter end={value} suffix={suffix} prefix={prefix} />
+        )}
       </div>
       <div className="text-text-muted text-sm uppercase tracking-wider">{label}</div>
     </div>
@@ -128,34 +134,164 @@ function SocialLink({ platform, handle, url, icon }) {
   );
 }
 
+const DEFAULT_MEDIA_KIT = {
+  totals: {
+    total_games: 260,
+    total_days: 50,
+    total_players: 97000,
+    total_followers: 90000,
+    game_modes: 10,
+  },
+  daily_videos: {
+    min: 6,
+    max: 10,
+  },
+  engagement_growth_pct: 9600,
+  reach: {
+    total_views: 4000000,
+    accounts_reached: 2000000,
+    interactions: 216000,
+    accounts_engaged: 165000,
+  },
+  insights: {
+    viral_reach_pct: 79.3,
+    profile_visits: 115000,
+    external_link_taps: 10900,
+    top_reel_views: [179000, 78000, 47000],
+  },
+  demographics: {
+    age_distribution: {
+      '13-17': 25.5,
+      '18-24': 34.1,
+      '25-34': 29.7,
+      '35-44': 6.4,
+      '45+': 4.3,
+    },
+    under_35_pct: 89,
+    gender_split: { male: 81, female: 19 },
+    top_countries: [
+      { name: 'United States', pct: 32.5 },
+      { name: 'United Kingdom', pct: 4.6 },
+      { name: 'Indonesia', pct: 4.2 },
+      { name: 'France', pct: 3.9 },
+      { name: 'Italy', pct: 3.7 },
+    ],
+    countries_reached: 50,
+  },
+  audience_interests: ['Gaming', 'Tech', 'Entertainment', 'Memes', 'Esports', 'Social Media'],
+};
+
+const AGE_ORDER = ['13-17', '18-24', '25-34', '35-44', '45+'];
+const AGE_STYLE_MAP = [
+  { text: 'text-warning', bar: 'bg-warning' },
+  { text: 'text-primary-bright', bar: 'bg-primary-bright' },
+  { text: 'text-primary', bar: 'bg-primary' },
+  { text: 'text-accent', bar: 'bg-accent' },
+  { text: 'text-text-muted', bar: 'bg-dark-bg-tertiary' },
+];
+const COUNTRY_TEXT_CLASSES = [
+  'text-primary-bright',
+  'text-primary',
+  'text-accent',
+  'text-accent',
+  'text-text-muted',
+];
+
+const compactFormatter = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+const compactFormatterNoDecimals = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 0,
+});
+const numberFormatter0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const numberFormatter1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+function formatNumber(value, maxFractionDigits = 0) {
+  if (!Number.isFinite(value)) return '0';
+  return maxFractionDigits > 0 ? numberFormatter1.format(value) : numberFormatter0.format(value);
+}
+
+function formatCompact(value, maxFractionDigits = 1) {
+  if (!Number.isFinite(value)) return '0';
+  return maxFractionDigits > 0
+    ? compactFormatter.format(value)
+    : compactFormatterNoDecimals.format(value);
+}
+
+function formatCounterMetric(value, plus = false) {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  const plusText = plus ? '+' : '';
+
+  if (safeValue >= 1000000) {
+    return { value: Math.round(safeValue / 1000000), suffix: `M${plusText}` };
+  }
+  if (safeValue >= 1000) {
+    return { value: Math.round(safeValue / 1000), suffix: `K${plusText}` };
+  }
+  return { value: Math.round(safeValue), suffix: plusText };
+}
+
+function formatRange(range) {
+  if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) return '0';
+  if (range.min === range.max) return `${range.min}`;
+  return `${range.min}-${range.max}`;
+}
+
+function computeDailyVideosFromIndex(index, window = 30) {
+  const days = index?.days_metadata;
+  if (!Array.isArray(days) || days.length === 0) return null;
+  const sorted = [...days].sort((a, b) => (b.day || 0) - (a.day || 0));
+  const windowDays = sorted.slice(0, window);
+  const counts = windowDays
+    .map(entry => entry?.games)
+    .filter(value => Number.isFinite(value));
+  if (!counts.length) return null;
+  return {
+    min: Math.min(...counts),
+    max: Math.max(...counts),
+  };
+}
+
 export default function MediaKit() {
-  // Dynamic stats from API
-  const [stats, setStats] = useState({
-    totalGames: 260,
-    totalDays: 50,
-    totalPlayers: 97000,
-    totalFollowers: 90000,
-    gameTypes: 10,
-  });
+  const [kit, setKit] = useState(DEFAULT_MEDIA_KIT);
 
   useEffect(() => {
     async function fetchStats() {
       try {
-        const [index, playerIndex] = await Promise.all([
+        const [index, playerIndex, mediaKit] = await Promise.all([
           loadIndex(),
-          loadPlayerIndex()
+          loadPlayerIndex(),
+          loadMediaKit()
         ]);
 
-        if (index || playerIndex) {
-          setStats(prev => ({
-            ...prev,
-            totalGames: index?.total_games || prev.totalGames,
-            totalDays: index?.total_days || prev.totalDays,
-            totalFollowers: index?.total_followers || prev.totalFollowers,
-            totalPlayers: playerIndex?.total_players || prev.totalPlayers,
-            gameTypes: index?.types_metadata?.length || prev.gameTypes,
-          }));
-        }
+        const resolvedDailyVideos =
+          mediaKit?.daily_videos ||
+          computeDailyVideosFromIndex(index) ||
+          DEFAULT_MEDIA_KIT.daily_videos;
+
+        setKit(prev => ({
+          ...prev,
+          totals: {
+            total_games: mediaKit?.totals?.total_games ?? index?.total_games ?? prev.totals.total_games,
+            total_days: mediaKit?.totals?.total_days ?? index?.total_days ?? prev.totals.total_days,
+            total_followers: mediaKit?.totals?.total_followers ?? index?.total_followers ?? prev.totals.total_followers,
+            total_players: mediaKit?.totals?.total_players ?? playerIndex?.total_players ?? prev.totals.total_players,
+            game_modes: mediaKit?.totals?.game_modes
+              ?? index?.types_metadata?.length
+              ?? prev.totals.game_modes,
+          },
+          daily_videos: {
+            min: resolvedDailyVideos?.min ?? prev.daily_videos.min,
+            max: resolvedDailyVideos?.max ?? prev.daily_videos.max,
+          },
+          engagement_growth_pct: mediaKit?.engagement_growth_pct ?? prev.engagement_growth_pct,
+          reach: mediaKit?.reach || prev.reach,
+          insights: mediaKit?.insights || prev.insights,
+          demographics: mediaKit?.demographics || prev.demographics,
+          audience_interests: mediaKit?.audience_interests || prev.audience_interests,
+        }));
       } catch (err) {
         console.error('Failed to load stats:', err);
       }
@@ -174,6 +310,27 @@ export default function MediaKit() {
     { name: 'Meteor Mayhem', description: 'Dodge falling meteors to survive', icon: '☄️' },
     { name: 'Heads or Tails', description: 'Squid Game-style choice elimination', icon: '🪙' },
   ];
+
+  const totals = kit.totals || DEFAULT_MEDIA_KIT.totals;
+  const dailyVideosText = formatRange(kit.daily_videos);
+  const heroFollowersK = Math.floor((totals.total_followers || 0) / 1000);
+  const heroPlayersK = Math.floor((totals.total_players || 0) / 1000);
+
+  const viewsMetric = formatCounterMetric(kit.reach?.total_views);
+  const reachMetric = formatCounterMetric(kit.reach?.accounts_reached, true);
+  const interactionsMetric = formatCounterMetric(kit.reach?.interactions);
+  const engagedMetric = formatCounterMetric(kit.reach?.accounts_engaged);
+
+  const viralReachText = `${formatNumber(kit.insights?.viral_reach_pct, 1)}%`;
+  const profileVisitsText = formatCompact(kit.insights?.profile_visits);
+  const externalLinkTapsText = formatCompact(kit.insights?.external_link_taps, 1);
+  const topViewsText = (kit.insights?.top_reel_views || [])
+    .map(value => formatCompact(value, 0))
+    .join(', ');
+
+  const ageDistribution = kit.demographics?.age_distribution || {};
+  const genderSplit = kit.demographics?.gender_split || {};
+  const topCountries = kit.demographics?.top_countries || [];
 
   return (
     <div className="min-h-screen bg-dark-bg-primary">
@@ -204,19 +361,19 @@ export default function MediaKit() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto">
             <div className="bg-dark-bg-secondary/80 backdrop-blur border border-primary/30 rounded-2xl p-6 shadow-[0_0_40px_rgba(124,128,255,0.2)]">
               <div className="text-4xl md:text-5xl font-black text-primary-bright">
-                <AnimatedCounter end={Math.floor(stats.totalFollowers / 1000)} suffix="K+" />
+                <AnimatedCounter end={heroFollowersK} suffix="K+" />
               </div>
               <div className="text-text-muted mt-2">Followers</div>
             </div>
             <div className="bg-dark-bg-secondary/80 backdrop-blur border border-accent/30 rounded-2xl p-6 shadow-[0_0_40px_rgba(34,211,238,0.2)]">
               <div className="text-4xl md:text-5xl font-black text-accent-bright">
-                <AnimatedCounter end={Math.floor(stats.totalPlayers / 1000)} suffix="K+" />
+                <AnimatedCounter end={heroPlayersK} suffix="K+" />
               </div>
               <div className="text-text-muted mt-2">Unique Competitors</div>
             </div>
             <div className="bg-dark-bg-secondary/80 backdrop-blur border border-success/30 rounded-2xl p-6 shadow-[0_0_40px_rgba(52,211,153,0.2)]">
               <div className="text-4xl md:text-5xl font-black text-success">
-                <AnimatedCounter end={stats.totalGames} suffix="+" />
+                <AnimatedCounter end={totals.total_games} suffix="+" />
               </div>
               <div className="text-text-muted mt-2">Games Produced</div>
             </div>
@@ -247,19 +404,21 @@ export default function MediaKit() {
           </h2>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
-            <StatCard icon="👥" value={stats.totalFollowers} suffix="+" label="Total Followers" />
-            <StatCard icon="🎮" value={stats.totalPlayers} suffix="+" label="Unique Competitors" />
-            <StatCard icon="🎬" value={stats.totalGames} suffix="+" label="Games Produced" />
-            <StatCard icon="🕹️" value={stats.gameTypes} suffix="+" label="Game Modes" />
-            <StatCard icon="📹" value={6} suffix="-10" label="Daily Videos" />
-            <StatCard icon="📅" value={stats.totalDays} label="Days Running" />
+            <StatCard icon="👥" value={totals.total_followers} suffix="+" label="Total Followers" />
+            <StatCard icon="🎮" value={totals.total_players} suffix="+" label="Unique Competitors" />
+            <StatCard icon="🎬" value={totals.total_games} suffix="+" label="Games Produced" />
+            <StatCard icon="🕹️" value={totals.game_modes} suffix="+" label="Game Modes" />
+            <StatCard icon="📹" valueText={dailyVideosText} label="Daily Videos" />
+            <StatCard icon="📅" value={totals.total_days} label="Days Running" />
           </div>
 
           {/* Growth indicator */}
           <div className="mt-12 text-center">
             <div className="inline-flex items-center gap-3 bg-success/10 border border-success/30 rounded-full px-6 py-3">
               <span className="text-2xl">📈</span>
-              <span className="text-success font-bold text-lg">9,600% Engagement Growth</span>
+              <span className="text-success font-bold text-lg">
+                {formatNumber(kit.engagement_growth_pct)}% Engagement Growth
+              </span>
             </div>
           </div>
         </div>
@@ -278,25 +437,25 @@ export default function MediaKit() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-8">
             <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
               <div className="text-3xl md:text-4xl font-bold text-primary-bright mb-1">
-                <AnimatedCounter end={4.4} suffix="M" />
+                <AnimatedCounter end={viewsMetric.value} suffix={viewsMetric.suffix} />
               </div>
               <div className="text-text-muted text-sm">Total Views</div>
             </div>
             <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
               <div className="text-3xl md:text-4xl font-bold text-accent-bright mb-1">
-                <AnimatedCounter end={2} suffix="M+" />
+                <AnimatedCounter end={reachMetric.value} suffix={reachMetric.suffix} />
               </div>
               <div className="text-text-muted text-sm">Accounts Reached</div>
             </div>
             <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
               <div className="text-3xl md:text-4xl font-bold text-success mb-1">
-                <AnimatedCounter end={216} suffix="K" />
+                <AnimatedCounter end={interactionsMetric.value} suffix={interactionsMetric.suffix} />
               </div>
               <div className="text-text-muted text-sm">Interactions</div>
             </div>
             <div className="bg-dark-bg-secondary border border-dark-surface rounded-2xl p-5 text-center">
               <div className="text-3xl md:text-4xl font-bold text-warning mb-1">
-                <AnimatedCounter end={165} suffix="K" />
+                <AnimatedCounter end={engagedMetric.value} suffix={engagedMetric.suffix} />
               </div>
               <div className="text-text-muted text-sm">Accounts Engaged</div>
             </div>
@@ -310,7 +469,7 @@ export default function MediaKit() {
                 <span className="text-text-primary font-semibold">Viral Reach</span>
               </div>
               <p className="text-text-secondary text-sm">
-                <span className="text-primary-bright font-bold">79.3%</span> of views come from non-followers, showing strong discovery and viral potential
+                <span className="text-primary-bright font-bold">{viralReachText}</span> of views come from non-followers, showing strong discovery and viral potential
               </p>
             </div>
             <div className="bg-dark-bg-tertiary rounded-xl p-5 border border-dark-surface">
@@ -319,7 +478,7 @@ export default function MediaKit() {
                 <span className="text-text-primary font-semibold">Profile Activity</span>
               </div>
               <p className="text-text-secondary text-sm">
-                <span className="text-accent-bright font-bold">115K</span> profile visits and <span className="text-accent-bright font-bold">10.9K</span> external link taps in 30 days
+                <span className="text-accent-bright font-bold">{profileVisitsText}</span> profile visits and <span className="text-accent-bright font-bold">{externalLinkTapsText}</span> external link taps in 30 days
               </p>
             </div>
             <div className="bg-dark-bg-tertiary rounded-xl p-5 border border-dark-surface">
@@ -328,7 +487,7 @@ export default function MediaKit() {
                 <span className="text-text-primary font-semibold">Top Performers</span>
               </div>
               <p className="text-text-secondary text-sm">
-                Best reels reach <span className="text-success font-bold">179K</span>, <span className="text-success font-bold">78K</span>, <span className="text-success font-bold">47K</span> views individually
+                Best reels reach <span className="text-success font-bold">{topViewsText}</span> views individually
               </p>
             </div>
           </div>
@@ -352,53 +511,27 @@ export default function MediaKit() {
                 <span>📊</span> Age Distribution
               </h3>
               <div className="space-y-3">
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-muted">13-17</span>
-                    <span className="text-warning font-medium">25.5%</span>
-                  </div>
-                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
-                    <div className="h-full bg-warning rounded-full" style={{width: '25.5%'}}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-muted">18-24</span>
-                    <span className="text-primary-bright font-medium">34.1%</span>
-                  </div>
-                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
-                    <div className="h-full bg-primary-bright rounded-full" style={{width: '34.1%'}}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-muted">25-34</span>
-                    <span className="text-primary font-medium">29.7%</span>
-                  </div>
-                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
-                    <div className="h-full bg-primary rounded-full" style={{width: '29.7%'}}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-muted">35-44</span>
-                    <span className="text-accent font-medium">6.4%</span>
-                  </div>
-                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
-                    <div className="h-full bg-accent rounded-full" style={{width: '6.4%'}}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-muted">45+</span>
-                    <span className="text-text-muted font-medium">4.3%</span>
-                  </div>
-                  <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
-                    <div className="h-full bg-dark-bg-tertiary rounded-full" style={{width: '4.3%'}}></div>
-                  </div>
-                </div>
+                {AGE_ORDER.map((label, index) => {
+                  const pctValue = Number(ageDistribution[label] ?? 0);
+                  const safePct = Number.isFinite(pctValue) ? pctValue : 0;
+                  const style = AGE_STYLE_MAP[index] || AGE_STYLE_MAP[AGE_STYLE_MAP.length - 1];
+
+                  return (
+                    <div key={label}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-text-muted">{label}</span>
+                        <span className={`${style.text} font-medium`}>{formatNumber(safePct, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-dark-surface rounded-full overflow-hidden">
+                        <div className={`h-full ${style.bar} rounded-full`} style={{width: `${safePct}%`}}></div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <p className="text-accent-bright text-sm mt-4 font-medium">89% under 35 years old</p>
+              <p className="text-accent-bright text-sm mt-4 font-medium">
+                {formatNumber(kit.demographics?.under_35_pct)}% under 35 years old
+              </p>
             </div>
 
             {/* Gender Split */}
@@ -408,12 +541,16 @@ export default function MediaKit() {
               </h3>
               <div className="flex items-center justify-center gap-6 py-4">
                 <div className="text-center">
-                  <div className="text-4xl font-bold text-primary-bright">81%</div>
+                  <div className="text-4xl font-bold text-primary-bright">
+                    {formatNumber(genderSplit.male)}%
+                  </div>
                   <div className="text-text-muted text-sm mt-1">Male</div>
                 </div>
                 <div className="w-px h-16 bg-dark-surface"></div>
                 <div className="text-center">
-                  <div className="text-4xl font-bold text-accent">19%</div>
+                  <div className="text-4xl font-bold text-accent">
+                    {formatNumber(genderSplit.female)}%
+                  </div>
                   <div className="text-text-muted text-sm mt-1">Female</div>
                 </div>
               </div>
@@ -428,29 +565,20 @@ export default function MediaKit() {
                 <span>🌍</span> Top Countries
               </h3>
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">United States</span>
-                  <span className="text-primary-bright font-medium">32.5%</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">United Kingdom</span>
-                  <span className="text-primary font-medium">4.6%</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">Indonesia</span>
-                  <span className="text-accent font-medium">4.2%</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">France</span>
-                  <span className="text-accent font-medium">3.9%</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">Italy</span>
-                  <span className="text-text-muted font-medium">3.7%</span>
-                </div>
+                {topCountries.map((country, index) => {
+                  const pctValue = Number(country?.pct ?? 0);
+                  const textClass = COUNTRY_TEXT_CLASSES[index] || 'text-text-muted';
+
+                  return (
+                    <div key={`${country?.name || 'country'}-${index}`} className="flex items-center justify-between">
+                      <span className="text-text-secondary">{country?.name || 'Unknown'}</span>
+                      <span className={`${textClass} font-medium`}>{formatNumber(pctValue, 1)}%</span>
+                    </div>
+                  );
+                })}
               </div>
               <p className="text-text-secondary text-sm mt-4">
-                Global reach, 50+ countries
+                Global reach, {formatNumber(kit.demographics?.countries_reached)}+ countries
               </p>
             </div>
           </div>
@@ -459,7 +587,7 @@ export default function MediaKit() {
           <div className="mt-8 text-center">
             <p className="text-text-muted text-sm mb-3">Audience Interests</p>
             <div className="flex flex-wrap justify-center gap-2">
-              {['Gaming', 'Tech', 'Entertainment', 'Memes', 'Esports', 'Social Media'].map((interest, i) => (
+              {(kit.audience_interests || []).map((interest, i) => (
                 <span key={i} className="bg-dark-bg-secondary border border-dark-surface px-4 py-2 rounded-full text-sm text-text-secondary">
                   {interest}
                 </span>
@@ -559,7 +687,7 @@ export default function MediaKit() {
             />
             <PartnershipCard
               title="In-Video Branding"
-              description={`Logo placement, shoutouts, and seamless brand integration across our daily content reaching ${Math.floor(stats.totalFollowers / 1000)}K+ engaged followers.`}
+              description={`Logo placement, shoutouts, and seamless brand integration across our daily content reaching ${heroFollowersK}K+ engaged followers.`}
               icon="🎯"
             />
             <PartnershipCard
@@ -575,7 +703,7 @@ export default function MediaKit() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex items-center gap-3">
                 <span className="text-success text-xl">✓</span>
-                <span className="text-text-secondary">Direct access to {Math.floor(stats.totalFollowers / 1000)}K+ engaged followers</span>
+                <span className="text-text-secondary">Direct access to {heroFollowersK}K+ engaged followers</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-success text-xl">✓</span>

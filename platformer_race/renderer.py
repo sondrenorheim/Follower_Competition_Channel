@@ -9,6 +9,7 @@ import math
 from PIL import Image
 import config
 from fighter_arena import FighterRenderer  # Reuse for racer avatars
+from shared.avatar_initials import draw_avatar_initials
 
 
 class PlatformerRenderer:
@@ -1044,9 +1045,21 @@ class PlatformerRenderer:
             except Exception as e:
                 # Fallback to colored circle
                 pygame.draw.circle(surface, racer.color, (size // 2, size // 2), size // 2)
+                draw_avatar_initials(
+                    surface,
+                    racer.username,
+                    center=(size // 2, size // 2),
+                    diameter=size,
+                )
         else:
             # No avatar - draw colored circle
             pygame.draw.circle(surface, racer.color, (size // 2, size // 2), size // 2)
+            draw_avatar_initials(
+                surface,
+                racer.username,
+                center=(size // 2, size // 2),
+                diameter=size,
+            )
 
         # Draw border
         pygame.draw.circle(surface, (255, 255, 255), (size // 2, size // 2), size // 2, 2)
@@ -1226,6 +1239,12 @@ class PlatformerRenderer:
                 else:
                     # Draw colored circle if no avatar
                     pygame.draw.circle(self.screen, racer.color, (x + 70, y + 20), avatar_size // 2)
+                    draw_avatar_initials(
+                        self.screen,
+                        racer.username,
+                        center=(x + 70, y + 20),
+                        diameter=avatar_size,
+                    )
 
                 # Draw username
                 username_surface = self.font_small.render(racer.username[:15], True, (255, 255, 255))

@@ -10,6 +10,7 @@ import pygame
 
 import config
 from shared import GameTemplate, GameHistory, auto_push
+from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
 
 from .arena import SideChoiceArena
 from .player import SideChoicePlayer
@@ -41,6 +42,7 @@ class SideChoiceGame(GameTemplate):
         self.update_batches_per_frame = getattr(config, "UPDATE_BATCHES_PER_FRAME", 4)
 
         self.game_history = GameHistory()
+        self.club_spotlight = None
 
     def _init_game_components(self):
         self.arena = SideChoiceArena()
@@ -55,6 +57,7 @@ class SideChoiceGame(GameTemplate):
             follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
 
         random.shuffle(follower_data)
+        club_members = load_club_member_set()
 
         for i, data in enumerate(follower_data):
             position = self._get_starting_position(i, len(follower_data))
@@ -62,8 +65,11 @@ class SideChoiceGame(GameTemplate):
             if "avatar_image" not in payload and "avatar" in payload:
                 payload["avatar_image"] = payload["avatar"]
             player = self._create_player(payload, position)
+            username = normalize_username(payload.get("username"))
+            player.is_club_member = username in club_members
             self.players.append(player)
 
+        self.club_spotlight = select_club_spotlight(self.players)
         print(f"{len(self.players)} {self.PLAYER_LABEL} ready!\n")
 
     def _create_player(self, follower_data: dict, position: tuple) -> SideChoicePlayer:
@@ -292,6 +298,7 @@ class SideChoiceGame(GameTemplate):
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "winner": self.winner,
+            "club_spotlight": self.club_spotlight,
         }
 
         self.renderer.render_frame(self.players, game_state)

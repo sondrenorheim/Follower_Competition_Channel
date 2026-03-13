@@ -57,81 +57,15 @@ class PhysicsEngine:
             dt: Delta time in seconds
         """
         game_mode = getattr(config, "GAME_MODE", "")
+        if game_mode == "gorillas_vs_followers":
+            # Gorillas mode uses custom collision handling in the game; followers should not
+            # push or knock back each other here.
+            return
 
         # Use Numba acceleration for large player counts (>1000 players)
         use_numba = NUMBA_AVAILABLE and getattr(config, 'USE_NUMBA_PHYSICS', True)
         if use_numba and len(followers) > 1000:
-            # For gorilla mode, only run fast collision separation on followers (skip gorillas),
-            # then do a lightweight follower<->gorilla separation to keep them apart.
-            if game_mode == "gorillas_vs_followers":
-                alive_followers = [f for f in followers if f.alive and not self._is_gorilla(f)]
-                if alive_followers:
-                    self._update_with_numba(alive_followers, dt)
-                # Push followers off gorillas without moving the gorillas
-                gorillas = [g for g in followers if g.alive and self._is_gorilla(g)]
-                if gorillas:
-                    for f in alive_followers:
-                        for g in gorillas:
-                            ra = getattr(f, "radius", config.FOLLOWER_RADIUS)
-                            rg = getattr(g, "radius", config.FOLLOWER_RADIUS)
-                            min_dist = ra + rg
-                            dx = f.x - g.x
-                            dy = f.y - g.y
-                            dist_sq = dx * dx + dy * dy
-                            if dist_sq < (min_dist * min_dist) and dist_sq > 0.0001:
-                                dist = math.sqrt(dist_sq)
-                                overlap = min_dist - dist
-                                sep_x = dx / dist
-                                sep_y = dy / dist
-                                f.x += sep_x * overlap
-                                f.y += sep_y * overlap
-                return
-            else:
-                return self._update_with_numba(followers, dt)
-
-        if game_mode == "gorillas_vs_followers":
-            # Simple separation between all alive entities, keeping gorillas immovable.
-            alive_entities = [f for f in followers if getattr(f, "alive", False)]
-            for i, a in enumerate(alive_entities):
-                for b in alive_entities[i + 1:]:
-                    ra = getattr(a, "radius", config.FOLLOWER_RADIUS)
-                    rb = getattr(b, "radius", config.FOLLOWER_RADIUS)
-                    min_dist = ra + rb
-
-                    dx = b.x - a.x
-                    dy = b.y - a.y
-                    dist_sq = dx * dx + dy * dy
-
-                    if dist_sq < (min_dist * min_dist) and dist_sq > 0.0001:
-                        dist = math.sqrt(dist_sq)
-                        overlap = min_dist - dist
-                        sep_x = dx / dist
-                        sep_y = dy / dist
-
-                        a_is_gorilla = self._is_gorilla(a)
-                        b_is_gorilla = self._is_gorilla(b)
-
-                        if a_is_gorilla and not b_is_gorilla:
-                            b.x += sep_x * overlap
-                            b.y += sep_y * overlap
-                        elif b_is_gorilla and not a_is_gorilla:
-                            a.x -= sep_x * overlap
-                            a.y -= sep_y * overlap
-                        else:
-                            move = overlap * 0.5
-                            a.x -= sep_x * move
-                            a.y -= sep_y * move
-                            b.x += sep_x * move
-                            b.y += sep_y * move
-
-                    elif dist_sq <= 0.0001:
-                        angle = random.random() * math.tau
-                        move = config.FOLLOWER_RADIUS * 0.5
-                        a.x -= math.cos(angle) * move
-                        a.y -= math.sin(angle) * move
-                        b.x += math.cos(angle) * move
-                        b.y += math.sin(angle) * move
-            return
+            return self._update_with_numba(followers, dt)
 
         current_time = time.time()
         # Skip gorillas for follower-style collisions; they are immovable.

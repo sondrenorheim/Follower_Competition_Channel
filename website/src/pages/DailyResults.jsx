@@ -225,13 +225,6 @@ export default function DailyResults() {
     loadFullResults();
   }, [searchQuery, currentPage, selectedGame, previewInfo, loadFullResults]);
 
-  // For daily "All Games", load full results in the background so paging/search is never limited to preview data.
-  useEffect(() => {
-    if (!selectedGame || !selectedGame._isPreview) return;
-    if (selectedGame.game_type !== 'all') return;
-    loadFullResults();
-  }, [selectedGame, loadFullResults]);
-
   // Sort all results and calculate ranks once per selection, then filter by search
   const rankedResults = React.useMemo(() => {
     if (!selectedGame || !Array.isArray(selectedGame.results)) return [];
@@ -389,18 +382,8 @@ export default function DailyResults() {
                 </span>
               </div>
               {previewInfo && previewInfo.totalResults > previewInfo.previewLimit ? (
-                <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-text-muted">
-                  <span>
-                    Showing top {previewInfo.previewLimit} of {previewInfo.totalResults} results.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={loadFullResults}
-                    disabled={isLoadingFullResults}
-                    className="px-3 py-1.5 text-xs font-bold border border-accent/60 rounded-lg text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  >
-                    {isLoadingFullResults ? 'Loading full list...' : 'Load all results'}
-                  </button>
+                <div className="mt-4 text-sm text-text-muted">
+                  Showing top {previewInfo.previewLimit} of {previewInfo.totalResults} results. Search or go to page {previewInfo.previewPages} to load everything.
                 </div>
               ) : null}
               {isLoadingFullResults ? (

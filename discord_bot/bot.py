@@ -16,14 +16,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 from collections import defaultdict
 import time
+from urllib.parse import urlparse
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-BASE_URL = os.getenv('BASE_URL', 'https://www.followerbattlegrounds.com')
+BASE_URL = (
+    os.getenv('API_BASE_URL')
+    or os.getenv('BASE_URL')
+    or os.getenv('R2_PUBLIC_BASE_URL')
+    or os.getenv('VITE_API_BASE_URL')
+    or 'https://www.followerbattlegrounds.com'
+).rstrip('/')
 CACHE_REFRESH_MINUTES = int(os.getenv('CACHE_REFRESH_MINUTES', '5'))
+LOCAL_API_BASE = os.getenv('LOCAL_API_BASE')
+if not LOCAL_API_BASE:
+    repo_root = Path(__file__).resolve().parents[1]
+    local_candidate = repo_root / "website" / "public"
+    if local_candidate.exists():
+        LOCAL_API_BASE = str(local_candidate)
 
 # Use partitioned API instead of monolithic files
 INDEX_URL = f"{BASE_URL}/api/index.json"
@@ -153,11 +166,43 @@ class StatsCache:
         self.index = None  # Day metadata
         self.player_index = None  # Player list
         self.cached_days = {}  # Map of day_number -> day_data
+        self.cached_day_aggregates = {}  # Map of (day_number, top_only) -> aggregate data
+        self.cached_types = {}  # Map of game_type -> type index
+        self.cached_games = {}  # Map of game_id -> game data
         self.last_update = None
         self.update_lock = asyncio.Lock()
+        self.local_api_base = LOCAL_API_BASE
+        self.use_local_api = bool(os.getenv("FORCE_LOCAL_API", "").strip())
+
+    def _local_path_for_url(self, url: str) -> Optional[Path]:
+        if not self.local_api_base:
+            return None
+        try:
+            parsed = urlparse(url)
+            rel_path = parsed.path.lstrip("/")
+            return Path(self.local_api_base) / rel_path
+        except Exception:
+            return None
+
+    def _load_local_json(self, path: Path) -> Optional[dict]:
+        try:
+            if not path.exists():
+                return None
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as e:
+            print(f"ERROR: Failed to load local file {path}: {e}")
+            return None
 
     async def fetch_json(self, url: str) -> Optional[dict]:
         """Fetch JSON data from URL (simple version for small partitioned files)"""
+        local_path = self._local_path_for_url(url)
+        if self.use_local_api and local_path:
+            data = self._load_local_json(local_path)
+            if data is not None:
+                print(f"OK - Loaded local {local_path}")
+                return data
+
         try:
             print(f"Fetching {url}...")
             loop = asyncio.get_event_loop()
@@ -174,12 +219,30 @@ class StatsCache:
 
         except requests.Timeout:
             print(f"ERROR: Timeout fetching {url}")
+            if local_path:
+                data = self._load_local_json(local_path)
+                if data is not None:
+                    print(f"OK - Loaded local {local_path}")
+                    self.use_local_api = True
+                    return data
             return None
         except requests.RequestException as e:
             print(f"ERROR: Network error fetching {url}: {e}")
+            if local_path:
+                data = self._load_local_json(local_path)
+                if data is not None:
+                    print(f"OK - Loaded local {local_path}")
+                    self.use_local_api = True
+                    return data
             return None
         except Exception as e:
             print(f"ERROR: {type(e).__name__}: {e}")
+            if local_path:
+                data = self._load_local_json(local_path)
+                if data is not None:
+                    print(f"OK - Loaded local {local_path}")
+                    self.use_local_api = True
+                    return data
             return None
 
     async def update(self):
@@ -216,6 +279,44 @@ class StatsCache:
             self.cached_days[day_number] = day_data
 
         return day_data
+
+    async def get_day_aggregate(self, day_number: int, top_only: bool = True) -> Optional[dict]:
+        """Fetch aggregate stats for a day (cached)."""
+        cache_key = (day_number, top_only)
+        if cache_key in self.cached_day_aggregates:
+            return self.cached_day_aggregates[cache_key]
+
+        suffix = "_aggregate_top" if top_only else "_aggregate"
+        aggregate_url = f"{BASE_URL}/api/days/{day_number}{suffix}.json"
+        aggregate_data = await self.fetch_json(aggregate_url)
+        if aggregate_data:
+            self.cached_day_aggregates[cache_key] = aggregate_data
+
+        return aggregate_data
+
+    async def get_type_index(self, game_type: str) -> Optional[dict]:
+        """Fetch type index data for a game mode (cached)."""
+        if game_type in self.cached_types:
+            return self.cached_types[game_type]
+
+        type_url = f"{BASE_URL}/api/types/{game_type}.json"
+        type_data = await self.fetch_json(type_url)
+        if type_data:
+            self.cached_types[game_type] = type_data
+
+        return type_data
+
+    async def get_game(self, game_id: str) -> Optional[dict]:
+        """Fetch full game data by ID (cached)."""
+        if game_id in self.cached_games:
+            return self.cached_games[game_id]
+
+        game_url = f"{BASE_URL}/api/games/{game_id}.json"
+        game_data = await self.fetch_json(game_url)
+        if game_data:
+            self.cached_games[game_id] = game_data
+
+        return game_data
 
     def should_refresh(self) -> bool:
         """Check if cache should be refreshed"""
@@ -526,30 +627,49 @@ async def day_command(interaction: discord.Interaction, day: int):
         return
 
     # Calculate stats
-    total_participants = set()
-    player_points = {}  # Aggregate points per player
-    game_types = set()
+    game_types = {game.get('game_type', 'unknown') for game in games}
 
-    for game in games:
-        game_types.add(game.get('game_type', 'unknown'))
-        results = game.get('results', [])
-        for result in results:
-            username = result.get('username')
-            if username:
-                total_participants.add(username)
-                # Sum up points for each player across all games
-                points = result.get('points', 0)
-                if username in player_points:
-                    player_points[username] += points
-                else:
-                    player_points[username] = points
+    total_participants_count = None
+    top_players = []
 
-    # Get top 3 players by total points for the day
-    top_players = sorted(
-        [{'username': u, 'points': p} for u, p in player_points.items()],
-        key=lambda r: r.get('points', 0),
-        reverse=True
-    )[:3]
+    day_aggregate = await cache.get_day_aggregate(day, top_only=True)
+    if day_aggregate:
+        total_participants_count = day_aggregate.get('total_participants')
+        aggregate_results = day_aggregate.get('results', [])
+        top_players = [
+            {
+                'username': r.get('username', 'Unknown'),
+                'points': r.get('points', 0)
+            }
+            for r in aggregate_results[:3]
+            if r.get('username')
+        ]
+
+    if total_participants_count is None or not top_players:
+        total_participants = set()
+        player_points = {}  # Aggregate points per player
+
+        for game in games:
+            results = game.get('results', [])
+            for result in results:
+                username = result.get('username')
+                if username:
+                    total_participants.add(username)
+                    points = result.get('points', 0)
+                    if username in player_points:
+                        player_points[username] += points
+                    else:
+                        player_points[username] = points
+
+        if total_participants_count is None:
+            total_participants_count = len(total_participants)
+
+        if not top_players:
+            top_players = sorted(
+                [{'username': u, 'points': p} for u, p in player_points.items()],
+                key=lambda r: r.get('points', 0),
+                reverse=True
+            )[:3]
 
     # Create embed
     embed = discord.Embed(
@@ -560,7 +680,7 @@ async def day_command(interaction: discord.Interaction, day: int):
 
     embed.add_field(
         name="Participants",
-        value=format_number(len(total_participants)),
+        value=format_number(total_participants_count or 0),
         inline=True
     )
 
@@ -750,16 +870,22 @@ async def latest_command(interaction: discord.Interaction):
     games = await get_games_for_day(latest_day)
 
     # Calculate stats
-    total_participants = set()
-    game_types = set()
+    game_types = {game.get('game_type', 'unknown') for game in games}
+    total_participants_count = None
 
-    for game in games:
-        game_types.add(game.get('game_type', 'unknown'))
-        results = game.get('results', [])
-        for result in results:
-            username = result.get('username')
-            if username:
-                total_participants.add(username)
+    day_aggregate = await cache.get_day_aggregate(latest_day, top_only=True)
+    if day_aggregate:
+        total_participants_count = day_aggregate.get('total_participants')
+
+    if total_participants_count is None:
+        total_participants = set()
+        for game in games:
+            results = game.get('results', [])
+            for result in results:
+                username = result.get('username')
+                if username:
+                    total_participants.add(username)
+        total_participants_count = len(total_participants)
 
     # Create embed
     embed = discord.Embed(
@@ -770,7 +896,7 @@ async def latest_command(interaction: discord.Interaction):
 
     embed.add_field(
         name="Participants",
-        value=format_number(len(total_participants)),
+        value=format_number(total_participants_count or 0),
         inline=True
     )
 
@@ -847,21 +973,33 @@ async def today_command(interaction: discord.Interaction):
         )
         return
 
-    # Aggregate points per player
-    player_points = {}
-    for game in games:
-        for result in game.get('results', []):
-            username = result.get('username')
-            if username:
-                points = result.get('points', 0)
-                player_points[username] = player_points.get(username, 0) + points
+    top_players = []
+    day_aggregate = await cache.get_day_aggregate(latest_day, top_only=True)
+    if day_aggregate:
+        aggregate_results = day_aggregate.get('results', [])
+        top_players = [
+            {
+                'username': r.get('username', 'Unknown'),
+                'points': r.get('points', 0)
+            }
+            for r in aggregate_results[:10]
+            if r.get('username')
+        ]
 
-    # Get top 10
-    top_players = sorted(
-        [{'username': u, 'points': p} for u, p in player_points.items()],
-        key=lambda r: r['points'],
-        reverse=True
-    )[:10]
+    if not top_players:
+        player_points = {}
+        for game in games:
+            for result in game.get('results', []):
+                username = result.get('username')
+                if username:
+                    points = result.get('points', 0)
+                    player_points[username] = player_points.get(username, 0) + points
+
+        top_players = sorted(
+            [{'username': u, 'points': p} for u, p in player_points.items()],
+            key=lambda r: r['points'],
+            reverse=True
+        )[:10]
 
     # Create embed
     embed = discord.Embed(
@@ -909,9 +1047,7 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
     # Normalize game type
     game_type = game_type.lower().replace(' ', '_')
 
-    # Load all available days and aggregate
-    player_stats = {}
-
+    # Load all available types
     if not cache.index:
         await interaction.followup.send(
             "Could not fetch game data. Please try again later.",
@@ -919,40 +1055,57 @@ async def gameleaderboard_command(interaction: discord.Interaction, game_type: s
         )
         return
 
-    available_days = cache.index.get('available_days', [])
+    available_types = cache.index.get('game_types', [])
+    if not available_types:
+        available_types = [t.get('type') for t in cache.index.get('types_metadata', []) if t.get('type')]
 
-    for day_num in available_days:
-        games = await get_games_for_day(day_num)
-        if not games:
+    available_types_norm = {t.lower() for t in available_types}
+    if game_type not in available_types_norm:
+        available_text = ", ".join(sorted(available_types)) if available_types else "None"
+        await interaction.followup.send(
+            f"No games found for game type: **{game_type}**\n\nAvailable types: {available_text}",
+            ephemeral=True
+        )
+        return
+
+    # Load games for this type and aggregate
+    player_stats = {}
+    type_index = await cache.get_type_index(game_type)
+    type_games = []
+    if type_index:
+        type_games = type_index.get('games', [])
+
+    for game in type_games:
+        game_id = game.get('game_id')
+        if not game_id:
             continue
+        game_data = await cache.get_game(game_id)
+        if not game_data:
+            continue
+        for result in game_data.get('results', []):
+            username = result.get('username')
+            if username:
+                if username not in player_stats:
+                    player_stats[username] = {
+                        'points': 0,
+                        'games': 0,
+                        'wins': 0,
+                        'best_placement': float('inf')
+                    }
 
-        for game in games:
-            if game.get('game_type', '').lower() != game_type:
-                continue
+                player_stats[username]['points'] += result.get('points', 0)
+                player_stats[username]['games'] += 1
 
-            for result in game.get('results', []):
-                username = result.get('username')
-                if username:
-                    if username not in player_stats:
-                        player_stats[username] = {
-                            'points': 0,
-                            'games': 0,
-                            'wins': 0,
-                            'best_placement': float('inf')
-                        }
-
-                    player_stats[username]['points'] += result.get('points', 0)
-                    player_stats[username]['games'] += 1
-
-                    placement = result.get('placement', 999)
-                    if placement == 1:
-                        player_stats[username]['wins'] += 1
-                    if placement < player_stats[username]['best_placement']:
-                        player_stats[username]['best_placement'] = placement
+                placement = result.get('placement', 999)
+                if placement == 1:
+                    player_stats[username]['wins'] += 1
+                if placement < player_stats[username]['best_placement']:
+                    player_stats[username]['best_placement'] = placement
 
     if not player_stats:
+        available_text = ", ".join(sorted(available_types)) if available_types else "None"
         await interaction.followup.send(
-            f"No games found for game type: **{game_type}**\n\nAvailable types: battle_royale, fighter_arena, platformer_race, obstacle_course, snake_escape, team_battle, gorillas_vs_followers",
+            f"No games found for game type: **{game_type}**\n\nAvailable types: {available_text}",
             ephemeral=True
         )
         return

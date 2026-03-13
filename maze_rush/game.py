@@ -1,7 +1,10 @@
+import json
+from PIL import Image
 import math
 import random
 import time
-from typing import List
+from pathlib import Path
+from typing import List, Set
 
 import pygame
 
@@ -24,6 +27,9 @@ class MazeRushGame(GameTemplate):
         self.first_finisher = None
         self.game_history = GameHistory()
         self.player_speed = self._calculate_player_speed()
+        self.render_players = []
+        self.club_member_set = set()
+        self.club_spotlight = None
 
     def _init_game_components(self):
         self.arena = MazeRushArena()
@@ -57,6 +63,10 @@ class MazeRushGame(GameTemplate):
 
         random.shuffle(follower_data)
 
+        self.club_member_set = self._load_club_member_set()
+        club_players = []
+        regular_players = []
+
         start_pos = self.maze.cell_center(self.maze.start_cell)
         seed = int(getattr(config, "DAY_NUMBER", 1))
 
@@ -64,17 +74,78 @@ class MazeRushGame(GameTemplate):
             payload = dict(data)
             if "avatar_image" not in payload and "avatar" in payload:
                 payload["avatar_image"] = payload["avatar"]
+            username = str(payload.get("username", "") or "").strip().lstrip("@").lower()
+            is_club_member = username in self.club_member_set
             player = MazeRushPlayer(
                 payload,
                 self.maze.start_cell,
                 start_pos,
                 rng_seed=seed + i + 1,
                 size=getattr(config, "MAZE_RUSH_PLAYER_SIZE", 12),
+                is_club_member=is_club_member,
             )
             self.players.append(player)
+            if is_club_member:
+                club_players.append(player)
+            else:
+                regular_players.append(player)
 
+        self.render_players = regular_players + club_players
+        self._select_club_spotlight()
         print(f"{len(self.players)} {self.PLAYER_LABEL} ready!\n")
 
+    def _load_club_member_set(self) -> Set[str]:
+        base_dir = Path(__file__).resolve().parents[1]
+        club_path = base_dir / "Followers" / "club_members_followers.json"
+        if not club_path.exists():
+            return set()
+
+        try:
+            with club_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Failed to load club members from {club_path}: {exc}")
+            return set()
+
+        members = set()
+        if isinstance(data, list):
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                username = str(entry.get("username", "") or "").strip().lstrip("@").lower()
+                if username:
+                    members.add(username)
+        return members
+
+    def _select_club_spotlight(self) -> None:
+        club_players = [
+            player for player in self.players
+            if getattr(player, "is_club_member", False)
+        ]
+        if not club_players:
+            self.club_spotlight = None
+            return
+        day_seed = int(getattr(config, "DAY_NUMBER", 1))
+        rng = random.Random(day_seed + 1337)
+        spotlight = rng.choice(club_players)
+
+        if spotlight.avatar_image is None:
+            cache_dir = Path("avatar_cache")
+            candidates = [
+                cache_dir / f"{spotlight.username}.jpg",
+                cache_dir / f"{str(spotlight.username).lower()}.jpg",
+            ]
+            for path in candidates:
+                if not path.exists():
+                    continue
+                try:
+                    with Image.open(path) as img:
+                        spotlight.avatar_image = img.convert("RGBA")
+                    break
+                except Exception:
+                    continue
+
+        self.club_spotlight = spotlight
     def update(self, dt: float):
         if self.game_over or self.phase != "playing":
             return
@@ -155,13 +226,15 @@ class MazeRushGame(GameTemplate):
             "maze": self.maze,
             "elapsed_time": self.game_time,
             "leader_name": leader_name,
+            "club_spotlight": self.club_spotlight,
             "show_leaderboards": self.show_leaderboards,
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "winner": self.winner,
         }
 
-        self.renderer.render_frame(self.players, game_state)
+        render_players = self.render_players if self.render_players else self.players
+        self.renderer.render_frame(render_players, game_state)
         pygame.display.flip()
         self.recorder.capture_frame(self.screen)
 

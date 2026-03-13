@@ -26,6 +26,7 @@ import math
 from typing import List, Any, Optional, Tuple
 
 import config
+from .avatar_initials import draw_avatar_initials
 
 
 # =============================================================================
@@ -100,6 +101,7 @@ class RendererTemplate:
 
         # Avatar cache for high-res rendering
         self.avatar_cache = {}
+        self._club_glow_cache = {}
 
     def _init_fonts(self):
         """Initialize standard fonts."""
@@ -290,6 +292,56 @@ class RendererTemplate:
         rect = avatar_surface.get_rect(center=(int(player.x), int(player.y)))
         self.screen.blit(avatar_surface, rect)
 
+    def _draw_club_glow(self, player, size: Optional[int] = None, pos: Optional[Tuple[int, int]] = None):
+        """
+        Draw a glowing ring behind a club member avatar.
+        """
+        if size is None:
+            size = config.FOLLOWER_RADIUS * 2
+        size = max(1, int(round(size)))
+        radius = max(1, size // 2)
+
+        color = getattr(config, "CLUB_GLOW_COLOR", (255, 240, 190))
+        alpha = int(getattr(config, "CLUB_GLOW_ALPHA", 180))
+        layers = int(getattr(config, "CLUB_GLOW_LAYERS", 3))
+        padding = int(getattr(config, "CLUB_GLOW_PADDING", 3))
+
+        cache_key = (radius, color, alpha, layers, padding)
+        surface = self._club_glow_cache.get(cache_key)
+        if surface is None:
+            glow_radius = radius + padding + layers
+            size_px = glow_radius * 2 + 4
+            surface = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
+            center = (size_px // 2, size_px // 2)
+
+            base_radius = radius + padding
+            for i in range(max(1, layers)):
+                layer_alpha = int(alpha * (1.0 - (i / max(1, layers))))
+                ring_radius = base_radius + i
+                pygame.draw.circle(
+                    surface,
+                    (*color, layer_alpha),
+                    center,
+                    ring_radius,
+                    width=2,
+                )
+
+            inner_alpha = min(255, alpha + 40)
+            pygame.draw.circle(
+                surface,
+                (*color, inner_alpha),
+                center,
+                radius + 1,
+                width=2,
+            )
+
+            self._club_glow_cache[cache_key] = surface
+
+        if pos is None:
+            pos = (int(player.x), int(player.y))
+        rect = surface.get_rect(center=(int(pos[0]), int(pos[1])))
+        self.screen.blit(surface, rect)
+
     def _get_avatar_surface(self, player, size: int) -> pygame.Surface:
         """
         Get or create a circular avatar surface for a player.
@@ -301,18 +353,22 @@ class RendererTemplate:
         Returns:
             Pygame surface with circular avatar
         """
-        # Normalize size and check cache
+        # Normalize size and check cache.
         size = max(1, int(round(size)))
-        cache_key = (player.username, size)
+        username = str(getattr(player, "username", "") or "")
+        avatar_image = getattr(player, "avatar_image", None)
+        has_avatar = bool(avatar_image)
+        fallback_color = tuple(getattr(player, "color", (100, 100, 255)))
+        cache_key = (username, size, has_avatar, fallback_color)
         if cache_key in self.avatar_cache:
             return self.avatar_cache[cache_key]
 
         # Create surface
         surface = pygame.Surface((size, size), pygame.SRCALPHA)
 
-        if hasattr(player, 'avatar_image') and player.avatar_image:
+        if has_avatar:
             # Use profile picture
-            pil_image = player.avatar_image
+            pil_image = avatar_image
             pil_resized = pil_image.resize((size, size))
             mode = pil_resized.mode
             data = pil_resized.tobytes()
@@ -328,9 +384,14 @@ class RendererTemplate:
             img_surface.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
             surface.blit(img_surface, (0, 0))
         else:
-            # Use colored circle
-            color = getattr(player, 'color', (100, 100, 255))
-            pygame.draw.circle(surface, color, (size // 2, size // 2), size // 2)
+            # Use colored circle with username initials.
+            pygame.draw.circle(surface, fallback_color, (size // 2, size // 2), size // 2)
+            draw_avatar_initials(
+                surface,
+                username,
+                center=(size // 2, size // 2),
+                diameter=size,
+            )
 
         # Add black border
         pygame.draw.circle(surface, (0, 0, 0),

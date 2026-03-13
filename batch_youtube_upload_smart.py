@@ -37,6 +37,7 @@ GAME_MODE_PATTERNS = {
     "spleef": "spleef",
     "anime_fighting": "anime_fighting",
     "gorillas_vs_followers": "gorillas_vs_followers",
+    "followers_io": "followers_io",
 }
 
 

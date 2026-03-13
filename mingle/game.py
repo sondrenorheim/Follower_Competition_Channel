@@ -30,9 +30,6 @@ class MingleGame(GameTemplate):
     def __init__(self):
         super().__init__()
 
-        if hasattr(self, "recorder"):
-            self.recorder.include_background_music = False
-
         self.round_group_sizes = list(getattr(config, "MINGLE_GROUP_SIZES", [2, 3, 4, 5, 6]))
         if not self.round_group_sizes:
             self.round_group_sizes = [2]

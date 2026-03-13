@@ -227,10 +227,10 @@ class Fighter(Follower):
         """
         if not self.alive:
             # Handle fade out animation
-            if time.time() - self.elimination_time < config.FADE_DURATION:
-                progress = (time.time() - self.elimination_time) / config.FADE_DURATION
+            fade_elapsed = current_time - self.elimination_time
+            if fade_elapsed < config.FADE_DURATION:
+                progress = fade_elapsed / config.FADE_DURATION
                 self.alpha = int(255 * (1 - progress))
-                self.surface_needs_update = True
             return
 
         if simplified_mode:
@@ -241,6 +241,10 @@ class Fighter(Follower):
             speed_multiplier = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_SPEED_MULTIPLIER", 2.5)
             turn_chance = getattr(config, "FIGHTER_ARENA_SIMPLIFIED_TURN_CHANCE", 0.12)
             self._random_movement_fighter(dt, speed_multiplier=speed_multiplier, turn_chance=turn_chance)
+        elif not combat_enabled:
+            # Countdown/intro should avoid expensive target searches.
+            self.target_follower = None
+            self._random_movement_fighter(dt, speed_multiplier=1.0, turn_chance=0.05)
         else:
             # Decrement knockback stun
             if self.knockback_frames_remaining > 0:
@@ -255,9 +259,8 @@ class Fighter(Follower):
             # Regenerate HP
             self.regenerate(dt)
 
-            # Choose target if we don't have one or target is dead
-            # Also occasionally re-target (0.2% chance per frame) to break circular patterns
-            # OPTIMIZED: Reduced from 2% to 0.2% for 10x less retargeting overhead
+            # Choose target if we don't have one or target is dead.
+            # Also occasionally re-target (0.2% chance per frame) to break circular patterns.
             if self.target_follower is None or not self.target_follower.alive or random.random() < 0.002:
                 self._choose_target_fighter(all_fighters)
 

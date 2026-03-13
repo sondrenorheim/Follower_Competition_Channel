@@ -9,6 +9,7 @@ import os
 from typing import List, Tuple, Optional
 from PIL import Image
 import config
+from shared.avatar_initials import draw_avatar_initials
 from .follower import Follower
 from .arena import Arena
 
@@ -330,6 +331,12 @@ class Renderer:
                 follower.color,
                 (radius, radius),
                 radius - config.FOLLOWER_BORDER_WIDTH
+            )
+            draw_avatar_initials(
+                surface,
+                follower.username,
+                center=(radius, radius),
+                diameter=size,
             )
 
         # Draw white border
@@ -886,7 +893,7 @@ class Renderer:
             avatar_y = entry_y
 
             follower = follower_map.get(username)
-            if follower and follower.avatar_image:
+            if follower:
                 # Draw follower's avatar
                 avatar_surface = self._get_follower_surface(follower)
                 avatar_surface = pygame.transform.scale(avatar_surface, (avatar_size, avatar_size))
@@ -895,6 +902,12 @@ class Renderer:
             else:
                 # Draw black circle as placeholder
                 pygame.draw.circle(self.screen, (0, 0, 0), (avatar_x, avatar_y), avatar_size // 2)
+                draw_avatar_initials(
+                    self.screen,
+                    username,
+                    center=(avatar_x, avatar_y),
+                    diameter=avatar_size,
+                )
                 # Draw white border around black circle
                 pygame.draw.circle(self.screen, (255, 255, 255), (avatar_x, avatar_y), avatar_size // 2, 2)
 

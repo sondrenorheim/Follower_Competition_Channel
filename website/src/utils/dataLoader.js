@@ -107,111 +107,7 @@ export async function loadDay(dayNumber) {
 }
 
 /**
- * Build day aggregate data client-side by merging full game result files.
- * This is a fallback when full aggregate files are unavailable.
- * @param {number} dayNumber
- * @returns {Promise<Object|null>}
- */
-async function buildDayAggregateFromGames(dayNumber) {
-  const dayData = await loadDay(dayNumber);
-  if (!dayData || !Array.isArray(dayData.games) || dayData.games.length === 0) {
-    return null;
-  }
-
-  const byPlayer = new Map();
-  let latestTimestamp = null;
-
-  for (const gameSummary of dayData.games) {
-    if (gameSummary?.timestamp && (!latestTimestamp || gameSummary.timestamp > latestTimestamp)) {
-      latestTimestamp = gameSummary.timestamp;
-    }
-
-    const fullGame = await loadGame(gameSummary.game_id);
-    if (!fullGame || !Array.isArray(fullGame.results)) {
-      continue;
-    }
-
-    for (const result of fullGame.results) {
-      const username = (result.username || '').trim();
-      if (!username) continue;
-
-      const points = Number(result.points) || 0;
-      const kills = Number(result.kills) || 0;
-      const survivalTime = Number(result.survival_time) || 0;
-      const placement = Number(result.placement);
-
-      const existing = byPlayer.get(username) || {
-        username,
-        points: 0,
-        kills: 0,
-        survival_time: 0,
-        games_played: 0,
-        wins: 0,
-        best_placement: null,
-        avatar_url: result.avatar_url || null,
-      };
-
-      existing.points += points;
-      existing.kills += kills;
-      existing.survival_time += survivalTime;
-      existing.games_played += 1;
-
-      if (Number.isFinite(placement) && placement > 0) {
-        if (!existing.best_placement || placement < existing.best_placement) {
-          existing.best_placement = placement;
-        }
-        if (placement === 1) {
-          existing.wins += 1;
-        }
-      }
-
-      if (!existing.avatar_url && result.avatar_url) {
-        existing.avatar_url = result.avatar_url;
-      }
-
-      byPlayer.set(username, existing);
-    }
-  }
-
-  if (byPlayer.size === 0) {
-    return null;
-  }
-
-  const results = Array.from(byPlayer.values())
-    .map((player) => {
-      const normalized = {
-        username: player.username,
-        points: Number(player.points.toFixed(3)),
-      };
-
-      if (player.kills) normalized.kills = player.kills;
-      if (player.survival_time) normalized.survival_time = player.survival_time;
-      if (player.games_played) normalized.games_played = player.games_played;
-      if (player.wins) normalized.wins = player.wins;
-      if (player.best_placement) normalized.best_placement = player.best_placement;
-      if (player.avatar_url) normalized.avatar_url = player.avatar_url;
-
-      return normalized;
-    })
-    .sort((a, b) => (b.points || 0) - (a.points || 0));
-
-  return {
-    game_id: `day_${dayNumber}_aggregate`,
-    game_type: 'all',
-    game_display_name: 'All Games',
-    day_number: dayNumber,
-    timestamp: latestTimestamp,
-    total_games: dayData.games.length,
-    total_participants: byPlayer.size,
-    total_results: byPlayer.size,
-    is_preview: false,
-    results,
-    _isFallbackAggregate: true,
-  };
-}
-/**
  * Load aggregated "All Games" results for a specific day.
-
  * @param {number} dayNumber - Day number to load
  * @param {Object} options
  * @param {boolean} options.preview - When true, loads the top-N preview file
@@ -230,43 +126,17 @@ export async function loadDayAggregate(dayNumber, { preview = false } = {}) {
       if (preview) {
         return await loadDayAggregate(dayNumber, { preview: false });
       }
-      const fallbackData = await buildDayAggregateFromGames(dayNumber);
-      if (fallbackData) {
-        cache.set(dayNumber, fallbackData);
-        return fallbackData;
-      }
       console.warn(`Aggregate for day ${dayNumber} not found`);
       return null;
     }
     const data = await response.json();
     if (preview) {
       data._isPreview = true;
-    } else {
-      const likelyPreviewPayload =
-        data?.is_preview === true ||
-        (typeof data?.preview_limit === 'number' &&
-          Array.isArray(data?.results) &&
-          data.results.length <= data.preview_limit);
-
-      if (likelyPreviewPayload) {
-        const fallbackData = await buildDayAggregateFromGames(dayNumber);
-        if (fallbackData) {
-          cache.set(dayNumber, fallbackData);
-          return fallbackData;
-        }
-      }
     }
     cache.set(dayNumber, data);
     return data;
   } catch (err) {
     console.error(`Error loading aggregate for day ${dayNumber}:`, err);
-    if (!preview) {
-      const fallbackData = await buildDayAggregateFromGames(dayNumber);
-      if (fallbackData) {
-        cache.set(dayNumber, fallbackData);
-        return fallbackData;
-      }
-    }
     return null;
   }
 }

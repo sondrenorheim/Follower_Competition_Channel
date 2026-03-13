@@ -1,0 +1,61 @@
+﻿Follower Competition Channel - Simple Project Summary (as of Feb 1, 2026)
+
+What this project is
+This project turns social media followers into daily games. People who follow the account can show up in short videos where they compete in fun challenges. The videos are posted every day, and the results are saved so anyone can see their placement and overall ranking.
+
+Why it started
+I saw Instagram videos where followers raced in a simple game. I had some Python experience and wanted to build a more advanced version with many different games. That idea grew into a full system that now runs almost by itself.
+
+What happens each day (simple view)
+1) Get the latest follower list.
+2) Update profile pictures so the games look personal.
+3) Run a list of games, one after another.
+4) Save the results for each game.
+5) Export the videos.
+6) Upload the videos and update the website and Discord.
+
+Current scale (approx)
+- About 150,000 followers
+- About 10,000,000 total views
+- About 2,500 new followers per day
+- Day numbers track the daily runs (Day 73 on Feb 1, 2026)
+
+The main parts of the system
+
+1) Follower list and profile pictures
+- Followers are collected from safe exports or official tools.
+- A local cache saves profile pictures so they load fast.
+- If a picture is missing, the game uses a colored circle instead.
+
+2) The games
+- The games are short, visual simulations made for vertical video.
+- Each game is its own folder (battle royale, mini golf, maze, flappy bird, etc.).
+- The same followers can play in multiple games on the same day.
+- Some games do not give points, or are only for Discord members or club members.
+
+3) Results and rankings
+- Every game saves placements and points.
+- Players build long-term stats like wins, best placement, and total points.
+- Monthly rankings and hall-of-fame style lists are built from these results.
+
+4) Website and community tools
+- The website lets people search their results and view rankings.
+- A Discord bot can answer stats questions with commands.
+- An Instagram webhook can reply to comments with the user’s placement.
+
+5) Automation and publishing
+- A daily automation script runs the whole routine.
+- Videos are uploaded to Instagram and TikTok with safe, human-like timing.
+- Stats are pushed so the website updates automatically.
+
+Timeline (high level, from commit history)
+- Nov 18, 2025: First working version of the project.
+- Nov 21-23, 2025: Fighter arena, obstacle course, and snake game added.
+- Late Nov 2025: Website launched and improved.
+- Mid Dec 2025: Discord bot added; stats system redesigned for scale.
+- Late Dec 2025: Website switched to a faster data format.
+- Jan 2026: Website performance improved and more games added.
+- Feb 1, 2026: Member Club features and Super Follower Bros updates.
+
+In short
+This is a full daily content pipeline. It takes a live follower list, turns it into fun games, saves the results, and publishes videos and rankings across Instagram, Discord, and a website. It is designed to be reliable, fast, and easy for viewers to engage with even if they do not know anything about coding.

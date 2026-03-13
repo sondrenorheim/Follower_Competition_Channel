@@ -23,6 +23,7 @@ import time
 from typing import Tuple, Optional, Dict, Any
 
 import config
+from .avatar_initials import draw_avatar_initials
 
 
 class EntityTemplate:
@@ -360,10 +361,22 @@ class EntityTemplate:
                 # Fallback to colored circle
                 pygame.draw.circle(surface, self.color,
                                  (size // 2, size // 2), size // 2)
+                draw_avatar_initials(
+                    surface,
+                    self.username,
+                    center=(size // 2, size // 2),
+                    diameter=size,
+                )
         else:
             # Colored circle
             pygame.draw.circle(surface, self.color,
                              (size // 2, size // 2), size // 2)
+            draw_avatar_initials(
+                surface,
+                self.username,
+                center=(size // 2, size // 2),
+                diameter=size,
+            )
 
         # White border
         pygame.draw.circle(surface, (255, 255, 255),

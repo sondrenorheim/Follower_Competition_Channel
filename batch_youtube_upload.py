@@ -37,6 +37,7 @@ GAME_MODE_PATTERNS = {
     "snake_escape": "snake_escape",
     "spleef": "spleef",
     "anime_fighting": "anime_fighting",
+    "followers_io": "followers_io",
 }
 
 

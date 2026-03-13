@@ -7,6 +7,7 @@ import pygame
 import time
 import cv2
 import numpy as np
+import heapq
 from typing import List, Optional
 
 import config
@@ -20,6 +21,7 @@ from shared import (
     VideoRecorder,
     auto_push
 )
+from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
 from .racer import Racer
 from .generator import CourseGenerator
 from .camera import ObstacleCourseCamera
@@ -97,6 +99,7 @@ class ObstacleCourseGame:
         # Top 5 race leaderboard (locks once 5 have finished)
         self.top_5_finishers = []
         self.top_5_locked = False
+        self.club_spotlight = None
 
         # Countdown video
         self.countdown_video = None
@@ -242,6 +245,7 @@ class ObstacleCourseGame:
 
         # Use the same layout as intro animation - 50 players per vertical line
         max_racers_per_vertical_line = 50
+        club_members = load_club_member_set()
 
         for i, data in enumerate(follower_data):
             # Determine position in spread-out layout (same as intro)
@@ -258,8 +262,11 @@ class ObstacleCourseGame:
                 y = start_y
 
             racer = Racer(data, (x, y))
+            username = normalize_username(data.get("username"))
+            racer.is_club_member = username in club_members
             self.racers.append(racer)
 
+        self.club_spotlight = select_club_spotlight(self.racers)
         print(f"{len(self.racers)} racers ready to race!\n")
 
     def update(self, dt: float):
@@ -324,17 +331,22 @@ class ObstacleCourseGame:
 
         # Get top 5 racers - prioritize finishers, then by progress
         if not self.top_5_locked:
-            # Get finishers sorted by finish time
-            finishers = [r for r in self.racers if r.finished]
-            finishers_sorted = sorted(finishers, key=lambda r: r.finish_time if r.finish_time else 9999)
+            # Avoid full-list sorting every frame: we only need top 5 entries.
+            finishers_sorted = heapq.nsmallest(
+                5,
+                (r for r in self.racers if r.finished),
+                key=lambda r: r.finish_time if r.finish_time is not None else float("inf"),
+            )
 
-            # Get remaining racers by progress
-            alive_racers = [r for r in self.racers if r.alive and not r.finished]
-            alive_sorted = sorted(alive_racers, key=lambda r: r.progress, reverse=True)
+            needed_alive = max(0, 5 - len(finishers_sorted))
+            alive_sorted = heapq.nlargest(
+                needed_alive,
+                (r for r in self.racers if r.alive and not r.finished),
+                key=lambda r: r.progress,
+            )
 
-            # Combine: finishers first, then alive racers
-            combined = finishers_sorted + alive_sorted
-            top_5 = combined[:5]
+            # Combine: finishers first, then alive racers.
+            top_5 = finishers_sorted + alive_sorted
             top_5_data = [(r.username, r.progress) for r in top_5]
 
             # Lock the top 5 once we have 5 finishers or game is over
@@ -357,6 +369,7 @@ class ObstacleCourseGame:
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "winner": self.first_finisher,
+            "club_spotlight": self.club_spotlight,
         }
 
         self.renderer.render_frame(self.racers, self.course, self.camera, game_state)
