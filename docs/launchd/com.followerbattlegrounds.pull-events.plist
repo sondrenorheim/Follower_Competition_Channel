@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.followerbattlegrounds.pull-events</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON_BIN__</string>
+    <string>__REPO_ROOT__/maintenance/sync_cloud_state.py</string>
+    <string>pull-events</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>R2_ENDPOINT</key>
+    <string>__R2_ENDPOINT__</string>
+    <key>R2_BUCKET</key>
+    <string>__R2_BUCKET__</string>
+    <key>R2_ACCESS_KEY_ID</key>
+    <string>__R2_ACCESS_KEY_ID__</string>
+    <key>R2_SECRET_ACCESS_KEY</key>
+    <string>__R2_SECRET_ACCESS_KEY__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/pull-events.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/pull-events.stderr.log</string>
+</dict>
+</plist>

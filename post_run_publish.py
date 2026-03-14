@@ -2201,7 +2201,6 @@ def main():
         args.wait_for_videos = True
         args.wait_max_seconds = -1
 
-    _ensure_discord_bot()
     if args.ig_export_after_uploads and not args.ig_export_followers:
         args.ig_export_followers = True
 

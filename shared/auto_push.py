@@ -13,7 +13,7 @@ from typing import List, Optional
 
 import json
 import config
-from shared import game_history, statistics, media_kit, results_store
+from . import cloud_sync, game_history, statistics, media_kit, results_store
 
 
 def _load_partitioned_games(base_dir: str = "website/public/api") -> list[dict]:
@@ -42,95 +42,52 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _first_non_empty(*values: str) -> str:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _sync_api_to_r2(api_dir: Path) -> bool:
-    """
-    Sync API payload directly to R2 from the local machine.
-    Returns True on success, False when unavailable or failed.
-    """
-    endpoint = _first_non_empty(
-        os.getenv("R2_ENDPOINT", ""),
-        os.getenv("AWS_ENDPOINT_URL", ""),
-        getattr(config, "R2_ENDPOINT", ""),
-    )
-    bucket = _first_non_empty(
-        os.getenv("R2_BUCKET", ""),
-        getattr(config, "R2_BUCKET", ""),
-    )
-    if not endpoint or not bucket:
-        print("   i R2 sync skipped (missing endpoint/bucket)")
+def _log_cloud_sync_result(result: cloud_sync.SyncResult) -> bool:
+    if result.ok:
+        print(f"   + {result.message}")
+        return True
+    if result.status == "skipped":
+        print(f"   i {result.message}")
         return False
-
-    aws_bin = _first_non_empty(getattr(config, "AWS_CLI_PATH", ""), "aws")
-    try:
-        check = subprocess.run([aws_bin, "--version"], capture_output=True, text=True, check=False)
-        if check.returncode != 0:
-            print("   ! R2 sync skipped (AWS CLI not available)")
-            return False
-    except Exception as e:
-        print(f"   ! R2 sync skipped (AWS CLI check failed): {e}")
-        return False
-
-    sync_cmd = [
-        aws_bin,
-        "s3",
-        "sync",
-        os.fspath(api_dir),
-        f"s3://{bucket}/api",
-        "--endpoint-url",
-        endpoint,
-        "--only-show-errors",
-    ]
-    if getattr(config, "AUTO_PUSH_R2_SYNC_DELETE", True):
-        sync_cmd.append("--delete")
-
-    sync_env = dict(os.environ)
-    access_key = _first_non_empty(
-        os.getenv("R2_ACCESS_KEY_ID", ""),
-        os.getenv("AWS_ACCESS_KEY_ID", ""),
-        getattr(config, "R2_ACCESS_KEY_ID", ""),
-    )
-    secret_key = _first_non_empty(
-        os.getenv("R2_SECRET_ACCESS_KEY", ""),
-        os.getenv("AWS_SECRET_ACCESS_KEY", ""),
-        getattr(config, "R2_SECRET_ACCESS_KEY", ""),
-    )
-    if access_key and secret_key:
-        sync_env["AWS_ACCESS_KEY_ID"] = access_key
-        sync_env["AWS_SECRET_ACCESS_KEY"] = secret_key
-    sync_env.setdefault("AWS_DEFAULT_REGION", "auto")
-    sync_env.setdefault("AWS_REGION", "auto")
-    sync_env.setdefault("AWS_EC2_METADATA_DISABLED", "true")
-    sync_env.setdefault("AWS_MAX_ATTEMPTS", "5")
-    sync_env.setdefault("AWS_RETRY_MODE", "adaptive")
-
-    retries = int(getattr(config, "AUTO_PUSH_R2_SYNC_RETRIES", 3) or 3)
-    delay = int(getattr(config, "AUTO_PUSH_R2_SYNC_RETRY_DELAY_SECONDS", 5) or 5)
-    for attempt in range(1, retries + 1):
-        result = subprocess.run(sync_cmd, capture_output=True, text=True, check=False, env=sync_env)
-        if result.returncode == 0:
-            print("   + Synced website/public/api to R2 from local pipeline")
-            return True
-        print(f"   ! R2 sync failed (attempt {attempt}/{retries})")
-        if result.stderr:
-            print(f"      {result.stderr.strip()}")
-        if attempt < retries:
-            time.sleep(delay)
-            delay = min(delay * 2, 60)
+    print(f"   ! {result.message}")
     return False
+
+
+def sync_generated_data_to_cloud(api_dir: Path | None = None) -> bool:
+    """
+    Best-effort sync of generated API + event payloads to R2.
+    This never falls back to re-tracking heavy API payloads in git.
+    """
+    any_attempted = False
+    all_ok = True
+
+    if getattr(config, "AUTO_PUSH_SYNC_R2_FROM_LOCAL", False):
+        any_attempted = True
+        api_result = cloud_sync.push_api_snapshot(api_dir or (_repo_root() / "website" / "public" / "api"))
+        all_ok = _log_cloud_sync_result(api_result) and all_ok
+
+    if getattr(config, "AUTO_PUSH_SYNC_EVENTS_TO_R2_FROM_LOCAL", False):
+        any_attempted = True
+        events_result = cloud_sync.push_events_snapshot()
+        all_ok = _log_cloud_sync_result(events_result) and all_ok
+
+    if not any_attempted:
+        print("   i Cloud sync disabled by config")
+        return False
+
+    return all_ok
+
+
+def pull_mac_state_from_cloud() -> cloud_sync.SyncResult:
+    """Pull Mac-owned runtime state into the local repo working tree."""
+    return cloud_sync.pull_state_snapshot()
 
 
 def _add_api_for_commit(track_heavy_api: bool):
     api_root = "website/public/api/"
     subprocess.run(["git", "add", "-A", api_root], check=True)
     if track_heavy_api:
-        # Force-add ignored heavy paths when fallback requires git tracking.
+        # Force-add ignored heavy paths only when explicitly requested by config.
         subprocess.run(
             ["git", "add", "-A", "-f", "website/public/api/games/", "website/public/api/player_history/"],
             capture_output=True,
@@ -334,7 +291,7 @@ def push_stats_to_github(
                 matching_files = glob.glob(pattern)
                 files.extend(matching_files)
 
-    requested_track_heavy_api = bool(getattr(config, "AUTO_PUSH_TRACK_HEAVY_API", True))
+    requested_track_heavy_api = bool(getattr(config, "AUTO_PUSH_TRACK_HEAVY_API", False))
     track_heavy_api = requested_track_heavy_api
 
     # Default commit message
@@ -417,12 +374,7 @@ def push_stats_to_github(
             except Exception as e:
                 print(f"   ! Failed to regenerate club member stats: {e}")
 
-            if getattr(config, "AUTO_PUSH_SYNC_R2_FROM_LOCAL", False):
-                api_dir = _repo_root() / "website" / "public" / "api"
-                r2_synced = _sync_api_to_r2(api_dir)
-                if not r2_synced and not requested_track_heavy_api:
-                    print("   ! R2 sync unavailable; temporarily including heavy API in git to avoid data loss")
-                    track_heavy_api = True
+            sync_generated_data_to_cloud(api_dir=api_dir)
 
         # Check if we're in a git repository
         result = subprocess.run(

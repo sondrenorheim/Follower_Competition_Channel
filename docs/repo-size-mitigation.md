@@ -1,6 +1,10 @@
 # Repo Size Mitigation
 
-This project now uses a mixed strategy to reduce git growth while preserving data.
+This project now uses a split strategy:
+
+- GitHub for source code and light API payloads
+- Cloudflare R2 for large generated data and shared multi-machine snapshots
+- Single-writer ownership for mutable runtime JSON/state
 
 ## What Changed
 
@@ -9,8 +13,14 @@ This project now uses a mixed strategy to reduce git growth while preserving dat
 - Heavy API partitions are excluded from git commits by default:
   - `website/public/api/games/`
   - `website/public/api/player_history/`
-- Local auto-push can sync full API directly to R2 before git commit (`AUTO_PUSH_SYNC_R2_FROM_LOCAL = True`).
-- If R2 sync is unavailable, auto-push temporarily re-includes heavy API in git for that run to avoid data loss.
+- Local auto-push can sync generated data directly to R2 before git commit:
+  - `api/` mirrors `website/public/api/`
+  - `events/` mirrors `backups/game_results/events/`
+- Mac-owned runtime state is shared through `state/mac/`:
+  - `Followers/new_followers_fresh.json`
+  - `discord_bot/discord_links.json`
+  - webhook processed-comment/media-map/queue snapshot files
+- The PC pulls `state/mac/` before game runs instead of treating the repo as a shared live folder.
 - GitHub workflow R2 sync excludes heavy partitions to avoid overwriting locally-synced data.
 
 ## Local R2 Settings
@@ -21,6 +31,27 @@ Set these via environment variables (or `config.py`):
 - `R2_BUCKET`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
+- `R2_API_PREFIX` (default `api`)
+- `R2_EVENTS_PREFIX` (default `events`)
+- `R2_STATE_PREFIX` (default `state/mac`)
+
+## Manual Sync Commands
+
+Use the cross-platform helper:
+
+```bash
+python maintenance/sync_cloud_state.py push-api
+python maintenance/sync_cloud_state.py push-events
+python maintenance/sync_cloud_state.py pull-events
+python maintenance/sync_cloud_state.py push-state
+python maintenance/sync_cloud_state.py pull-state
+```
+
+Recommended ownership:
+
+- PC writes `api/` and `events/`
+- Mac writes `state/mac/`
+- Never let both machines write the same JSON state files
 
 ## One-Time History Cleanup
 

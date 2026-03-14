@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.followerbattlegrounds.webhook</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON_BIN__</string>
+    <string>__REPO_ROOT__/instagram_webhook.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>WEBHOOK_USE_LOCAL_HISTORY</key>
+    <string>0</string>
+    <key>WEBHOOK_EVENTS_FALLBACK</key>
+    <string>1</string>
+    <key>WEBHOOK_ISOLATE_RESULT_LOOKUP</key>
+    <string>1</string>
+    <key>WEBHOOK_EVENTS_DIR</key>
+    <string>__REPO_ROOT__/backups/game_results/events</string>
+    <key>R2_ENDPOINT</key>
+    <string>__R2_ENDPOINT__</string>
+    <key>R2_BUCKET</key>
+    <string>__R2_BUCKET__</string>
+    <key>R2_ACCESS_KEY_ID</key>
+    <string>__R2_ACCESS_KEY_ID__</string>
+    <key>R2_SECRET_ACCESS_KEY</key>
+    <string>__R2_SECRET_ACCESS_KEY__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/webhook.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/webhook.stderr.log</string>
+</dict>
+</plist>

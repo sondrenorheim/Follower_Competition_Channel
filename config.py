@@ -80,14 +80,14 @@ ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "
 # ALL_GAME_MODES = ["discord_signal"]
 NON_SCORING_GAME_TYPES = ["mingle", "lava_platform", "plinko", "moon_stack"]
 YOUTUBE_SKIP_GAME_MODES = ["super_follower_bros"]
-# Skip including the "Top 10" block in Instagram captions for these game modes.
+# Skip including the "Top 10" block in Instagram captions for these game modes.dx
 TOP10_SKIP_GAME_MODES = ["super_follower_bros", "super_follower_bros_1_2", "jetpack_followers", "crossy_followers"]
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "followers_io", "maze_rush", "math_drop", "plinko", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "lava_platform", "mini_golf", "flappy_followers", "tiny_followers", "jetpack_followers", "doodle_followers", "crossy_followers", "super_follower_bros", "subway_followers", "subway_followers_3d", "beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic", "moon_stack", "ALL"
 TEST_MODE = False  # Set to True to enable test mode (won't save results to leaderboard)
 EXPORT_VIDEO = True
-DAY_NUMBER = 111 # Increment  this each time you record a new video
+DAY_NUMBER = 112 # Increment  this each time you record a new video
 COMMENT_RESULT_PROMPT_TEXT = 'Comment "RESULT" to see how you did'
 WEB_RESULTS_PREVIEW_LIMIT = 200  # Top N results to include in web preview files
 
@@ -160,8 +160,8 @@ MEDIA_KIT_AUDIENCE_INTERESTS = [
 
 
 # ===== WEBHOOK SERVICE AUTOSTART =====
-# When True, main.py will check the webhook server + tunnel and start them if missing.
-AUTO_START_WEBHOOK_SERVICES = True
+# PC runtime should not launch inbound services; webhook/tunnel move to the Mac.
+AUTO_START_WEBHOOK_SERVICES = False
 WEBHOOK_SERVER_SCRIPT = "instagram_webhook.py"
 WEBHOOK_SERVER_PORT = 5000
 # Tunnel provider: "cloudflared" (Cloudflare Tunnel) or "ngrok"
@@ -200,7 +200,8 @@ WEBHOOK_SERVICE_HEADLESS = True
 WEBHOOK_SERVICE_LOG_DIR = "logs/webhook_services"
 
 # ===== DISCORD BOT AUTOSTART =====
-AUTO_START_DISCORD_BOT = True
+# Discord bot also runs on the Mac, not from the PC pipeline.
+AUTO_START_DISCORD_BOT = False
 DISCORD_BOT_SCRIPT = "discord_bot/bot.py"
 DISCORD_BOT_PID_FILE = "discord_bot/discord_bot.pid"
 DISCORD_BOT_LOG_DIR = "logs/discord_bot"
@@ -213,6 +214,22 @@ AUTO_PUSH_STATS = True
 # Control whether video files are included in auto-push (set False to only push stats data)
 AUTO_PUSH_INCLUDE_VIDEOS = False
 AUTO_PUSH_MERGE_API_GAMES = True
+# Keep heavyweight API partitions out of git; push them to R2 instead.
+AUTO_PUSH_TRACK_HEAVY_API = False
+AUTO_PUSH_SYNC_R2_FROM_LOCAL = True
+AUTO_PUSH_SYNC_EVENTS_TO_R2_FROM_LOCAL = True
+# Pull Mac-owned follower/webhook state before the next render run starts.
+AUTO_PULL_MAC_STATE_BEFORE_RUN = True
+# Optional AWS CLI override for Windows or macOS.
+AWS_CLI_PATH = ""
+# Shared Cloudflare R2 configuration for API/events/state sync.
+R2_ENDPOINT = ""
+R2_BUCKET = ""
+R2_ACCESS_KEY_ID = ""
+R2_SECRET_ACCESS_KEY = ""
+R2_API_PREFIX = "api"
+R2_EVENTS_PREFIX = "events"
+R2_STATE_PREFIX = "state/mac"
 # ALL-mode push behavior:
 # - "final_only": push once after all games are complete.
 # - "per_game": push after every game (legacy high-commit mode).
@@ -518,6 +535,7 @@ FACEBOOK_RESULT_FUTURE_GAMES_REPLY_TEXT = (
 FACEBOOK_WEBHOOK_SECRETS_FILE = "facebook_page_publish.local.env"
 FACEBOOK_ENABLE_JOIN_CAPTURE = True
 FACEBOOK_ENABLE_RESULT_REPLIES = True
+WEBHOOK_MEDIA_GAME_MAP_PATH = "logs/webhook_services/media_game_mapping.json"
 FACEBOOK_MEDIA_GAME_MAP_PATH = "logs/webhook_services/facebook_media_game_mapping.json"
 FACEBOOK_PROCESSED_COMMENT_IDS_PATH = "logs/webhook_services/processed_comment_ids.json"
 
@@ -550,6 +568,8 @@ WEBHOOK_EVENTS_DAY_REFRESH_SECONDS = 60
 WEBHOOK_EVENTS_DAY_CACHE_MAX = 256
 WEBHOOK_EVENTS_GAME_CACHE_MAX = 0
 WEBHOOK_EVENTS_SCAN_MAX_FILES = 0
+WEBHOOK_USE_LOCAL_HISTORY = False
+WEBHOOK_EVENTS_DIR = project_path("backups", "game_results", "events")
 WEBHOOK_LOCAL_HISTORY_MAX_MB = 512
 WEBHOOK_LOCAL_HISTORY_ALLOW_HUGE = False
 WEBHOOK_EVENTS_FALLBACK = True

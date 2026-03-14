@@ -387,6 +387,30 @@ def _ensure_discord_bot():
     )
 
 
+def _pull_mac_runtime_state_before_run():
+    if not getattr(config, "AUTO_PULL_MAC_STATE_BEFORE_RUN", True):
+        return True
+
+    print("Pulling Mac-owned runtime state from R2...")
+    try:
+        result = auto_push.pull_mac_state_from_cloud()
+    except Exception as exc:
+        print(f"Warning: Mac state pull failed unexpectedly: {exc}")
+        print("Continuing with existing local state snapshot.")
+        return False
+
+    if result.ok:
+        print(f"   + {result.message}")
+        return True
+
+    if result.status == "skipped":
+        print(f"   i {result.message}")
+    else:
+        print(f"   ! {result.message}")
+    print("Continuing with existing local state snapshot.")
+    return False
+
+
 class FollowerBattleRoyale:
     """
     Main game class orchestrating the battle royale simulation
@@ -1572,11 +1596,7 @@ def main():
     run_completed = False
 
     try:
-        if simulation_light_mode:
-            print("Simulation-light mode: skipping webhook and Discord autostart.")
-        else:
-            _ensure_webhook_services()
-            _ensure_discord_bot()
+        _pull_mac_runtime_state_before_run()
 
         # Select game mode based on config
         game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
