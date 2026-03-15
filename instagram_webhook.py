@@ -2081,7 +2081,10 @@ def load_day_summary(day_number):
         payload = _load_day_summary_from_events(key)
         if payload:
             print(f"Loaded day {key} summary from events fallback")
-    _DAY_SUMMARY_CACHE[key] = payload
+    if payload is not None:
+        _DAY_SUMMARY_CACHE[key] = payload
+    else:
+        _DAY_SUMMARY_CACHE.pop(key, None)
     return payload
 
 
@@ -2357,6 +2360,28 @@ def _latest_available_day_number():
     _LATEST_DAY_CACHE_VALUE = day_numbers[-1] if day_numbers else None
     _LATEST_DAY_CACHE_AT = now
     return _LATEST_DAY_CACHE_VALUE
+
+
+def _should_defer_latest_day_fallback(day_number, game_type=None):
+    candidate = _coerce_int(day_number)
+    if candidate is None:
+        return False
+    latest = _latest_available_day_number()
+    if latest is None:
+        return False
+    if candidate >= int(latest):
+        if game_type:
+            print(
+                f"Deferring nearby-day fallback for day {candidate} game {game_type}; "
+                f"latest available day is {latest}"
+            )
+        else:
+            print(
+                f"Deferring nearby-day fallback for day {candidate}; "
+                f"latest available day is {latest}"
+            )
+        return True
+    return False
 
 
 def _is_recent_cache_day(day_number):
@@ -3847,6 +3872,8 @@ def build_youtube_results_message(comment_data, comment_text=None):
 
     day_summary = load_day_summary(day_number)
     if not day_summary:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             day_number = nearby_day
@@ -3857,6 +3884,8 @@ def build_youtube_results_message(comment_data, comment_text=None):
 
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             day_number = nearby_day
@@ -3936,6 +3965,8 @@ def build_facebook_results_message(comment_data, comment_text=None):
 
     day_summary = load_day_summary(day_number)
     if not day_summary:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             day_number = nearby_day
@@ -3946,6 +3977,8 @@ def build_facebook_results_message(comment_data, comment_text=None):
 
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             day_number = nearby_day
@@ -4078,6 +4111,8 @@ def build_results_message(comment_data, comment_text=None):
     day_summary = load_day_summary(day_number)
     if not day_summary:
         media_ts = _parse_timestamp((media_meta or {}).get("timestamp"))
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             print(f"No day summary for day {day_number}; using nearest day {nearby_day}")
@@ -4090,6 +4125,8 @@ def build_results_message(comment_data, comment_text=None):
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
         media_ts = _parse_timestamp((media_meta or {}).get("timestamp"))
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             print(
