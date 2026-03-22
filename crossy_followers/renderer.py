@@ -1,16 +1,16 @@
+import math
 from typing import Dict, List, Optional, Tuple
 
 import pygame
 
 import config
 from shared import RendererTemplate
-from shared.club_panel import draw_club_panel
 
 
 class CrossyFollowersRenderer(RendererTemplate):
     GAME_TITLE = "CROSSY FOLLOWERS"
-    GAME_SUBTITLE = "Making my club members cross every day"
-    PLAYER_LABEL = "club members"
+    GAME_SUBTITLE = "Making my followers cross every day"
+    PLAYER_LABEL = "followers"
     GAME_WIDTH = getattr(config, "CROSSY_ARENA_RECT", getattr(config, "DOODLE_ARENA_RECT", (0, 0, config.SCREEN_WIDTH, config.SCREEN_HEIGHT)))[2]
     GAME_HEIGHT = getattr(config, "CROSSY_ARENA_RECT", getattr(config, "DOODLE_ARENA_RECT", (0, 0, config.SCREEN_WIDTH, config.SCREEN_HEIGHT)))[3]
 
@@ -38,13 +38,12 @@ class CrossyFollowersRenderer(RendererTemplate):
         self.elimination_list_x_offset = int(getattr(config, "CROSSY_ELIMINATION_LIST_X_OFFSET", 0))
         self.font_eliminations = pygame.font.Font(None, self.elimination_text_size)
 
-        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
-        self.font_club_panel = pygame.font.Font(None, club_text_size)
-        self._club_panel_anchor_y = None
-        self._club_panel_bottom = None
-
         self._camera_row = 0.0
         self._row_height = float(getattr(config, "CROSSY_ROW_HEIGHT", 56.0))
+        self.lane_count = max(5, int(getattr(config, "CROSSY_LANE_COUNT", 9)))
+        self.lane_width = (self.game_right - self.game_left) / float(self.lane_count)
+        self._visible_row_lookup: Dict[int, object] = {}
+        self._tile_offset_cache: Dict[Tuple[int, int, int, int], List[Tuple[float, float]]] = {}
 
         self._texture_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
         self._row_textures: Dict[str, Optional[pygame.Surface]] = {}
@@ -70,13 +69,16 @@ class CrossyFollowersRenderer(RendererTemplate):
     def render_frame(self, players, game_state: dict):
         self._camera_row = float(game_state.get("camera_row", 0.0))
         self._row_height = float(game_state.get("row_height", self._row_height))
+        self._visible_row_lookup = {
+            int(getattr(row, "index", -1)): row
+            for row in (game_state.get("rows", []) or [])
+        }
 
         self.screen.fill(config.COLOR_BACKGROUND)
         self._draw_game_area(players, game_state)
         self._draw_players(players)
         self._draw_title_and_subtitle()
         self._draw_day_counter(players, game_state)
-        self._draw_club_panel(game_state)
         self._draw_game_ui(players, game_state)
 
         if game_state.get("show_leaderboards"):
@@ -358,27 +360,86 @@ class CrossyFollowersRenderer(RendererTemplate):
         rect = avatar_surface.get_rect(center=(screen_x, screen_y))
         self.screen.blit(avatar_surface, rect)
 
+    def _lane_to_screen_x(self, lane_index: int) -> int:
+        lane = max(0, min(self.lane_count - 1, int(lane_index)))
+        return int(round(self.game_left + (lane + 0.5) * self.lane_width))
+
+    def _player_screen_x(self, player) -> int:
+        row = self._visible_row_lookup.get(int(getattr(player, "grid_row", 0)))
+        if row is not None and getattr(row, "row_type", "") == "water":
+            return int(round(player.x))
+        return self._lane_to_screen_x(getattr(player, "grid_lane", 0))
+
+    def _player_draw_key(self, player) -> Tuple[str, str, int]:
+        return (
+            str(getattr(player, "username", "") or ""),
+            str(getattr(player, "id", "") or ""),
+            id(player),
+        )
+
+    def _tile_offsets(self, count: int) -> List[Tuple[float, float]]:
+        cache_key = (
+            int(count),
+            int(round(self.lane_width)),
+            int(round(self._row_height)),
+            int(round(self.player_size)),
+        )
+        cached = self._tile_offset_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if count <= 1:
+            offsets = [(0.0, 0.0)]
+            self._tile_offset_cache[cache_key] = offsets
+            return offsets
+
+        max_x = max(3.0, min(self.lane_width * 0.28, self.player_size * 0.50))
+        max_y = max(3.0, min(self._row_height * 0.18, self.player_size * 0.36))
+        angle_step = math.pi * (3.0 - math.sqrt(5.0))
+        offsets: List[Tuple[float, float]] = []
+        for idx in range(count):
+            theta = idx * angle_step
+            radius = math.sqrt((idx + 1.0) / (count + 1.0))
+            offsets.append((
+                math.cos(theta) * max_x * radius,
+                math.sin(theta) * max_y * radius,
+            ))
+
+        mean_x = sum(x for x, _ in offsets) / float(count)
+        mean_y = sum(y for _, y in offsets) / float(count)
+        centered = [(x - mean_x, y - mean_y) for x, y in offsets]
+        self._tile_offset_cache[cache_key] = centered
+        return centered
+
     def _draw_players(self, players):
-        club_players = []
+        grouped_players: Dict[Tuple[int, int], List[Tuple[object, int, int]]] = {}
         for player in players:
             if not player.alive and not player.is_fading():
                 continue
-            screen_x = int(round(player.x))
-            screen_y = int(round(self._row_center_to_screen_y(player.grid_row)))
+            base_x = self._player_screen_x(player)
+            base_y = int(round(self._row_center_to_screen_y(player.grid_row)))
+            screen_y = base_y
             if screen_y < self.game_top - 80 or screen_y > self.game_bottom + 80:
                 continue
-            if getattr(player, "is_club_member", False):
-                club_players.append((player, screen_x, screen_y))
-                continue
-            self._draw_avatar_at(player, screen_x, screen_y)
+            tile_key = (int(getattr(player, "grid_lane", 0)), int(getattr(player, "grid_row", 0)))
+            grouped_players.setdefault(tile_key, []).append((player, base_x, base_y))
 
-        for player, screen_x, screen_y in club_players:
-            self._draw_club_glow(player, size=self.player_size, pos=(screen_x, screen_y))
+        draw_queue: List[Tuple[int, Tuple[str, str, int], object, int, int]] = []
+        for entries in grouped_players.values():
+            ordered = sorted(entries, key=lambda entry: self._player_draw_key(entry[0]))
+            offsets = self._tile_offsets(len(ordered))
+            for (player, base_x, base_y), (offset_x, offset_y) in zip(ordered, offsets):
+                screen_x = int(round(base_x + offset_x))
+                screen_y = int(round(base_y + offset_y))
+                draw_queue.append((screen_y, self._player_draw_key(player), player, screen_x, screen_y))
+
+        draw_queue.sort(key=lambda item: (item[0], item[1]))
+        for _, _, player, screen_x, screen_y in draw_queue:
             self._draw_avatar_at(player, screen_x, screen_y)
 
     def _draw_day_counter(self, players, game_state: dict):
-        total_count = len(players)
-        day_number = game_state.get("club_day_number")
+        total_count = int(game_state.get("participant_count", len(players)))
+        day_number = game_state.get("display_day_number")
         if day_number is None:
             day_number = int(getattr(config, "DAY_NUMBER", 1))
         day_text = f"Day {day_number}: {total_count} {self.PLAYER_LABEL}"
@@ -388,23 +449,6 @@ class CrossyFollowersRenderer(RendererTemplate):
         day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, y_pos))
         self.screen.blit(day_surface, day_rect)
-        self._club_panel_anchor_y = day_rect.bottom
-
-    def _draw_club_panel(self, game_state: dict):
-        anchor_y = self._club_panel_anchor_y
-        self._club_panel_bottom = anchor_y
-        if anchor_y is None:
-            return
-        panel_rect = draw_club_panel(
-            self.screen,
-            game_state.get("club_spotlight"),
-            anchor_y=anchor_y,
-            font=self.font_club_panel,
-            get_avatar_surface=self._get_avatar_surface,
-            glow_cache=self._club_glow_cache,
-        )
-        if panel_rect is not None:
-            self._club_panel_bottom = panel_rect.bottom
 
     def _draw_game_ui(self, players, game_state: dict):
         alive_count = game_state.get("alive_count")
@@ -450,8 +494,6 @@ class CrossyFollowersRenderer(RendererTemplate):
 
         list_right_x = self.width - 16 + self.elimination_list_x_offset
         list_top = self.game_top + 10
-        if self._club_panel_bottom is not None:
-            list_top = max(list_top, int(self._club_panel_bottom + 8))
 
         label_surface = self.font_eliminations.render(self.elimination_label, True, (0, 0, 0))
         label_rect = label_surface.get_rect(topright=(list_right_x, list_top))

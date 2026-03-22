@@ -76,6 +76,15 @@ website/public/game_history_web.json
 website/public/api/games/
 website/public/api/player_history/
 
+# Local generated site snapshots / validation builds
+website/dist-header-check/
+
+# Local binary game builds
+crossy-road-win/
+
+# Local planning / stats trackers
+docs/youtube_shorts/21_day_tracker.csv
+
 # Followers export dumps (keep local only)
 Followers/exports/
 TiktokAutoUploader/

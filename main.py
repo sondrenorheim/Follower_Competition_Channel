@@ -12,6 +12,7 @@ import pygame
 import random
 import math
 import time
+import gc
 import importlib
 import argparse
 from datetime import datetime
@@ -25,6 +26,13 @@ import json
 from pathlib import Path
 from typing import List
 import shared.api as shared_api
+import shared.cloud_sync as shared_cloud_sync
+from shared.lazy_avatar import clear_lazy_avatar_cache
+from shared.platform_targets import (
+    is_native_youtube_game,
+    normalize_platform_target,
+    resolve_output_video_path,
+)
 
 # Fix Windows console encoding to support UTF-8 characters
 if os.name == 'nt':  # Windows
@@ -388,8 +396,29 @@ def _ensure_discord_bot():
 
 
 def _pull_mac_runtime_state_before_run():
+    if getattr(config, "TEST_MINIMAL_PLAYERS", False):
+        print("TEST_MINIMAL_PLAYERS: Skipping Mac runtime state pull.")
+        return True
     if not getattr(config, "AUTO_PULL_MAC_STATE_BEFORE_RUN", True):
         return True
+
+    follower_import_raw = str(getattr(config, "FOLLOWER_IMPORT_FILE", "") or "").strip()
+    follower_import_path = Path(follower_import_raw) if follower_import_raw else None
+    if follower_import_path is not None and not follower_import_path.is_absolute():
+        follower_import_path = Path(__file__).resolve().parent / follower_import_path
+
+    preserve_local_follower_import = bool(
+        getattr(config, "AUTO_PULL_PRESERVE_LOCAL_FOLLOWER_IMPORT", True)
+    )
+    had_local_follower_import = False
+    local_follower_import_bytes = None
+    if preserve_local_follower_import and follower_import_path is not None:
+        try:
+            if follower_import_path.is_file():
+                had_local_follower_import = True
+                local_follower_import_bytes = follower_import_path.read_bytes()
+        except Exception as exc:
+            print(f"Warning: Failed to snapshot local follower import before state pull: {exc}")
 
     print("Pulling Mac-owned runtime state from R2...")
     try:
@@ -400,6 +429,16 @@ def _pull_mac_runtime_state_before_run():
         return False
 
     if result.ok:
+        if preserve_local_follower_import and follower_import_path is not None:
+            try:
+                if had_local_follower_import and local_follower_import_bytes is not None:
+                    follower_import_path.parent.mkdir(parents=True, exist_ok=True)
+                    follower_import_path.write_bytes(local_follower_import_bytes)
+                    print("   i Preserved local follower import after state pull.")
+                elif follower_import_path.exists():
+                    follower_import_path.unlink()
+            except Exception as exc:
+                print(f"Warning: Failed to restore local follower import after state pull: {exc}")
         print(f"   + {result.message}")
         return True
 
@@ -1245,6 +1284,10 @@ def _create_game_instance(game_mode: str):
 
 def _prefetch_followers_for_all() -> list:
     """Prefetch followers (including avatars) once so ALL mode can reuse them."""
+    if config.TEST_MINIMAL_PLAYERS:
+        print("TEST_MINIMAL_PLAYERS: Skipping follower prefetch for ALL mode.")
+        shared_api.clear_prefetched_followers()
+        return []
     try:
         api_client = InstagramAPI()
         # Support test mode
@@ -1262,9 +1305,17 @@ def _prefetch_followers_for_all() -> list:
 
 def _prefetch_followers_for_import(import_file: str) -> list:
     """Prefetch followers (including avatars) once for a specific import source."""
+    if config.TEST_MINIMAL_PLAYERS:
+        print(f"TEST_MINIMAL_PLAYERS: Skipping follower prefetch for import source '{import_file}'.")
+        shared_api.clear_prefetched_followers()
+        return []
     previous_import = getattr(config, "FOLLOWER_IMPORT_FILE", "")
     try:
         config.FOLLOWER_IMPORT_FILE = import_file
+        # Force a fresh read for this import source. Otherwise the shared
+        # in-memory prefetch cache from the previous mode can be returned here
+        # before InstagramAPI ever reads the new file.
+        shared_api.clear_prefetched_followers()
         api_client = InstagramAPI()
         if config.TEST_MINIMAL_PLAYERS:
             print(
@@ -1297,63 +1348,114 @@ def _apply_prefetched_followers_for_mode(game_mode: str, cache_by_import: dict[s
     return prefetched
 
 
-def _run_single_mode(game_mode: str):
-    """Set per-game config and run one game mode."""
-    config.GAME_MODE = game_mode
-    config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode=game_mode)
-    config.FOLLOWER_IMPORT_FILE = _get_follower_import_file(game_mode)
-    game = _create_game_instance(game_mode)
-    game.run()
-
+def _should_run_native_youtube_companion(game_mode: str, platform_target: str) -> bool:
+    if normalize_platform_target(platform_target) != "instagram":
+        return False
+    if not bool(getattr(config, "AUTO_RUN_NATIVE_YOUTUBE_COMPANIONS", True)):
+        return False
     if not bool(getattr(config, "EXPORT_VIDEO", False)):
-        return
-    if not bool(getattr(config, "NON_IG_VARIANT_ENABLED", True)):
-        return
-    if not bool(getattr(config, "NON_IG_VARIANT_GENERATE_AFTER_EXPORT", True)):
-        return
-    if ensure_non_ig_join_variant is None:
-        print("[WARN] Non-IG variant builder unavailable; skipping JOIN footer variant generation.")
-        return
+        return False
+    return is_native_youtube_game(game_mode, "youtube")
 
-    base_video_raw = str(getattr(config, "OUTPUT_VIDEO_PATH", "") or "").strip()
-    if not base_video_raw:
-        return
-    base_video_path = Path(base_video_raw)
 
-    variant_video_path = Path(
-        config.get_non_ig_variant_video_path(
-            game_mode=game_mode,
-            day_number=getattr(config, "DAY_NUMBER", None),
-            test_mode=getattr(config, "TEST_MODE", None),
-        )
+def _run_single_mode_for_platform(game_mode: str, platform_target: str):
+    """Set per-game config and run one game mode for one platform target."""
+    config.PLATFORM_TARGET = normalize_platform_target(platform_target)
+    config.GAME_MODE = game_mode
+    config.OUTPUT_VIDEO_PATH = resolve_output_video_path(
+        game_mode=game_mode,
+        day_number=getattr(config, "DAY_NUMBER", None),
+        test_mode=getattr(config, "TEST_MODE", None),
+        platform_target=config.PLATFORM_TARGET,
     )
-
-    needs_generation = True
+    config.FOLLOWER_IMPORT_FILE = _get_follower_import_file(game_mode)
+    game = None
     try:
-        if variant_video_path.exists() and variant_video_path.stat().st_mtime >= base_video_path.stat().st_mtime:
-            needs_generation = False
-    except Exception:
+        game = _create_game_instance(game_mode)
+        game.run()
+
+        if not bool(getattr(config, "EXPORT_VIDEO", False)):
+            return
+        if normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram")) == "youtube":
+            return
+        if not bool(getattr(config, "NON_IG_VARIANT_ENABLED", True)):
+            return
+        if not bool(getattr(config, "NON_IG_VARIANT_GENERATE_AFTER_EXPORT", True)):
+            return
+        if ensure_non_ig_join_variant is None:
+            print("[WARN] Non-IG variant builder unavailable; skipping JOIN footer variant generation.")
+            return
+
+        base_video_raw = str(getattr(config, "OUTPUT_VIDEO_PATH", "") or "").strip()
+        if not base_video_raw:
+            return
+        base_video_path = Path(base_video_raw)
+
+        variant_video_path = Path(
+            config.get_non_ig_variant_video_path(
+                game_mode=game_mode,
+                day_number=getattr(config, "DAY_NUMBER", None),
+                test_mode=getattr(config, "TEST_MODE", None),
+            )
+        )
+
         needs_generation = True
+        try:
+            if variant_video_path.exists() and variant_video_path.stat().st_mtime >= base_video_path.stat().st_mtime:
+                needs_generation = False
+        except Exception:
+            needs_generation = True
 
-    try:
-        resolved_path = ensure_non_ig_join_variant(base_video_path, variant_video_path)
-        if resolved_path == variant_video_path and variant_video_path.exists():
-            if needs_generation:
-                message = f"Generated non-IG JOIN variant: {variant_video_path}"
-                if get_last_non_ig_variant_build_info is not None:
-                    info = get_last_non_ig_variant_build_info() or {}
-                    top_y = info.get("top_y")
-                    mode = str(info.get("placement_mode") or "").strip()
-                    if top_y is not None:
-                        if mode:
-                            message += f" (top_y={top_y}, mode={mode})"
-                        else:
-                            message += f" (top_y={top_y})"
-                print(message)
-        else:
-            print("Variant generation failed; falling back to base video")
-    except Exception as exc:
-        print(f"Variant generation failed; falling back to base video ({exc})")
+        try:
+            resolved_path = ensure_non_ig_join_variant(base_video_path, variant_video_path)
+            if resolved_path == variant_video_path and variant_video_path.exists():
+                if needs_generation:
+                    message = f"Generated non-IG JOIN variant: {variant_video_path}"
+                    if get_last_non_ig_variant_build_info is not None:
+                        info = get_last_non_ig_variant_build_info() or {}
+                        top_y = info.get("top_y")
+                        mode = str(info.get("placement_mode") or "").strip()
+                        if top_y is not None:
+                            if mode:
+                                message += f" (top_y={top_y}, mode={mode})"
+                            else:
+                                message += f" (top_y={top_y})"
+                    print(message)
+            else:
+                print("Variant generation failed; falling back to base video")
+        except Exception as exc:
+            print(f"Variant generation failed; falling back to base video ({exc})")
+    finally:
+        try:
+            renderer = getattr(game, "renderer", None)
+            clear_fn = getattr(renderer, "clear_avatar_cache", None)
+            if callable(clear_fn):
+                clear_fn()
+        except Exception:
+            pass
+        shared_api.clear_avatar_runtime_cache()
+        clear_lazy_avatar_cache()
+        if game is not None:
+            del game
+        gc.collect()
+
+
+def _run_single_mode(game_mode: str):
+    """Run the primary platform pass and, when configured, a native YouTube companion pass."""
+    primary_platform = normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram"))
+    _run_single_mode_for_platform(game_mode, primary_platform)
+
+    if _should_run_native_youtube_companion(game_mode, primary_platform):
+        print(f"[INFO] Running native YouTube companion pass for {game_mode}")
+        _run_single_mode_for_platform(game_mode, "youtube")
+
+    config.PLATFORM_TARGET = primary_platform
+    config.OUTPUT_VIDEO_PATH = resolve_output_video_path(
+        game_mode=game_mode,
+        day_number=getattr(config, "DAY_NUMBER", None),
+        test_mode=getattr(config, "TEST_MODE", None),
+        platform_target=primary_platform,
+    )
 
 
 def _write_scheduled_upload_context() -> Path | None:
@@ -1365,6 +1467,7 @@ def _write_scheduled_upload_context() -> Path | None:
             "day_number": int(getattr(config, "DAY_NUMBER", 0)),
             "all_game_modes": list(getattr(config, "ALL_GAME_MODES", [])),
             "game_mode": getattr(config, "GAME_MODE", ""),
+            "platform_target": normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram")),
             "timestamp": datetime.now().isoformat(),
         }
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1466,6 +1569,132 @@ print('Stats push complete for {game_mode}')
         print(f"Warning: Failed to start background stats push: {e}")
 
 
+def _should_force_simulation_light_for_all_mode(game_mode: str, range_mode: bool, no_simulation_light: bool) -> bool:
+    """Force simulation-light internals for normal ALL runs unless explicitly disabled."""
+    if str(game_mode or "").strip().upper() != "ALL":
+        return False
+    if range_mode or no_simulation_light:
+        return False
+    return bool(getattr(config, "SIMULATION_LIGHT_FORCE_FOR_ALL_MODE", True))
+
+
+def _should_start_scheduled_upload_launcher(
+    *,
+    range_mode: bool,
+    simulation_light_mode: bool,
+    production_all_light_run: bool,
+) -> bool:
+    if range_mode:
+        return False
+    if not simulation_light_mode:
+        return True
+    if production_all_light_run:
+        return bool(getattr(config, "SIMULATION_LIGHT_START_SCHEDULED_UPLOAD_FOR_ALL_MODE", True))
+    return False
+
+
+def _sync_events_snapshot_for_all_mode(
+    *,
+    game_mode: str,
+    day_number: int,
+    completed_modes: int,
+    total_run_items: int,
+) -> bool:
+    """Push append-only event logs so the Mac webhook can serve fresh results mid-run."""
+    if not bool(getattr(config, "SIMULATION_LIGHT_SYNC_EVENTS_DURING_ALL_MODE", True)):
+        return False
+
+    batch_size = max(1, int(getattr(config, "SIMULATION_LIGHT_SYNC_EVENTS_BATCH_SIZE", 1) or 1))
+    if completed_modes % batch_size != 0 and completed_modes != total_run_items:
+        return False
+
+    print(
+        f"  -> Syncing event logs to R2 after {game_mode} "
+        f"(Day {day_number}, game {completed_modes}/{total_run_items})"
+    )
+    try:
+        result = shared_cloud_sync.push_events_snapshot()
+    except Exception as exc:
+        print(f"     ! Event sync failed unexpectedly: {exc}")
+        return False
+
+    if result.ok:
+        print(f"     + {result.message}")
+        return True
+    if result.status == "skipped":
+        print(f"     i {result.message}")
+        return False
+    print(f"     ! {result.message}")
+    return False
+
+
+def _run_simulation_light_rebuild() -> bool:
+    """Rebuild canonical history/stat/API outputs after a simulation-light run."""
+    base_dir = Path(__file__).resolve().parent
+    script_path = base_dir / "maintenance" / "rebuild_history_stats_from_events.py"
+    if not script_path.exists():
+        print(f"Warning: rebuild script not found at {script_path}")
+        return False
+
+    print("\nRebuilding canonical history/stat/API outputs from event logs...")
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=str(base_dir),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print("Warning: canonical rebuild timed out after 1800 seconds")
+        return False
+    except Exception as exc:
+        print(f"Warning: canonical rebuild failed unexpectedly: {exc}")
+        return False
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if stdout:
+        print(stdout)
+    if completed.returncode != 0:
+        if stderr:
+            print(stderr)
+        print(f"Warning: canonical rebuild exited with code {completed.returncode}")
+        return False
+    if stderr:
+        print(stderr)
+    return True
+
+
+def _finalize_simulation_light_all_mode_run(original_auto_push_stats: bool) -> bool:
+    """
+    Rebuild canonical outputs after a production ALL run and publish/sync them.
+    Event log syncs keep the Mac webhook fresh while rendering; this step catches
+    the canonical files and public API up once rendering is complete.
+    """
+    if not bool(getattr(config, "SIMULATION_LIGHT_REBUILD_AFTER_ALL_MODE", True)):
+        print("Skipping post-run canonical rebuild for simulation-light ALL mode (config disabled).")
+        return True
+
+    if not _run_simulation_light_rebuild():
+        return False
+
+    if original_auto_push_stats and bool(getattr(config, "SIMULATION_LIGHT_PUSH_AFTER_ALL_MODE_REBUILD", True)):
+        print("\nPublishing rebuilt history/stat/API outputs...")
+        return auto_push.push_stats_to_github()
+
+    print("\nGit publish disabled for this run; syncing rebuilt API/events to cloud only.")
+    api_dir = Path(__file__).resolve().parent / "website" / "public" / "api"
+    sync_requested = bool(getattr(config, "AUTO_PUSH_SYNC_R2_FROM_LOCAL", False)) or bool(
+        getattr(config, "AUTO_PUSH_SYNC_EVENTS_TO_R2_FROM_LOCAL", False)
+    )
+    sync_ok = auto_push.sync_generated_data_to_cloud(api_dir=api_dir)
+    if sync_requested and not sync_ok:
+        print("Warning: rebuilt API/events were not fully synced to cloud.")
+    return True
+
+
 def _normalize_all_mode_push_strategy(value: str) -> str:
     """Normalize ALL-mode auto-push strategy names."""
     strategy = str(value or "").strip().lower()
@@ -1554,6 +1783,11 @@ def _parse_cli_args():
         action="store_true",
         help="Force full history/stat mode for this run.",
     )
+    parser.add_argument(
+        "--platform",
+        choices=["instagram", "youtube"],
+        help="Render target platform. Instagram preserves the current flow; YouTube enables native Shorts behavior for supported games.",
+    )
     return parser.parse_args()
 
 
@@ -1571,15 +1805,22 @@ def main():
     original_auto_push_stats = bool(getattr(config, "AUTO_PUSH_STATS", False))
     original_follower_import_file = getattr(config, "FOLLOWER_IMPORT_FILE", _DEFAULT_FOLLOWER_IMPORT_FILE)
     original_simulation_light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False))
+    original_platform_target = normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram"))
+    game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
+    platform_target = normalize_platform_target(args.platform or original_platform_target)
+    config.PLATFORM_TARGET = platform_target
     range_mode = args.day_range is not None
     simulation_light_mode = original_simulation_light_mode
     if range_mode and bool(getattr(config, "SIMULATION_LIGHT_AUTO_FOR_DAY_RANGE", True)):
         simulation_light_mode = True
     if args.simulation_light:
         simulation_light_mode = True
+    if _should_force_simulation_light_for_all_mode(game_mode, range_mode, args.no_simulation_light):
+        simulation_light_mode = True
     if args.no_simulation_light:
         simulation_light_mode = False
     config.SIMULATION_LIGHT_MODE = simulation_light_mode
+    production_all_light_run = game_mode == "ALL" and simulation_light_mode and not range_mode
 
     day_values = [original_day_number]
     if range_mode:
@@ -1591,21 +1832,33 @@ def main():
         )
     if simulation_light_mode:
         print("Simulation-light mode enabled: events/results append only; full rebuild deferred.")
+        if production_all_light_run:
+            print(
+                "ALL-mode production run: syncing event logs during rendering and "
+                "rebuilding canonical history/stat/API outputs after completion."
+            )
 
     prefetched_by_import: dict[str, list] = {}
     run_completed = False
 
     try:
-        _pull_mac_runtime_state_before_run()
+        if platform_target == "youtube":
+            if game_mode == "ALL":
+                raise SystemExit("Native YouTube platform runs do not support GAME_MODE=ALL in this phase.")
+            if not is_native_youtube_game(game_mode, platform_target):
+                raise SystemExit(
+                    f"Native YouTube platform runs currently support only: "
+                    f"{', '.join(sorted(getattr(config, 'YOUTUBE_NATIVE_GAME_MODES', ['maze_rush', 'flappy_followers'])))}"
+                )
 
-        # Select game mode based on config
-        game_mode = getattr(config, 'GAME_MODE', 'battle_royale')
+        _pull_mac_runtime_state_before_run()
 
         # When running ALL modes, enforce production settings
         if game_mode == "ALL":
             config.TEST_MODE = False
             config.EXPORT_VIDEO = True
-            config.DOWNLOAD_PROFILE_PICTURES = True
+            # Keep ALL-mode runs cache-only to avoid long CDN stalls on avatar misses.
+            config.DOWNLOAD_PROFILE_PICTURES = False
             config.LOAD_PROFILE_PICTURES = True
             config.TEST_MINIMAL_PLAYERS = False
 
@@ -1630,7 +1883,10 @@ def main():
                 not config.TEST_MODE
                 and original_auto_push_stats
                 and not range_mode
+                and not production_all_light_run
             )
+            if production_all_light_run and original_auto_push_stats:
+                print("ALL-mode simulation-light: deferring Git/R2 publish until post-run rebuild.")
             suppress_per_game_push = (
                 all_mode_push_enabled
                 and push_strategy != "per_game"
@@ -1641,12 +1897,18 @@ def main():
                 print("ALL-mode: per-game module auto-push suppressed; using batched checkpoints only.")
             default_import_file = _DEFAULT_FOLLOWER_IMPORT_FILE
             config.FOLLOWER_IMPORT_FILE = default_import_file
-            if range_mode or simulation_light_mode:
-                print("Simulation run: skipping scheduled upload launcher.")
+            context_path = _write_scheduled_upload_context()
+            if context_path is not None:
+                print(f"ALL-mode run context: {context_path}")
+            if not _should_start_scheduled_upload_launcher(
+                range_mode=range_mode,
+                simulation_light_mode=simulation_light_mode,
+                production_all_light_run=production_all_light_run,
+            ):
+                print("Scheduled upload launcher disabled for this run.")
             else:
                 # Start scheduled uploads immediately so it can wait for the set time
                 # while games are still rendering.
-                context_path = _write_scheduled_upload_context()
                 _start_scheduled_upload_background(context_path)
             completed_modes = 0
             try:
@@ -1662,7 +1924,14 @@ def main():
                             print(f"\nERROR: {mode} crashed on Day {day_number}. See log: {log_path}\n")
                             continue
                         completed_modes += 1
-                        if all_mode_push_enabled:
+                        if production_all_light_run:
+                            _sync_events_snapshot_for_all_mode(
+                                game_mode=mode,
+                                day_number=config.DAY_NUMBER,
+                                completed_modes=completed_modes,
+                                total_run_items=total_run_items,
+                            )
+                        elif all_mode_push_enabled:
                             if push_strategy == "per_game":
                                 # Legacy behavior: push after each game.
                                 _push_stats_background(mode, config.DAY_NUMBER)
@@ -1682,6 +1951,10 @@ def main():
                 config.GAME_MODE = "ALL"
                 config.OUTPUT_VIDEO_PATH = config.get_output_video_path(game_mode="ALL")
                 config.FOLLOWER_IMPORT_FILE = default_import_file
+            if production_all_light_run:
+                finalized = _finalize_simulation_light_all_mode_run(original_auto_push_stats)
+                if not finalized:
+                    print("Warning: post-run canonical rebuild/publish did not complete successfully.")
 
         else:
             for day_number in day_values:
@@ -1707,13 +1980,17 @@ def main():
         config.AUTO_PUSH_STATS = original_auto_push_stats
         config.FOLLOWER_IMPORT_FILE = original_follower_import_file
         config.SIMULATION_LIGHT_MODE = original_simulation_light_mode
+        config.PLATFORM_TARGET = original_platform_target
 
         if run_completed and simulation_light_mode:
-            print("\nSimulation-light run complete.")
-            print(
-                "Next step (rebuild canonical history/stats):\n"
-                "  python maintenance/rebuild_history_stats_from_events.py"
-            )
+            if production_all_light_run:
+                print("\nSimulation-light ALL run complete.")
+            else:
+                print("\nSimulation-light run complete.")
+                print(
+                    "Next step (rebuild canonical history/stats):\n"
+                    "  python maintenance/rebuild_history_stats_from_events.py"
+                )
 
 
 if __name__ == "__main__":

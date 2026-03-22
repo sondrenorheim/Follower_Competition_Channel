@@ -118,12 +118,87 @@ class SnakeEscapeGame:
         self.total_eliminations = 0
         self.initial_follower_count = 0
         self.club_spotlight = None
+        self.current_alive_count = 0
+        self._last_simplified_mode = None
 
         # Performance optimization - update throttling for large player counts
         self.update_frame_counter = 0
         self.update_batches_per_frame = config.UPDATE_BATCHES_PER_FRAME
 
         print(f"{self.GAME_TITLE} initialized!\n")
+
+    def _handle_window_events_during_setup(self):
+        """Pump quit events so the window stays responsive during player setup."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.running = False
+
+    def _render_setup_progress(self, created_count: int, total_count: int):
+        """Draw a lightweight loading screen while followers are being created."""
+        if config.HEADLESS_MODE:
+            return
+
+        self.screen.fill(config.COLOR_BACKGROUND)
+
+        title = self.renderer.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
+        subtitle = self.renderer.font_subtitle.render("Preparing survivors...", True, config.COLOR_TEXT)
+        progress_text = self.renderer.font_day.render(
+            f"{created_count:,} / {total_count:,}",
+            True,
+            config.COLOR_TEXT,
+        )
+
+        bar_width = min(360, self.screen.get_width() - 80)
+        bar_height = 18
+        bar_left = (self.screen.get_width() - bar_width) // 2
+        bar_top = self.screen.get_height() // 2 + 10
+        progress = 0.0 if total_count <= 0 else min(1.0, created_count / total_count)
+        fill_width = int(bar_width * progress)
+
+        self.screen.blit(title, title.get_rect(center=(self.screen.get_width() // 2, bar_top - 110)))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(self.screen.get_width() // 2, bar_top - 65)))
+        self.screen.blit(progress_text, progress_text.get_rect(center=(self.screen.get_width() // 2, bar_top - 20)))
+
+        border_rect = pygame.Rect(bar_left, bar_top, bar_width, bar_height)
+        pygame.draw.rect(self.screen, (80, 80, 80), border_rect, border_radius=bar_height // 2)
+        if fill_width > 0:
+            fill_rect = pygame.Rect(bar_left, bar_top, fill_width, bar_height)
+            pygame.draw.rect(self.screen, (70, 170, 90), fill_rect, border_radius=bar_height // 2)
+        pygame.draw.rect(self.screen, (20, 20, 20), border_rect, width=2, border_radius=bar_height // 2)
+
+        pygame.display.flip()
+
+    def _is_simplified_mode(self, alive_count: int) -> bool:
+        threshold = int(getattr(config, "SNAKE_ESCAPE_SIMPLIFIED_MODE_THRESHOLD", 12000))
+        return alive_count > threshold
+
+    def _apply_random_eliminations(self, alive_followers: List[SnakeEscapeFollower], dt: float) -> int:
+        threshold = int(getattr(config, "SNAKE_ESCAPE_SIMPLIFIED_MODE_THRESHOLD", 12000))
+        rate = float(getattr(config, "SNAKE_ESCAPE_RANDOM_ELIMINATION_RATE", 0.0))
+        alive_count = len(alive_followers)
+        if rate <= 0.0 or alive_count <= threshold:
+            return 0
+
+        expected = alive_count * rate * dt
+        to_eliminate = max(1, int(expected))
+        to_eliminate = min(to_eliminate, alive_count - threshold)
+        if to_eliminate <= 0:
+            return 0
+
+        placement = alive_count
+        for follower in random.sample(alive_followers, to_eliminate):
+            follower.eliminate(placement=placement)
+            placement -= 1
+        return to_eliminate
+
+    def _log_simplified_mode_transition(self, simplified_mode: bool, alive_count: int):
+        if self._last_simplified_mode == simplified_mode:
+            return
+        mode_label = "SIMPLIFIED" if simplified_mode else "FULL"
+        print(f"[Snake Escape] {mode_label} simulation mode at {alive_count:,} survivors")
+        self._last_simplified_mode = simplified_mode
 
     def setup_players(self):
         """Set up followers and spawn them in the arena."""
@@ -161,12 +236,21 @@ class SnakeEscapeGame:
             print(f"🔧 Dynamic scaling: follower radius = {initial_radius:.1f}px")
 
         # Create followers at random positions
-        for data in follower_data:
+        total_followers = len(follower_data)
+        progress_interval = max(1, int(getattr(config, "SNAKE_ESCAPE_SETUP_PROGRESS_INTERVAL", 5000)))
+        self._render_setup_progress(0, total_followers)
+
+        for index, data in enumerate(follower_data, start=1):
             position = self.arena.get_random_position(config.FOLLOWER_RADIUS + 10)
             follower = SnakeEscapeFollower(data, position)
             username = normalize_username(data.get("username"))
             follower.is_club_member = username in club_members
             self.followers.append(follower)
+            if index % progress_interval == 0 or index == total_followers:
+                self._handle_window_events_during_setup()
+                if not self.running:
+                    return
+                self._render_setup_progress(index, total_followers)
 
         self.club_spotlight = select_club_spotlight(self.followers)
         print(f"{len(self.followers)} {self.PLAYER_LABEL} ready!\n")
@@ -217,6 +301,32 @@ class SnakeEscapeGame:
         # Get alive count
         alive_followers = [f for f in self.followers if f.alive]
         alive_count = len(alive_followers)
+        self.current_alive_count = alive_count
+        simplified_mode = self._is_simplified_mode(alive_count)
+        self._log_simplified_mode_transition(simplified_mode, alive_count)
+
+        if simplified_mode:
+            for snake in self.snakes:
+                snake.update(dt, self.arena, [])
+                snake.update_speed_scaling(alive_count, self.initial_follower_count)
+
+            eliminated = 0
+            if self.phase == "playing":
+                eliminated = self._apply_random_eliminations(alive_followers, dt)
+                if eliminated:
+                    self.total_eliminations += eliminated
+                    alive_followers = [f for f in alive_followers if f.alive]
+                    alive_count = len(alive_followers)
+                    self.current_alive_count = alive_count
+                    print(f"Simplified mode eliminated {eliminated} followers; {alive_count} survivors remaining")
+
+            self.particles.update(dt)
+            self.sound.update_music_volume()
+            self.sound.update_music_intensity(alive_count, self.initial_follower_count)
+
+            if alive_count <= 1 and not self.game_over:
+                self._handle_game_over(alive_followers)
+            return
 
         # Update all snakes
         for snake in self.snakes:
@@ -317,11 +427,12 @@ class SnakeEscapeGame:
 
     def render(self):
         """Render the current game state."""
+        alive_count = self.current_alive_count or sum(1 for f in self.followers if f.alive)
         game_state = {
             'phase': self.phase,
             'arena': self.arena,
             'snakes': self.snakes,  # Pass all snakes
-            'alive_count': sum(1 for f in self.followers if f.alive),
+            'alive_count': alive_count,
             'total_count': len(self.followers),
             'show_leaderboards': self.show_leaderboards,
             'current_game_leaderboard': self.current_game_leaderboard,
@@ -345,6 +456,9 @@ class SnakeEscapeGame:
         """Main game loop."""
         # Setup
         self.setup_players()
+        if not self.running:
+            self.cleanup()
+            return
 
         # Start audio logging
         self.audio_logger.start()
@@ -390,11 +504,18 @@ class SnakeEscapeGame:
             current_time = time.time()
 
             # Update snakes (moving but not eating)
-            for snake in self.snakes:
-                snake.update(dt, self.arena, self.followers)
-
-            # OPTIMIZED: Only process alive followers during countdown too!
             alive_followers = [f for f in self.followers if f.alive]
+            alive_count = len(alive_followers)
+            self.current_alive_count = alive_count
+            simplified_mode = self._is_simplified_mode(alive_count)
+            self._log_simplified_mode_transition(simplified_mode, alive_count)
+
+            for snake in self.snakes:
+                snake.update(dt, self.arena, [] if simplified_mode else self.followers)
+
+            if simplified_mode:
+                self.render()
+                continue
 
             # Update followers with simple random movement
             # No individual AI - they just wander!

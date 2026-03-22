@@ -163,29 +163,77 @@ class SnakeEscapeRenderer(RendererTemplate):
         self.screen.blit(day_surface, day_rect)
         self._day_counter_bottom = day_rect.bottom
 
-    def _draw_players(self, players: List):
+    def _draw_players(self, players: List, alive_count: Optional[int] = None):
         """Draw all followers."""
-        # Draw fading followers first (so alive ones are on top)
-        for follower in players:
-            if not follower.alive and follower.is_fading():
-                self._draw_follower(follower)
+        if alive_count is None:
+            alive_count = sum(1 for follower in players if follower.alive)
+
+        render_cap = max(1, int(getattr(config, "SNAKE_ESCAPE_RENDER_MAX_PLAYERS", 12000)))
+        sample_step = max(1, math.ceil(alive_count / render_cap))
+        render_dead_fades = sample_step == 1
+
+        # Draw fading followers first (so alive ones are on top) when the crowd is manageable.
+        if render_dead_fades:
+            for follower in players:
+                if not follower.alive and follower.is_fading():
+                    self._draw_follower(follower, alive_count)
 
         # Draw alive followers
         club_followers = []
+        alive_index = 0
         for follower in players:
             if follower.alive:
                 if getattr(follower, "is_club_member", False):
                     club_followers.append(follower)
                 else:
-                    self._draw_follower(follower)
+                    alive_index += 1
+                    if sample_step > 1 and alive_index % sample_step != 0:
+                        continue
+                    self._draw_follower(follower, alive_count)
 
         for follower in club_followers:
             self._draw_club_glow(follower, size=follower.radius * 2)
-            self._draw_follower(follower)
+            self._draw_follower(follower, alive_count)
 
-    def _draw_follower(self, follower):
+    def _should_show_avatar(self, follower, alive_count: int) -> bool:
+        if getattr(follower, "is_club_member", False):
+            return True
+        avatar_alive_limit = max(1, int(getattr(config, "SNAKE_ESCAPE_AVATAR_MAX_ALIVE", 1500)))
+        min_radius = float(getattr(config, "PROFILE_PICTURE_MIN_RADIUS", 8))
+        return alive_count <= avatar_alive_limit and follower.radius >= min_radius
+
+    def _draw_simple_marker(self, follower, radius: int):
+        """Draw a cheap circle marker for tiny followers."""
+        radius = max(1, int(radius))
+        center = (int(follower.x), int(follower.y))
+        color = tuple(getattr(follower, "color", (100, 100, 255)))
+        alpha = max(0, min(255, int(getattr(follower, "alpha", 255))))
+
+        if alpha >= 255:
+            pygame.draw.circle(self.screen, color, center, radius)
+            if radius >= 2:
+                pygame.draw.circle(self.screen, (0, 0, 0), center, radius, 1)
+            return
+
+        diameter = radius * 2 + 2
+        marker = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+        marker_center = (diameter // 2, diameter // 2)
+        pygame.draw.circle(marker, (*color, alpha), marker_center, radius)
+        if radius >= 2:
+            pygame.draw.circle(marker, (0, 0, 0, alpha), marker_center, radius, 1)
+        self.screen.blit(marker, marker.get_rect(center=center))
+
+    def _draw_follower(self, follower, alive_count: int):
         """Draw a single follower."""
-        size = int(follower.radius * 2)
+        radius = max(1, int(round(follower.radius)))
+        size = max(1, radius * 2)
+
+        if not self._should_show_avatar(follower, alive_count) or radius <= int(
+            getattr(config, "SNAKE_ESCAPE_SIMPLE_DOT_RADIUS", 4)
+        ):
+            self._draw_simple_marker(follower, radius)
+            return
+
         avatar_surface = self._get_avatar_surface(follower, size)
 
         # Apply fade
@@ -448,7 +496,8 @@ class SnakeEscapeRenderer(RendererTemplate):
         self._draw_game_area(players, game_state)
 
         # Draw players (followers)
-        self._draw_players(players)
+        alive_count = int(game_state.get("alive_count") or sum(1 for player in players if player.alive))
+        self._draw_players(players, alive_count)
 
         # Draw title and subtitle
         self._draw_title_and_subtitle()

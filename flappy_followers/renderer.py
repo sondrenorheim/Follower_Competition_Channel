@@ -5,6 +5,12 @@ import pygame
 import config
 from shared import RendererTemplate
 from shared.club_panel import draw_club_panel
+from shared.platform_targets import (
+    format_profile_text,
+    get_youtube_game_profile,
+    is_native_youtube_game,
+    normalize_platform_target,
+)
 
 
 class FlappyFollowersRenderer(RendererTemplate):
@@ -40,6 +46,13 @@ class FlappyFollowersRenderer(RendererTemplate):
         self.font_club_panel = pygame.font.Font(None, club_text_size)
         self._club_panel_bottom = None
         self._background_surface = None
+        self.platform_target = normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram"))
+        self.native_youtube_mode = is_native_youtube_game("flappy_followers", self.platform_target)
+        self.youtube_profile = get_youtube_game_profile("flappy_followers")
+        self.font_youtube_hook = pygame.font.Font(None, 40)
+        self.font_youtube_subhook = pygame.font.Font(None, 28)
+        self.font_youtube_cta = pygame.font.Font(None, 30)
+        self.font_youtube_result = pygame.font.Font(None, 34)
         self._build_background()
 
     def _build_background(self):
@@ -97,10 +110,14 @@ class FlappyFollowersRenderer(RendererTemplate):
         self._background_surface = surface
 
     def render_frame(self, players, game_state: dict):
+        self._latest_game_state = dict(game_state)
         self.screen.fill(config.COLOR_BACKGROUND)
         self._draw_game_area(players, game_state)
         self._draw_players(players)
-        self._draw_title_and_subtitle()
+        if self.native_youtube_mode:
+            self._draw_youtube_hook(players, game_state)
+        else:
+            self._draw_title_and_subtitle()
         self._draw_day_counter(players, game_state)
         self._draw_game_ui(players, game_state)
 
@@ -110,6 +127,33 @@ class FlappyFollowersRenderer(RendererTemplate):
                 game_state.get("all_time_leaderboard", []),
                 game_state.get("winner")
             )
+
+    def _draw_youtube_hook(self, players, game_state: dict):
+        elapsed = float(game_state.get("elapsed_time") or 0.0)
+        hook_end = float(self.youtube_profile.get("hook_end_seconds", 1.8) or 1.8)
+        if elapsed > hook_end:
+            return
+
+        participant_count = int(game_state.get("requested_count") or len(players) or 0)
+        primary_text = format_profile_text(self.youtube_profile.get("hook_primary"), participant_count)
+        secondary_text = format_profile_text(self.youtube_profile.get("hook_secondary"), participant_count)
+
+        panel_width = int(self.width * 0.84)
+        panel_height = 74 if secondary_text else 52
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 172))
+        panel_rect = panel.get_rect(center=(self.width // 2, max(40, self.game_top - 46)))
+        self.screen.blit(panel, panel_rect)
+
+        if primary_text:
+            primary_surface = self.font_youtube_hook.render(primary_text, True, (255, 255, 255))
+            primary_rect = primary_surface.get_rect(center=(self.width // 2, panel_rect.y + 22))
+            self.screen.blit(primary_surface, primary_rect)
+
+        if secondary_text:
+            secondary_surface = self.font_youtube_subhook.render(secondary_text, True, (255, 220, 120))
+            secondary_rect = secondary_surface.get_rect(center=(self.width // 2, panel_rect.y + panel_height - 18))
+            self.screen.blit(secondary_surface, secondary_rect)
 
     def _draw_title_and_subtitle(self):
         arena_top = config.FIGHTER_ARENA_RECT[1]
@@ -202,22 +246,32 @@ class FlappyFollowersRenderer(RendererTemplate):
         club_players = []
         for player in players:
             if player.alive or player.is_fading():
-                if getattr(player, "is_club_member", False):
+                if (not self.native_youtube_mode) and getattr(player, "is_club_member", False):
                     club_players.append(player)
                     continue
                 self._draw_player_avatar(player, size=self.player_size)
+
+        if self.native_youtube_mode:
+            return
 
         for player in club_players:
             self._draw_club_glow(player, size=self.player_size)
             self._draw_player_avatar(player, size=self.player_size)
 
     def _draw_day_counter(self, players, game_state: dict):
-        total_count = len(players)
-        day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
+        total_count = int(game_state.get("requested_count") or len(players) or 0)
+        if self.native_youtube_mode:
+            day_text = f"{total_count:,} players in this run"
+        else:
+            day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
         y_pos = int(self.game_bottom + self.day_counter_offset)
         day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, y_pos))
         self.screen.blit(day_surface, day_rect)
+
+        if self.native_youtube_mode:
+            self._club_panel_bottom = day_rect.bottom
+            return
 
         anchor_y = day_rect.bottom
         panel_rect = draw_club_panel(
@@ -259,11 +313,32 @@ class FlappyFollowersRenderer(RendererTemplate):
         alive_count = game_state.get("alive_count")
         pipes_cleared = game_state.get("pipes_cleared")
         elapsed_time = game_state.get("elapsed_time")
+        current_pipe_speed = game_state.get("current_pipe_speed")
         record = game_state.get("highscore") or {}
         record_score = record.get("score", 0) or 0
         record_name = record.get("username", "") or ""
         record_label = "Highscore"
         show_record = record_score > 0
+
+        if self.native_youtube_mode:
+            panel_w = 220
+            panel_h = 76
+            panel_x = self.game_left + 10
+            panel_y = self.game_top + 10
+            panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 118))
+            self.screen.blit(panel, (panel_x, panel_y))
+
+            alive_surface = self.font_stats.render(f"Alive: {int(alive_count or 0)}", True, (255, 255, 255))
+            speed_value = int(round(float(current_pipe_speed or 0.0)))
+            speed_surface = self.font_stats.render(f"Speed: {speed_value}", True, (255, 255, 255))
+            self.screen.blit(alive_surface, (panel_x + 12, panel_y + 8))
+            self.screen.blit(speed_surface, (panel_x + 12, panel_y + 30))
+
+            if elapsed_time is not None:
+                time_surface = self.font_small.render(f"Time {elapsed_time:.1f}s", True, (255, 255, 255))
+                self.screen.blit(time_surface, (panel_x + 12, panel_y + 54))
+            return
 
         if alive_count is None and pipes_cleared is None and elapsed_time is None and not show_record:
             return
@@ -334,3 +409,57 @@ class FlappyFollowersRenderer(RendererTemplate):
                 record_text = f"{record_text} - {name}"
             record_surface = self.font_small.render(record_text, True, (255, 255, 255))
             self.screen.blit(record_surface, (panel_x + panel_padding_x, y_cursor))
+
+    def _draw_end_game_display(self, current_game_board: list, all_time_board: list, winner=None):
+        if self.native_youtube_mode:
+            overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 190))
+            self.screen.blit(overlay, (0, 0))
+            latest_state = getattr(self, "_latest_game_state", {}) or {}
+            participant_count = int(latest_state.get("participant_count") or 0)
+            alive_count = int(latest_state.get("alive_count") or 0)
+
+            title = self.font_winner.render("RUN COMPLETE", True, (255, 255, 255))
+            title_rect = title.get_rect(center=(self.width // 2, int(self.height * 0.16)))
+            self.screen.blit(title, title_rect)
+
+            if winner:
+                avatar_size = int(self.width * 0.15)
+                avatar_surface = self._get_avatar_surface(winner, avatar_size)
+                avatar_rect = avatar_surface.get_rect(center=(self.width // 2, int(self.height * 0.31)))
+                self.screen.blit(avatar_surface, avatar_rect)
+
+                winner_surface = self.font_youtube_result.render(
+                    f"Winner: {winner.username}",
+                    True,
+                    (255, 255, 255),
+                )
+                winner_rect = winner_surface.get_rect(center=(self.width // 2, int(self.height * 0.43)))
+                self.screen.blit(winner_surface, winner_rect)
+
+            summary_surface = self.font_youtube_result.render(
+                f"Alive at finish: {alive_count}/{participant_count}",
+                True,
+                (255, 255, 255),
+            )
+            summary_rect = summary_surface.get_rect(center=(self.width // 2, int(self.height * 0.50)))
+            self.screen.blit(summary_surface, summary_rect)
+
+            ending_text = str(self.youtube_profile.get("ending_text", "") or "")
+            if ending_text:
+                ending_surface = self.font_youtube_result.render(ending_text, True, (255, 220, 120))
+                ending_rect = ending_surface.get_rect(center=(self.width // 2, int(self.height * 0.58)))
+                self.screen.blit(ending_surface, ending_rect)
+
+            cta_text = str(self.youtube_profile.get("cta_text", "") or "")
+            if cta_text:
+                cta_panel = pygame.Surface((int(self.width * 0.82), 52), pygame.SRCALPHA)
+                cta_panel.fill((255, 255, 255, 24))
+                cta_rect = cta_panel.get_rect(center=(self.width // 2, int(self.height * 0.72)))
+                self.screen.blit(cta_panel, cta_rect)
+                cta_surface = self.font_youtube_cta.render(cta_text, True, (255, 255, 255))
+                cta_text_rect = cta_surface.get_rect(center=cta_rect.center)
+                self.screen.blit(cta_surface, cta_text_rect)
+            return
+
+        super()._draw_end_game_display(current_game_board, all_time_board, winner)

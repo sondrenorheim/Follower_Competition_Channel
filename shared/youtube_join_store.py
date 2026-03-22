@@ -131,6 +131,7 @@ def upsert_youtube_join(
     comment_id: str | None,
     video_id: str | None,
     joined_at: str | None = None,
+    mirror_follower_file: Path | None = None,
 ) -> dict[str, Any]:
     """
     Upsert a YouTube JOIN commenter into follower JSON.
@@ -139,76 +140,98 @@ def upsert_youtube_join(
     1) youtube_channel_id
     2) case-insensitive username match
     """
-    follower_path = Path(follower_file)
-    lock_path = follower_path.with_suffix(follower_path.suffix + ".lock")
-    lock_fd = _acquire_lock(lock_path)
-    try:
-        followers = _load_followers(follower_path)
-        channel_id = str(youtube_channel_id or "").strip()
-        display_name = str(youtube_display_name or "").strip()
-        if not display_name and channel_id:
-            display_name = f"yt_{channel_id}"
-        if not display_name:
-            display_name = "YouTubeUser"
+    def _upsert_single(target_file: Path) -> dict[str, Any]:
+        follower_path = Path(target_file)
+        lock_path = follower_path.with_suffix(follower_path.suffix + ".lock")
+        lock_fd = _acquire_lock(lock_path)
+        try:
+            followers = _load_followers(follower_path)
+            channel_id = str(youtube_channel_id or "").strip()
+            display_name = str(youtube_display_name or "").strip()
+            if not display_name and channel_id:
+                display_name = f"yt_{channel_id}"
+            if not display_name:
+                display_name = "YouTubeUser"
 
-        joined_ts = str(joined_at or _utc_now_iso())
-        username_norm = _normalize_username(display_name)
+            joined_ts = str(joined_at or _utc_now_iso())
+            username_norm = _normalize_username(display_name)
 
-        match_index = None
-        match_reason = "created"
+            match_index = None
+            match_reason = "created"
 
-        if channel_id:
-            for idx, entry in enumerate(followers):
-                if str(entry.get("youtube_channel_id", "")).strip() == channel_id:
-                    match_index = idx
-                    match_reason = "updated_by_youtube_channel_id"
-                    break
+            if channel_id:
+                for idx, entry in enumerate(followers):
+                    if str(entry.get("youtube_channel_id", "")).strip() == channel_id:
+                        match_index = idx
+                        match_reason = "updated_by_youtube_channel_id"
+                        break
 
-        if match_index is None and username_norm:
-            for idx, entry in enumerate(followers):
-                if _normalize_username(entry.get("username")) == username_norm:
-                    match_index = idx
-                    match_reason = "updated_by_username"
-                    break
+            if match_index is None and username_norm:
+                for idx, entry in enumerate(followers):
+                    if _normalize_username(entry.get("username")) == username_norm:
+                        match_index = idx
+                        match_reason = "updated_by_username"
+                        break
 
-        profile_url = f"https://www.youtube.com/channel/{channel_id}" if channel_id else ""
-        payload_fields = {
-            "username": display_name,
-            "profile_url": profile_url,
-            "profile_pic_url": "",
-            "source_platform": "youtube",
-            "source_origin": "youtube_comment_join",
-            "youtube_channel_id": channel_id,
-            "youtube_display_name": display_name,
-            "youtube_joined_at": joined_ts,
-            "youtube_join_comment_id": str(comment_id or ""),
-            "youtube_join_video_id": str(video_id or ""),
-        }
+            profile_url = f"https://www.youtube.com/channel/{channel_id}" if channel_id else ""
+            payload_fields = {
+                "username": display_name,
+                "profile_url": profile_url,
+                "profile_pic_url": "",
+                "source_platform": "youtube",
+                "source_origin": "youtube_comment_join",
+                "youtube_channel_id": channel_id,
+                "youtube_display_name": display_name,
+                "youtube_joined_at": joined_ts,
+                "youtube_join_comment_id": str(comment_id or ""),
+                "youtube_join_video_id": str(video_id or ""),
+            }
 
-        if match_index is None:
-            followers.append(payload_fields)
-            status = "created"
-        else:
-            entry = followers[match_index]
-            if not str(entry.get("profile_pic_url", "")).strip():
-                entry["profile_pic_url"] = payload_fields["profile_pic_url"]
-            if not str(entry.get("profile_url", "")).strip() and profile_url:
-                entry["profile_url"] = profile_url
-            for key, value in payload_fields.items():
-                if key == "profile_pic_url":
-                    continue
-                entry[key] = value
-            status = match_reason
+            if match_index is None:
+                followers.append(payload_fields)
+                status = "created"
+            else:
+                entry = followers[match_index]
+                if not str(entry.get("profile_pic_url", "")).strip():
+                    entry["profile_pic_url"] = payload_fields["profile_pic_url"]
+                if not str(entry.get("profile_url", "")).strip() and profile_url:
+                    entry["profile_url"] = profile_url
+                for key, value in payload_fields.items():
+                    if key == "profile_pic_url":
+                        continue
+                    entry[key] = value
+                status = match_reason
 
-        followers.sort(key=lambda item: _normalize_username(item.get("username")))
-        _atomic_write_json(follower_path, followers)
-        _invalidate_youtube_id_cache()
-        return {
-            "ok": True,
-            "status": status,
-            "username": display_name,
-            "youtube_channel_id": channel_id,
-            "total_followers": len(followers),
-        }
-    finally:
-        _release_lock(lock_path, lock_fd)
+            followers.sort(key=lambda item: _normalize_username(item.get("username")))
+            _atomic_write_json(follower_path, followers)
+            _invalidate_youtube_id_cache()
+            return {
+                "ok": True,
+                "status": status,
+                "username": display_name,
+                "youtube_channel_id": channel_id,
+                "total_followers": len(followers),
+                "path": str(follower_path),
+            }
+        finally:
+            _release_lock(lock_path, lock_fd)
+
+    primary_result = _upsert_single(Path(follower_file))
+
+    mirror_result = None
+    mirror_path = Path(mirror_follower_file) if mirror_follower_file is not None else None
+    if mirror_path is not None:
+        try:
+            if mirror_path.resolve() != Path(follower_file).resolve():
+                mirror_result = _upsert_single(mirror_path)
+        except Exception:
+            mirror_result = _upsert_single(mirror_path)
+
+    if mirror_result is not None:
+        primary_result["mirrored"] = True
+        primary_result["mirror_path"] = mirror_result.get("path")
+        primary_result["mirror_status"] = mirror_result.get("status")
+        primary_result["mirror_total_followers"] = mirror_result.get("total_followers")
+    else:
+        primary_result["mirrored"] = False
+    return primary_result

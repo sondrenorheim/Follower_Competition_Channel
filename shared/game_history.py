@@ -29,12 +29,17 @@ class GameHistory:
         """
         self.history_file = history_file
         self.history: Dict = {"games": []}
-        self.light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False))
+        self.light_mode = bool(getattr(config, "SIMULATION_LIGHT_MODE", False)) or bool(
+            getattr(config, "TEST_MINIMAL_PLAYERS", False)
+        )
         self._light_id_counter = 0
         self._light_save_notice_printed = False
 
         if self.light_mode:
-            print("SIMULATION-LIGHT MODE: Skipping game history load (event append only).")
+            if bool(getattr(config, "TEST_MINIMAL_PLAYERS", False)):
+                print("TEST_MINIMAL_PLAYERS: Skipping game history load.")
+            else:
+                print("SIMULATION-LIGHT MODE: Skipping game history load (event append only).")
         else:
             self.load_history()
 

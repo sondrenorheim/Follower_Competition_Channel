@@ -145,10 +145,21 @@ export default function Header() {
                       Facebook
                     </a>
                     <a
+                      href="https://x.com/FBattlegro85184"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="col-start-3 row-start-2 flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-slate-800 to-black hover:from-slate-700 hover:to-slate-900 text-white font-bold rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg text-xs sm:text-sm"
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M18.901 1.153h3.68l-8.04 9.188L24 22.847h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.153h7.594l5.243 6.932 6.064-6.932Zm-1.291 19.492h2.04L6.486 3.24H4.298L17.61 20.645Z"/>
+                      </svg>
+                      X
+                    </a>
+                    <a
                       href="https://buymeacoffee.com/followerbattlegrounds/membership"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="col-start-3 row-start-3 flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-[#120b03] font-bold rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg text-xs sm:text-sm whitespace-nowrap"
+                      className="col-start-2 row-start-3 flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-[#120b03] font-bold rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg text-xs sm:text-sm whitespace-nowrap"
                     >
                       👑 The Club
                     </a>

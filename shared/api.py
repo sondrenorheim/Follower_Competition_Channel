@@ -21,16 +21,28 @@ import glob
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 import config
+from .lazy_avatar import LazyAvatarImage
 
 # In-memory follower cache (used when running multiple games in a row)
 _PREFETCHED_FOLLOWERS: Optional[List[Dict[str, Any]]] = None
 
 # In-memory avatar cache to avoid repeated downloads for the same URL
-_AVATAR_CACHE: Dict[str, Optional[Image.Image]] = {}
+_AVATAR_CACHE: Dict[str, Optional[Any]] = {}
 _LAST_AVATAR_FETCH_TS: float = 0.0
 # Throttle and backoff to reduce 403/429 responses from CDN
 _MIN_AVATAR_INTERVAL = 0.25   # seconds between avatar fetch attempts
 _AVATAR_BACKOFF_429 = 2.0     # extra seconds to sleep on 403/429 before retry
+
+
+def _avatar_max_size() -> int:
+    try:
+        return max(0, int(getattr(config, "AVATAR_CACHE_MAX_SIZE", 48) or 0))
+    except Exception:
+        return 48
+
+
+def _use_lazy_avatar_loading() -> bool:
+    return bool(getattr(config, "AVATAR_LAZY_LOAD", True))
 
 def set_prefetched_followers(followers: Optional[List[Dict[str, Any]]]):
     """Store followers in memory for reuse across multiple games."""
@@ -46,6 +58,13 @@ def clear_prefetched_followers():
     """Clear any cached followers."""
     global _PREFETCHED_FOLLOWERS
     _PREFETCHED_FOLLOWERS = None
+
+
+def clear_avatar_runtime_cache():
+    """Release per-process avatar lookup state after a game completes."""
+    global _LAST_AVATAR_FETCH_TS
+    _AVATAR_CACHE.clear()
+    _LAST_AVATAR_FETCH_TS = 0.0
 
 
 def _get_prefetched_followers(count: Optional[int]) -> Optional[List[Dict[str, Any]]]:
@@ -78,6 +97,43 @@ def _find_newest_safe_follower_file() -> Optional[str]:
     return files[0]
 
 
+def _normalize_import_path(path_value: Optional[str]) -> str:
+    if not path_value:
+        return ""
+    try:
+        return os.path.normcase(os.path.normpath(str(path_value)))
+    except Exception:
+        return str(path_value)
+
+
+def _is_mode_specific_import_file(import_file: Optional[str]) -> bool:
+    """
+    Return True when the import path is explicitly assigned to one or more game
+    modes via FOLLOWER_IMPORT_FILE_BY_MODE.
+
+    Those sources are intentionally narrower pools, such as club-only or
+    Discord-only follower files, and should never be silently replaced with the
+    general newest followers_safe_*.json dataset.
+    """
+    normalized = _normalize_import_path(import_file)
+    if not normalized:
+        return False
+
+    overrides = getattr(config, "FOLLOWER_IMPORT_FILE_BY_MODE", {})
+    if not isinstance(overrides, dict):
+        return False
+
+    for value in overrides.values():
+        if _normalize_import_path(value) == normalized:
+            return True
+    return False
+
+
+def _looks_like_remote_url(path_value: Optional[str]) -> bool:
+    text = str(path_value or "").strip().lower()
+    return text.startswith("http://") or text.startswith("https://")
+
+
 class InstagramAPI:
     """
     Handles Instagram data fetching via multiple methods:
@@ -102,8 +158,10 @@ class InstagramAPI:
         self.insta_username = getattr(config, 'INSTAGRAM_USERNAME', '')
         self.insta_password = getattr(config, 'INSTAGRAM_PASSWORD', '')
 
-        # Auto-detect newest safe follower file if configured file matches the safe pattern
         import_file = getattr(config, 'FOLLOWER_IMPORT_FILE', '')
+        import_file_is_mode_specific = _is_mode_specific_import_file(import_file)
+
+        # Auto-detect newest safe follower file if configured file matches the safe pattern
         if import_file and 'followers_safe_' in import_file:
             # Config file references a followers_safe_*.json file
             # Always auto-detect the newest one to use latest data
@@ -118,9 +176,11 @@ class InstagramAPI:
         else:
             self.import_file = import_file
 
-        # If a newer followers_safe_*.json exists, prefer it over stale imports.
+        # If a newer followers_safe_*.json exists, prefer it over the general
+        # Instagram import. Never override mode-specific sources like club-only
+        # or Discord-only follower files.
         newest_safe = _find_newest_safe_follower_file()
-        if newest_safe:
+        if newest_safe and not import_file_is_mode_specific:
             use_safe = False
             if not self.import_file:
                 use_safe = True
@@ -286,11 +346,13 @@ class InstagramAPI:
             return None
         if not username:
             return None
-        max_size = int(getattr(config, "AVATAR_CACHE_MAX_SIZE", 64))
+        max_size = _avatar_max_size()
         for ext in (".jpg", ".jpeg", ".png"):
             cache_file = self.avatar_cache_dir / f"{username}{ext}"
             if cache_file.exists():
                 try:
+                    if _use_lazy_avatar_loading():
+                        return LazyAvatarImage(cache_file, max_size=max_size)
                     img = Image.open(cache_file).convert('RGBA')
                     if max_size > 0 and (img.width > max_size or img.height > max_size):
                         img.thumbnail((max_size, max_size), Image.LANCZOS)
@@ -305,6 +367,8 @@ class InstagramAPI:
         if not getattr(config, 'LOAD_PROFILE_PICTURES', True):
             return None
         if not path:
+            return None
+        if _looks_like_remote_url(path):
             return None
 
         local_path = path
@@ -325,8 +389,13 @@ class InstagramAPI:
             return None
 
         try:
+            max_size = _avatar_max_size()
+            if _use_lazy_avatar_loading():
+                avatar_ref = LazyAvatarImage(resolved_path, max_size=max_size)
+                _AVATAR_CACHE[path] = avatar_ref
+                return avatar_ref
+
             img = Image.open(resolved_path).convert("RGBA")
-            max_size = int(getattr(config, "AVATAR_CACHE_MAX_SIZE", 64))
             if max_size > 0 and (img.width > max_size or img.height > max_size):
                 img.thumbnail((max_size, max_size), Image.LANCZOS)
             _AVATAR_CACHE[path] = img
@@ -362,7 +431,10 @@ class InstagramAPI:
             cache_file = self.avatar_cache_dir / f"{username}.jpg"
             if cache_file.exists():
                 try:
-                    img = Image.open(cache_file).convert('RGBA')
+                    if _use_lazy_avatar_loading():
+                        img = LazyAvatarImage(cache_file, max_size=_avatar_max_size(), cache_key=url)
+                    else:
+                        img = Image.open(cache_file).convert('RGBA')
                     _AVATAR_CACHE[url] = img  # Store in memory for this run
                     # Cache hit - no download needed
                     return img
@@ -396,7 +468,6 @@ class InstagramAPI:
                 response = requests.get(url, headers=headers, timeout=timeout)
                 response.raise_for_status()
                 img = Image.open(io.BytesIO(response.content)).convert("RGBA")
-                _AVATAR_CACHE[url] = img
 
                 # Save to disk cache if username provided
                 if username:
@@ -404,9 +475,12 @@ class InstagramAPI:
                     try:
                         rgb_img = img.convert('RGB')
                         rgb_img.save(cache_file, 'JPEG', quality=85, optimize=True)
+                        if _use_lazy_avatar_loading():
+                            img = LazyAvatarImage(cache_file, max_size=_avatar_max_size(), cache_key=url)
                     except Exception as e:
                         print(f"      Failed to cache avatar for {username}: {e}")
 
+                _AVATAR_CACHE[url] = img
                 return img
             except requests.exceptions.Timeout:
                 if attempt >= max_retries - 1:
@@ -585,8 +659,11 @@ class InstagramAPI:
 
         # Track avatar loading statistics
         cached_count = 0
+        local_file_count = 0
         downloaded_count = 0
         failed_count = 0
+        missing_count = 0
+        download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
 
         try:
             # Handle JSON files
@@ -642,24 +719,22 @@ class InstagramAPI:
                         if username:
                             # Download profile picture if URL provided and downloading is enabled
                             avatar_img = self._load_cached_avatar(username)
+                            if avatar_img is not None:
+                                cached_count += 1
                             if profile_pic_url and avatar_img is None:
                                 avatar_img = self._load_local_avatar(profile_pic_url, username=username)
-                            download_pics = getattr(config, 'DOWNLOAD_PROFILE_PICTURES', False)
+                                if avatar_img is not None:
+                                    local_file_count += 1
                             if profile_pic_url and download_pics and avatar_img is None:
-                                # Check if already cached
-                                cache_file = self.avatar_cache_dir / f"{username}.jpg"
-                                was_cached = cache_file.exists()
-
                                 avatar_img = self._download_avatar(profile_pic_url, username=username)
 
                                 # Track statistics
                                 if avatar_img is not None:
-                                    if was_cached:
-                                        cached_count += 1
-                                    else:
-                                        downloaded_count += 1
+                                    downloaded_count += 1
                                 else:
                                     failed_count += 1
+                            if avatar_img is None:
+                                missing_count += 1
                             # Show progress every 10 followers processed
                             if (i + 1) % 1000 == 0:
                                 print(f"   📥 Processed {i + 1} profile pictures...")
@@ -722,23 +797,22 @@ class InstagramAPI:
                         if username:
                             # Optionally download profile picture if URL provided and enabled
                             avatar_img = self._load_cached_avatar(username)
+                            if avatar_img is not None:
+                                cached_count += 1
                             if profile_pic_url and avatar_img is None:
                                 avatar_img = self._load_local_avatar(profile_pic_url, username=username)
+                                if avatar_img is not None:
+                                    local_file_count += 1
                             if profile_pic_url and download_pics and avatar_img is None:
-                                # Check if already cached
-                                cache_file = self.avatar_cache_dir / f"{username}.jpg"
-                                was_cached = cache_file.exists()
-
                                 avatar_img = self._download_avatar(profile_pic_url, username=username)
 
                                 # Track statistics
                                 if avatar_img is not None:
-                                    if was_cached:
-                                        cached_count += 1
-                                    else:
-                                        downloaded_count += 1
+                                    downloaded_count += 1
                                 else:
                                     failed_count += 1
+                            if avatar_img is None:
+                                missing_count += 1
 
                             # Show progress every 10 followers processed
                             if (i + 1) % 10 == 0:
@@ -768,6 +842,10 @@ class InstagramAPI:
                         username = line.strip()
                         if username:
                             avatar_img = self._load_cached_avatar(username)
+                            if avatar_img is not None:
+                                cached_count += 1
+                            else:
+                                missing_count += 1
                             followers.append({
                                 "id": f"imported_{i}",
                                 "username": username,
@@ -781,6 +859,16 @@ class InstagramAPI:
                 return None
 
             if followers:
+                mode_label = "download-on-miss" if download_pics else "cache-only"
+                print(
+                    "   Avatar summary: "
+                    f"{cached_count} cached, "
+                    f"{local_file_count} local-file, "
+                    f"{downloaded_count} downloaded, "
+                    f"{missing_count} missing"
+                    + (f", {failed_count} failed" if failed_count else "")
+                    + f" ({mode_label})"
+                )
                 return followers
             else:
                 print(f"❌ No followers found in file")

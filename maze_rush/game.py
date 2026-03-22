@@ -10,6 +10,12 @@ import pygame
 
 import config
 from shared import GameTemplate, GameHistory, auto_push
+from shared.participant_resolver import resolve_participants
+from shared.platform_targets import (
+    format_profile_text,
+    get_youtube_game_profile,
+    write_video_meta_sidecar,
+)
 
 from .arena import MazeRushArena
 from .maze import Maze
@@ -30,6 +36,11 @@ class MazeRushGame(GameTemplate):
         self.render_players = []
         self.club_member_set = set()
         self.club_spotlight = None
+        self.participant_source_info = {}
+        self.youtube_profile = get_youtube_game_profile("maze_rush")
+        self.finish_order: list[MazeRushPlayer] = []
+        self.youtube_escape_target = int(self.youtube_profile.get("escape_target", 8) or 8)
+        self.youtube_max_duration = float(self.youtube_profile.get("max_duration_seconds", 26.0) or 26.0)
 
     def _init_game_components(self):
         self.arena = MazeRushArena()
@@ -56,14 +67,16 @@ class MazeRushGame(GameTemplate):
     def setup_players(self):
         print(f"Setting up {self.PLAYER_LABEL}...")
 
-        if config.TEST_MINIMAL_PLAYERS:
-            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
-        else:
-            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        participant_bundle = resolve_participants(
+            "maze_rush",
+            platform_target=self.platform_target,
+        )
+        self.participant_source_info = dict(participant_bundle)
+        follower_data = list(participant_bundle.get("participants") or [])
 
         random.shuffle(follower_data)
 
-        self.club_member_set = self._load_club_member_set()
+        self.club_member_set = set() if self.native_youtube_mode else self._load_club_member_set()
         club_players = []
         regular_players = []
 
@@ -90,9 +103,45 @@ class MazeRushGame(GameTemplate):
             else:
                 regular_players.append(player)
 
-        self.render_players = regular_players + club_players
-        self._select_club_spotlight()
+        if self.native_youtube_mode:
+            self.render_players = list(self.players)
+            self.club_spotlight = None
+        else:
+            self.render_players = regular_players + club_players
+            self._select_club_spotlight()
+
+        self._write_platform_sidecar()
         print(f"{len(self.players)} {self.PLAYER_LABEL} ready!\n")
+
+    def _write_platform_sidecar(self) -> None:
+        if not self.native_youtube_mode:
+            return
+        try:
+            requested_count = int(
+                self.participant_source_info.get("requested_count")
+                or len(self.players)
+                or 0
+            )
+        except Exception:
+            requested_count = len(self.players)
+
+        payload = {
+            "platform_target": self.platform_target,
+            "game_mode": "maze_rush",
+            "record_game_type": self.record_game_type,
+            "record_game_display_name": self.record_game_display_name,
+            "requested_count": requested_count,
+            "participant_count": len(self.players),
+            "youtube_count": int(self.participant_source_info.get("youtube_count") or 0),
+            "instagram_top_up_count": int(self.participant_source_info.get("instagram_top_up_count") or 0),
+            "used_fallback": bool(self.participant_source_info.get("used_fallback")),
+            "hook_text": format_profile_text(self.youtube_profile.get("hook_primary"), requested_count),
+            "hook_secondary": format_profile_text(self.youtube_profile.get("hook_secondary"), requested_count),
+            "cta_text": str(self.youtube_profile.get("cta_text", "") or ""),
+            "ending_text": str(self.youtube_profile.get("ending_text", "") or ""),
+        }
+        sidecar_path = write_video_meta_sidecar(config.OUTPUT_VIDEO_PATH, payload)
+        print(f"[INFO] Wrote native YouTube sidecar: {sidecar_path}")
 
     def _load_club_member_set(self) -> Set[str]:
         base_dir = Path(__file__).resolve().parents[1]
@@ -155,15 +204,32 @@ class MazeRushGame(GameTemplate):
             dt *= config.EXPORT_TIME_SCALE
 
         self.game_time += dt
+        newly_finished = []
 
         for player in self.players:
             if player.finished:
                 continue
             player.update(dt, self.maze, self.player_speed, exit_cell=self.maze.exit_cell)
-            if player.finished:
+            if player.finished and player.finish_time is None:
                 player.finish_time = self.game_time
+                player.survival_time = self.game_time
+                newly_finished.append(player)
+
+        for player in newly_finished:
+            if self.first_finisher is None:
                 self.first_finisher = player
-                break
+            self.finish_order.append(player)
+
+        if self.native_youtube_mode:
+            remaining_players = sum(1 for player in self.players if not player.finished)
+            timed_out = self.youtube_max_duration > 0 and self.game_time >= self.youtube_max_duration
+            if (
+                remaining_players <= 0
+                or len(self.finish_order) >= max(1, self.youtube_escape_target)
+                or timed_out
+            ):
+                self._finish_game()
+            return
 
         if self.first_finisher:
             self._finish_game()
@@ -184,9 +250,15 @@ class MazeRushGame(GameTemplate):
 
         def sort_key(item):
             player, dist = item
+            if self.native_youtube_mode:
+                finish_index = finish_lookup.get(player)
+                if finish_index is not None:
+                    return (0, finish_index, 0.0, player.username)
+                return (1, 999999.0, dist, player.username)
             is_winner = 0 if player is self.first_finisher else 1
             return (is_winner, dist, player.username)
 
+        finish_lookup = {player: index for index, player in enumerate(self.finish_order)}
         sorted_players = [player for player, _ in sorted(distances, key=sort_key)]
         self.finish_game(sorted_players)
 
@@ -220,6 +292,13 @@ class MazeRushGame(GameTemplate):
     def render(self):
         leader = self._get_leader() if self.players else None
         leader_name = leader.username if leader else None
+        requested_count = int(
+            self.participant_source_info.get("requested_count")
+            or len(self.players)
+            or 0
+        )
+        escaped_count = len(self.finish_order)
+        remaining_count = max(0, len(self.players) - escaped_count)
 
         game_state = {
             "phase": self.phase,
@@ -227,6 +306,13 @@ class MazeRushGame(GameTemplate):
             "elapsed_time": self.game_time,
             "leader_name": leader_name,
             "club_spotlight": self.club_spotlight,
+            "platform_target": self.platform_target,
+            "native_youtube_mode": self.native_youtube_mode,
+            "participant_count": len(self.players),
+            "requested_count": requested_count,
+            "escaped_count": escaped_count,
+            "remaining_count": remaining_count,
+            "youtube_profile": self.youtube_profile,
             "show_leaderboards": self.show_leaderboards,
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
@@ -245,8 +331,8 @@ class MazeRushGame(GameTemplate):
         game_results = []
         game_history_results = []
 
-        game_type = "maze_rush"
-        game_display_name = "Maze Rush"
+        game_type = self.record_game_type
+        game_display_name = self.record_game_display_name
         day_number = getattr(config, "DAY_NUMBER", 1)
 
         for player in sorted_players:
@@ -287,6 +373,12 @@ class MazeRushGame(GameTemplate):
             game_display_name=game_display_name,
             day_number=day_number,
             results=game_history_results,
+            extra_data={
+                "platform_target": self.platform_target,
+                "youtube_participant_count": int(self.participant_source_info.get("youtube_count") or 0),
+                "instagram_top_up_count": int(self.participant_source_info.get("instagram_top_up_count") or 0),
+                "used_fallback": bool(self.participant_source_info.get("used_fallback")),
+            },
         )
 
         self.statistics.save_statistics()

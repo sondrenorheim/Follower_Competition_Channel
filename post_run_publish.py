@@ -29,6 +29,12 @@ import requests
 from shared import auto_push, statistics, game_history
 from instagrapi import Client
 from shared import statistics, game_history
+from shared.platform_targets import (
+    is_native_youtube_game,
+    normalize_platform_target,
+    resolve_output_video_path,
+    resolve_record_game_type,
+)
 try:
     from shared.facebook_media_map import remember_mapping as remember_facebook_media_mapping
 except Exception:
@@ -41,10 +47,14 @@ try:
     from shared.video_variant_builder import (
         ensure_non_ig_join_variant,
         get_last_non_ig_variant_build_info,
+        ensure_youtube_short_variant,
+        get_last_youtube_variant_build_info,
     )
 except Exception:
     ensure_non_ig_join_variant = None
     get_last_non_ig_variant_build_info = None
+    ensure_youtube_short_variant = None
+    get_last_youtube_variant_build_info = None
 try:
     from shared.snapchat_uploader import (
         build_authorize_url as build_snapchat_authorize_url,
@@ -289,6 +299,20 @@ def build_video_path(game_mode: str, day_number: int | None = None) -> Path:
     return Path(filename)
 
 
+def build_platform_video_path(
+    game_mode: str,
+    day_number: int | None = None,
+    platform_target: str | None = None,
+) -> Path:
+    filename = resolve_output_video_path(
+        game_mode=game_mode,
+        day_number=day_number,
+        test_mode=False,
+        platform_target=normalize_platform_target(platform_target),
+    )
+    return Path(filename)
+
+
 def build_non_ig_variant_video_path(game_mode: str, day_number: int | None = None) -> Path:
     if hasattr(config, "get_non_ig_variant_video_path"):
         filename = config.get_non_ig_variant_video_path(
@@ -299,6 +323,19 @@ def build_non_ig_variant_video_path(game_mode: str, day_number: int | None = Non
         return Path(filename)
     base_path = build_video_path(game_mode=game_mode, day_number=day_number)
     suffix = str(getattr(config, "NON_IG_VARIANT_SUFFIX", "_non_ig_join") or "_non_ig_join")
+    return base_path.with_name(f"{base_path.stem}{suffix}{base_path.suffix}")
+
+
+def build_youtube_variant_video_path(game_mode: str, day_number: int | None = None) -> Path:
+    if hasattr(config, "get_youtube_variant_video_path"):
+        filename = config.get_youtube_variant_video_path(
+            game_mode=game_mode,
+            day_number=day_number,
+            test_mode=False,
+        )
+        return Path(filename)
+    base_path = build_video_path(game_mode=game_mode, day_number=day_number)
+    suffix = str(getattr(config, "YOUTUBE_VARIANT_SUFFIX", "_youtube_short") or "_youtube_short")
     return base_path.with_name(f"{base_path.stem}{suffix}{base_path.suffix}")
 
 
@@ -329,6 +366,17 @@ def _resolve_non_ig_generate_on_upload_if_missing() -> bool:
     )
 
 
+def _resolve_youtube_variant_enabled() -> bool:
+    return _parse_bool(getattr(config, "YOUTUBE_VARIANT_ENABLED", True), True)
+
+
+def _resolve_youtube_variant_generate_on_upload_if_missing() -> bool:
+    return _parse_bool(
+        getattr(config, "YOUTUBE_VARIANT_GENERATE_ON_UPLOAD_IF_MISSING", True),
+        True,
+    )
+
+
 def resolve_platform_video_path(
     base_video_path: Path,
     platform: str,
@@ -336,6 +384,66 @@ def resolve_platform_video_path(
     day_number: int | None,
 ) -> Path | None:
     normalized_platform = str(platform or "").strip().lower()
+
+    if normalized_platform == "youtube" and _resolve_youtube_variant_enabled():
+        youtube_variant_path = build_youtube_variant_video_path(
+            game_mode=game_mode,
+            day_number=day_number,
+        )
+
+        if is_native_youtube_game(game_mode, "youtube"):
+            try:
+                if youtube_variant_path.exists():
+                    print(f"Using native YouTube artifact: {youtube_variant_path}")
+                    return youtube_variant_path
+            except Exception:
+                pass
+            print(
+                f"[WARN] Missing native YouTube artifact for {game_mode}: {youtube_variant_path}. "
+                "Skipping upload instead of generating the generic YouTube variant."
+            )
+            return None
+
+        base_mtime = None
+        try:
+            base_mtime = base_video_path.stat().st_mtime
+        except Exception:
+            base_mtime = None
+
+        try:
+            if youtube_variant_path.exists():
+                variant_mtime = youtube_variant_path.stat().st_mtime
+                if base_mtime is None or variant_mtime >= base_mtime:
+                    print(f"Using YouTube Shorts variant: {youtube_variant_path}")
+                    return youtube_variant_path
+        except Exception:
+            pass
+
+        if (
+            _resolve_youtube_variant_generate_on_upload_if_missing()
+            and ensure_youtube_short_variant is not None
+        ):
+            try:
+                resolved_path = ensure_youtube_short_variant(base_video_path, youtube_variant_path)
+                if resolved_path == youtube_variant_path and youtube_variant_path.exists():
+                    message = f"Generated YouTube Shorts variant: {youtube_variant_path}"
+                    if get_last_youtube_variant_build_info is not None:
+                        info = get_last_youtube_variant_build_info() or {}
+                        build_meta = info.get("build_meta") or {}
+                        duration = build_meta.get("duration_seconds")
+                        if duration is not None:
+                            message += f" (hook={duration:.2f}s)"
+                    print(message)
+                    print(f"Using YouTube Shorts variant: {youtube_variant_path}")
+                    return youtube_variant_path
+            except Exception as exc:
+                print(f"[WARN] Failed to generate YouTube Shorts variant: {exc}")
+
+        print(
+            f"[WARN] Missing YouTube Shorts variant: {youtube_variant_path}. "
+            "Falling back to generic non-IG routing if available."
+        )
+
     route_platforms = _resolve_non_ig_route_platforms()
     if not _resolve_non_ig_variant_enabled() or normalized_platform not in route_platforms:
         return base_video_path
@@ -384,9 +492,30 @@ def resolve_platform_video_path(
     return None
 
 
-def wait_for_video(path: Path, max_seconds: int, poll_seconds: int) -> bool:
+def _iso_timestamp_to_epoch(value: str) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return datetime.datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        return None
+
+
+def wait_for_video(path: Path, max_seconds: int, poll_seconds: int, min_mtime: float | None = None) -> bool:
     """Wait for a video file to appear on disk."""
-    if path.exists():
+    def _is_ready() -> bool:
+        if not path.exists():
+            return False
+        if min_mtime is None:
+            return True
+        try:
+            return path.stat().st_mtime >= min_mtime
+        except Exception:
+            return False
+
+    if _is_ready():
         return True
     if max_seconds == 0:
         return False
@@ -396,7 +525,7 @@ def wait_for_video(path: Path, max_seconds: int, poll_seconds: int) -> bool:
         if max_seconds > 0 and elapsed >= max_seconds:
             return False
         time.sleep(max(1, poll_seconds))
-        if path.exists():
+        if _is_ready():
             return True
 
 
@@ -1157,9 +1286,18 @@ def upload_tiktok(session_id: str, video_path: Path, caption: str):
     )
 
 
-def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_hours: int = 0, privacy: str = "private") -> bool:
+def upload_youtube(
+    video_path: Path,
+    game_mode: str,
+    day_number: int,
+    schedule_hours: int = 0,
+    privacy: str = "private",
+    *,
+    platform_target: str = "instagram",
+    record_game_type: str | None = None,
+) -> bool:
     """
-    Upload to YouTube using the same channel as movie pipeline.
+    Upload to the dedicated YouTube Shorts channel.
 
     Args:
         video_path: Path to the video file
@@ -1190,6 +1328,7 @@ def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_h
         "--video", str(video_path),
         "--day", str(day_number),
         "--game", game_mode,
+        "--platform", normalize_platform_target(platform_target),
         "--privacy", privacy,
     ]
 
@@ -1229,7 +1368,7 @@ def upload_youtube(video_path: Path, game_mode: str, day_number: int, schedule_h
                     remember_youtube_media_mapping(
                         _resolve_youtube_media_map_path(),
                         video_id=youtube_video_id,
-                        game_type=str(game_mode),
+                        game_type=str(record_game_type or game_mode),
                         day_number=int(day_number),
                         source="youtube_upload",
                         extra=map_extra,
@@ -1404,6 +1543,18 @@ def parse_args():
         help="Fixed delay between uploads in minutes (no jitter; overrides delay-min/max).",
     )
     parser.add_argument(
+        "--pre-upload-wait-seconds",
+        type=int,
+        default=0,
+        help="Fixed delay after stats/API publish and before the first upload (default 0).",
+    )
+    parser.add_argument(
+        "--pre-upload-wait-minutes",
+        type=int,
+        default=None,
+        help="Fixed delay in minutes after stats/API publish and before the first upload.",
+    )
+    parser.add_argument(
         "--delay-min-seconds",
         type=int,
         default=10800,
@@ -1419,6 +1570,11 @@ def parse_args():
         "--wait-for-videos",
         action="store_true",
         help="Wait for missing videos to appear before uploading.",
+    )
+    parser.add_argument(
+        "--queue-ready-videos",
+        action="store_true",
+        help="Process videos in run-context order and wait for each video plus per-game data to become ready.",
     )
     parser.add_argument(
         "--wait-forever",
@@ -1442,6 +1598,24 @@ def parse_args():
         type=int,
         default=None,
         help="Polling interval in minutes when waiting for videos (overrides --wait-poll-seconds).",
+    )
+    parser.add_argument(
+        "--ready-grace-seconds",
+        type=int,
+        default=0,
+        help="Delay after a game's data is detected and before uploading that video (default 0).",
+    )
+    parser.add_argument(
+        "--ready-grace-minutes",
+        type=int,
+        default=None,
+        help="Delay in minutes after a game's data is detected and before uploading that video.",
+    )
+    parser.add_argument(
+        "--events-scan-max-files",
+        type=int,
+        default=12,
+        help="How many recent event log files to scan for per-game readiness checks (default 12).",
     )
     parser.add_argument(
         "--push-message",
@@ -2145,6 +2319,224 @@ def load_run_context(path: Path | None) -> dict | None:
         print(f"[WARN] Failed to load run context {path}: {e}")
         return None
 
+
+def find_latest_run_context(day_number: int | None = None) -> Path | None:
+    log_dir = PROJECT_ROOT / "logs" / "scheduled_upload"
+    if not log_dir.exists():
+        return None
+    candidates = sorted(
+        log_dir.glob("run_context_day_*.json"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+        reverse=True,
+    )
+    if day_number is None:
+        return candidates[0] if candidates else None
+
+    day_value = int(day_number)
+    fallback = None
+    for candidate in candidates:
+        if fallback is None:
+            fallback = candidate
+        payload = load_run_context(candidate)
+        if not isinstance(payload, dict):
+            continue
+        try:
+            if int(payload.get("day_number")) == day_value:
+                return candidate
+        except Exception:
+            continue
+    return fallback
+
+
+def _clear_api_caches() -> None:
+    try:
+        load_day_summary.cache_clear()
+    except Exception:
+        pass
+    try:
+        load_game_results.cache_clear()
+    except Exception:
+        pass
+
+
+def _extract_top_usernames_from_payload(game_payload: dict | None, limit: int = 10) -> list[str]:
+    if not isinstance(game_payload, dict):
+        return []
+    results = game_payload.get("results", []) or []
+    if not isinstance(results, list):
+        return []
+    sorted_results = sorted(
+        (entry for entry in results if isinstance(entry, dict)),
+        key=lambda entry: entry.get("placement", entry.get("rank", 0) or 0),
+    )
+    usernames: list[str] = []
+    for entry in sorted_results:
+        username = entry.get("username")
+        if not username:
+            continue
+        usernames.append(str(username))
+        if len(usernames) >= limit:
+            break
+    return usernames
+
+
+def _payload_matches_ready_requirements(
+    payload: dict | None,
+    *,
+    min_timestamp: str = "",
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    game_id = str(payload.get("game_id") or "").strip()
+    timestamp = str(payload.get("timestamp") or "").strip()
+    results = payload.get("results")
+    if not game_id or not timestamp or not isinstance(results, list) or not results:
+        return False
+    if min_timestamp and timestamp < min_timestamp:
+        return False
+    return True
+
+
+def _load_latest_game_from_api(
+    day_number: int,
+    game_mode: str,
+    *,
+    min_timestamp: str = "",
+    refresh: bool = False,
+) -> dict | None:
+    if refresh:
+        _clear_api_caches()
+    day_data = load_day_summary(day_number)
+    if not day_data:
+        return None
+    games = [
+        game for game in (day_data.get("games", []) or [])
+        if isinstance(game, dict) and game.get("game_type") == game_mode
+    ]
+    if min_timestamp:
+        games = [game for game in games if str(game.get("timestamp") or "").strip() >= min_timestamp]
+    if not games:
+        return None
+    game_summary = max(games, key=lambda game: str(game.get("timestamp", "")))
+    game_id = str(game_summary.get("game_id") or "").strip()
+    if not game_id:
+        return None
+    payload = load_game_results(game_id)
+    return payload if _payload_matches_ready_requirements(payload, min_timestamp=min_timestamp) else None
+
+
+def _load_latest_game_from_events(
+    day_number: int,
+    game_mode: str,
+    *,
+    min_timestamp: str = "",
+    scan_max_files: int = 12,
+) -> dict | None:
+    events_dir = PROJECT_ROOT / "backups" / "game_results" / "events"
+    if not events_dir.exists():
+        return None
+    try:
+        files = sorted(
+            events_dir.rglob("*.ndjson"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+            reverse=True,
+        )
+    except Exception:
+        return None
+
+    if scan_max_files > 0:
+        files = files[:scan_max_files]
+
+    best_payload = None
+    best_timestamp = ""
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    if payload.get("day_number") != day_number or payload.get("game_type") != game_mode:
+                        continue
+                    timestamp = str(payload.get("timestamp") or "").strip()
+                    if min_timestamp and timestamp < min_timestamp:
+                        continue
+                    if not _payload_matches_ready_requirements(payload, min_timestamp=min_timestamp):
+                        continue
+                    if best_payload is None or timestamp > best_timestamp:
+                        best_payload = payload
+                        best_timestamp = timestamp
+        except Exception:
+            continue
+    return best_payload
+
+
+def load_latest_game_payload_for_upload(
+    day_number: int,
+    game_mode: str,
+    *,
+    min_timestamp: str = "",
+    prefer_events: bool = False,
+    refresh_api: bool = False,
+    events_scan_max_files: int = 12,
+) -> dict | None:
+    event_payload = _load_latest_game_from_events(
+        day_number,
+        game_mode,
+        min_timestamp=min_timestamp,
+        scan_max_files=events_scan_max_files,
+    )
+    api_payload = _load_latest_game_from_api(
+        day_number,
+        game_mode,
+        min_timestamp=min_timestamp,
+        refresh=refresh_api,
+    )
+
+    if prefer_events:
+        return event_payload or api_payload
+    if api_payload and event_payload:
+        api_ts = str(api_payload.get("timestamp") or "")
+        event_ts = str(event_payload.get("timestamp") or "")
+        return api_payload if api_ts >= event_ts else event_payload
+    return api_payload or event_payload
+
+
+def wait_for_game_payload(
+    day_number: int,
+    game_mode: str,
+    *,
+    max_seconds: int,
+    poll_seconds: int,
+    min_timestamp: str = "",
+    prefer_events: bool = False,
+    events_scan_max_files: int = 12,
+) -> dict | None:
+    start = time.time()
+    while True:
+        payload = load_latest_game_payload_for_upload(
+            day_number,
+            game_mode,
+            min_timestamp=min_timestamp,
+            prefer_events=prefer_events,
+            refresh_api=True,
+            events_scan_max_files=events_scan_max_files,
+        )
+        if payload is not None:
+            return payload
+        if max_seconds == 0:
+            return None
+        elapsed = time.time() - start
+        if max_seconds > 0 and elapsed >= max_seconds:
+            return None
+        time.sleep(max(1, poll_seconds))
+
 def run_ig_export(ig_persistent, args):
     if args.ig_uploader != "safe" or not ig_persistent:
         print("IG export requires --ig-uploader safe; skipping export.")
@@ -2192,6 +2584,20 @@ def main():
         args.delay_min_seconds = None
         args.delay_max_seconds = None
 
+    if args.pre_upload_wait_minutes is not None:
+        if args.pre_upload_wait_minutes < 0:
+            raise SystemExit("--pre-upload-wait-minutes must be >= 0")
+        args.pre_upload_wait_seconds = args.pre_upload_wait_minutes * 60
+    elif args.pre_upload_wait_seconds < 0:
+        raise SystemExit("--pre-upload-wait-seconds must be >= 0")
+
+    if args.ready_grace_minutes is not None:
+        if args.ready_grace_minutes < 0:
+            raise SystemExit("--ready-grace-minutes must be >= 0")
+        args.ready_grace_seconds = args.ready_grace_minutes * 60
+    elif args.ready_grace_seconds < 0:
+        raise SystemExit("--ready-grace-seconds must be >= 0")
+
     if args.wait_poll_minutes is not None:
         if args.wait_poll_minutes <= 0:
             raise SystemExit("--wait-poll-minutes must be > 0")
@@ -2200,6 +2606,18 @@ def main():
     if args.wait_forever:
         args.wait_for_videos = True
         args.wait_max_seconds = -1
+
+    if args.queue_ready_videos:
+        args.wait_for_videos = True
+        if args.wait_max_seconds == 0:
+            args.wait_max_seconds = -1
+        if args.ready_grace_seconds == 0:
+            args.ready_grace_seconds = 6 * 60
+        if not args.skip_stats:
+            raise SystemExit("--queue-ready-videos requires --skip-stats while the render run is still in progress.")
+
+    if args.events_scan_max_files < 0:
+        raise SystemExit("--events-scan-max-files must be >= 0")
 
     if args.ig_export_after_uploads and not args.ig_export_followers:
         args.ig_export_followers = True
@@ -2226,7 +2644,21 @@ def main():
         print("Export completed.")
         return
 
-    run_context = load_run_context(args.run_context_file)
+    resolved_run_context_path = args.run_context_file
+    if args.queue_ready_videos and resolved_run_context_path is None:
+        requested_day = (
+            int(args.run_day_number)
+            if args.run_day_number is not None
+            else int(getattr(config, "DAY_NUMBER", 0) or 0)
+        )
+        resolved_run_context_path = find_latest_run_context(requested_day if requested_day > 0 else None)
+        if resolved_run_context_path is None:
+            raise SystemExit(
+                "--queue-ready-videos could not find a run context. Pass --run-context-file or rerun main.py after this patch."
+            )
+        print(f"[INFO] Using latest run context: {resolved_run_context_path}")
+
+    run_context = load_run_context(resolved_run_context_path)
     run_day_number = (
         args.run_day_number
         if args.run_day_number is not None
@@ -2234,13 +2666,30 @@ def main():
     )
     if run_day_number is None:
         run_day_number = getattr(config, "DAY_NUMBER", 0)
+    run_platform_target = normalize_platform_target(
+        (run_context.get("platform_target") if run_context else None) or getattr(config, "PLATFORM_TARGET", "instagram")
+    )
     run_game_modes = (run_context.get("all_game_modes") if run_context else None) or getattr(config, "ALL_GAME_MODES", [])
     if not run_game_modes:
         fallback_mode = getattr(config, "GAME_MODE", "")
         run_game_modes = [fallback_mode] if fallback_mode else []
 
+    if args.queue_ready_videos and run_context is None:
+        raise SystemExit("--queue-ready-videos requires a valid run context.")
+
+    run_context_timestamp = str((run_context or {}).get("timestamp") or "").strip()
+    run_context_min_epoch = _iso_timestamp_to_epoch(run_context_timestamp)
+
     if run_context:
-        print(f"[INFO] Using run context: day {run_day_number}, modes {len(run_game_modes)}")
+        print(
+            f"[INFO] Using run context: day {run_day_number}, modes {len(run_game_modes)}, "
+            f"platform={run_platform_target}"
+        )
+    if args.queue_ready_videos:
+        print(
+            "[INFO] Queue-ready mode enabled: waiting for fresh video files and per-game event data "
+            "before each upload."
+        )
 
     fb_secrets_path = Path(args.facebook_secrets_file)
     fb_local_env = load_env_values(fb_secrets_path)
@@ -2960,7 +3409,10 @@ def main():
         )
 
     # Build expected videos from run context (or ALL_GAME_MODES)
-    video_paths = [build_video_path(gm, day_number=run_day_number) for gm in run_game_modes]
+    video_paths = [
+        build_platform_video_path(gm, day_number=run_day_number, platform_target=run_platform_target)
+        for gm in run_game_modes
+    ]
     if args.max_videos and args.max_videos > 0:
         original_count = len(video_paths)
         video_paths = video_paths[: args.max_videos]
@@ -2978,6 +3430,13 @@ def main():
         else:
             print("[OK] Done (stats pushed only - video upload disabled).")
         return
+
+    if args.pre_upload_wait_seconds > 0:
+        print(
+            "[WAIT] Waiting "
+            f"{args.pre_upload_wait_seconds / 60:.1f} minutes after publish before uploads..."
+        )
+        time.sleep(args.pre_upload_wait_seconds)
 
     session_path = os.getenv("IG_SESSION_FILE", str(args.session_file))
     if not session_path:
@@ -3177,10 +3636,32 @@ def main():
             return True
 
         for idx, video_path in enumerate(video_paths):
-            if not video_path.exists():
+            game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
+            record_game_type = resolve_record_game_type(game_mode, run_platform_target)
+            actual_day_number = int(run_day_number)
+            min_video_mtime = run_context_min_epoch if args.queue_ready_videos else None
+            fresh_video_ready = False
+            try:
+                fresh_video_ready = video_path.exists() and (
+                    min_video_mtime is None or video_path.stat().st_mtime >= min_video_mtime
+                )
+            except Exception:
+                fresh_video_ready = False
+
+            if not fresh_video_ready:
                 if args.wait_for_videos:
-                    print(f"[WAIT] Missing video: {video_path}. Waiting up to {args.wait_max_seconds}s...")
-                    found = wait_for_video(video_path, args.wait_max_seconds, args.wait_poll_seconds)
+                    if args.queue_ready_videos and min_video_mtime is not None:
+                        print(
+                            f"[WAIT] Waiting for fresh video for {game_mode} Day {actual_day_number}: {video_path}"
+                        )
+                    else:
+                        print(f"[WAIT] Missing video: {video_path}. Waiting up to {args.wait_max_seconds}s...")
+                    found = wait_for_video(
+                        video_path,
+                        args.wait_max_seconds,
+                        args.wait_poll_seconds,
+                        min_mtime=min_video_mtime,
+                    )
                     if not found:
                         print(f"[WARN] Timed out waiting for video: {video_path}")
                         continue
@@ -3188,15 +3669,43 @@ def main():
                 else:
                     print(f"[WARN] Skipping missing video: {video_path}")
                     continue
-            game_mode = video_path.stem.split("_day_")[0] if "_day_" in video_path.stem else video_path.stem
-            actual_day_number = int(run_day_number)
+
+            ready_game_payload = None
+            if args.queue_ready_videos:
+                print(f"[WAIT] Waiting for game data: {game_mode} Day {actual_day_number}")
+                ready_game_payload = wait_for_game_payload(
+                    actual_day_number,
+                    record_game_type,
+                    max_seconds=args.wait_max_seconds,
+                    poll_seconds=args.wait_poll_seconds,
+                    min_timestamp=run_context_timestamp,
+                    prefer_events=True,
+                    events_scan_max_files=args.events_scan_max_files,
+                )
+                if ready_game_payload is None:
+                    print(f"[WARN] Timed out waiting for game data: {game_mode} Day {actual_day_number}")
+                    continue
+                print(
+                    "[OK] Game data ready: "
+                    f"{ready_game_payload.get('game_id')} ({ready_game_payload.get('timestamp')})"
+                )
+                if args.ready_grace_seconds > 0:
+                    print(
+                        f"[WAIT] Waiting {args.ready_grace_seconds / 60:.1f} minutes "
+                        f"for webhook/event propagation before uploading {video_path.name}..."
+                    )
+                    time.sleep(args.ready_grace_seconds)
+
             day_value = _display_day_for_mode(game_mode, actual_day_number)
             base_caption = args.caption_template.format(game_mode=game_mode, day_number=day_value)
             skip_top10_modes = set(getattr(config, "TOP10_SKIP_GAME_MODES", []))
             if _is_mode_in_skip_list(game_mode, skip_top10_modes):
                 ig_caption = base_caption
             else:
-                top_users = get_top_usernames_for_game(actual_day_number, game_mode, limit=10)
+                if ready_game_payload is not None:
+                    top_users = _extract_top_usernames_from_payload(ready_game_payload, limit=10)
+                else:
+                    top_users = get_top_usernames_for_game(actual_day_number, record_game_type, limit=10)
                 ig_caption = base_caption + format_top_users_block(top_users)
 
             x_attempted_pre_ig = False
@@ -3292,7 +3801,9 @@ def main():
                         game_mode=game_mode,
                         day_number=day_value,
                         schedule_hours=args.youtube_schedule_hours,
-                        privacy=args.youtube_privacy
+                        privacy=args.youtube_privacy,
+                        platform_target=run_platform_target,
+                        record_game_type=record_game_type,
                     )
             elif game_mode in skip_youtube_modes:
                 print(f"Skipping YouTube upload for {game_mode} (config.YOUTUBE_SKIP_GAME_MODES).")

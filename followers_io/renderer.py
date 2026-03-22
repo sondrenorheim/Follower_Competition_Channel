@@ -1,5 +1,6 @@
+import math
 import random
-import time
+from typing import Iterable
 
 import pygame
 
@@ -12,46 +13,77 @@ class FollowersIORenderer(RendererTemplate):
     GAME_TITLE = "FOLLOWERS.IO"
     GAME_SUBTITLE = "Making my followers fight every day"
     PLAYER_LABEL = "followers"
-    GAME_WIDTH = config.FIGHTER_ARENA_RECT[2]
-    GAME_HEIGHT = config.FIGHTER_ARENA_RECT[3]
+    GAME_WIDTH = config.FOLLOWERS_IO_ARENA_RECT[2]
+    GAME_HEIGHT = config.FOLLOWERS_IO_ARENA_RECT[3]
 
     def __init__(self, screen: pygame.Surface):
         super().__init__(screen)
 
-        arena_x, arena_y, arena_w, arena_h = config.FIGHTER_ARENA_RECT
-        self.game_left = arena_x
-        self.game_top = arena_y
-        self.game_right = arena_x + arena_w
-        self.game_bottom = arena_y + arena_h
+        arena_x, arena_y, arena_w, arena_h = config.FOLLOWERS_IO_ARENA_RECT
+        self.world_left = float(arena_x)
+        self.world_top = float(arena_y)
+        self.world_width = float(arena_w)
+        self.world_height = float(arena_h)
+
+        self.game_left = int(arena_x)
+        self.game_top = int(arena_y)
+        self.game_right = int(arena_x + arena_w)
+        self.game_bottom = int(arena_y + arena_h)
 
         self.bg_color = tuple(getattr(config, "FOLLOWERS_IO_BG_COLOR", (232, 239, 244)))
         self.grid_color = tuple(getattr(config, "FOLLOWERS_IO_GRID_COLOR", (202, 216, 225)))
         self.border_color = tuple(getattr(config, "FOLLOWERS_IO_BORDER_COLOR", (20, 20, 20)))
         self.food_color = tuple(getattr(config, "FOLLOWERS_IO_FOOD_COLOR", (115, 168, 121)))
+        self.highlight_ring_color = tuple(
+            getattr(config, "FOLLOWERS_IO_HIGHLIGHT_RING_COLOR", (255, 188, 67))
+        )
+        self.highlight_text_color = tuple(
+            getattr(config, "FOLLOWERS_IO_HIGHLIGHT_TEXT_COLOR", (20, 20, 20))
+        )
 
-        self.simple_render_threshold = int(getattr(config, "FOLLOWERS_IO_SIMPLE_RENDER_THRESHOLD", 12000))
-        self.render_max_players = int(getattr(config, "FOLLOWERS_IO_RENDER_MAX_PLAYERS", 8000))
-        self.render_min_players = int(getattr(config, "FOLLOWERS_IO_RENDER_MIN_PLAYERS", 1800))
-        self.render_high_pop_threshold = int(getattr(config, "FOLLOWERS_IO_RENDER_HIGH_POP_THRESHOLD", 50000))
-        self.food_draw_limit = int(getattr(config, "FOLLOWERS_IO_FOOD_DRAW_LIMIT", 1600))
+        self.cull_render_limit = int(getattr(config, "FOLLOWERS_IO_CULL_RENDER_LIMIT", 3200))
+        self.full_avatar_alive_threshold = int(
+            getattr(config, "FOLLOWERS_IO_FULL_AVATAR_ALIVE_THRESHOLD", 700)
+        )
+        self.food_draw_limit = int(getattr(config, "FOLLOWERS_IO_FOOD_DRAW_LIMIT", 1800))
+        self.leader_avatar_min_size = int(
+            getattr(config, "FOLLOWERS_IO_LEADER_AVATAR_MIN_SIZE", 16)
+        )
+        self.live_leader_count = int(getattr(config, "FOLLOWERS_IO_LIVE_LEADER_COUNT", 5))
+
+        leader_font_size = int(getattr(config, "FOLLOWERS_IO_LEADER_LABEL_FONT_SIZE", 18))
+        self.font_leader_label = pygame.font.Font(None, max(12, leader_font_size))
+        self.font_leaderboard = pygame.font.Font(None, 22)
+        self.font_phase = pygame.font.Font(None, 28)
+        self.font_phase_small = pygame.font.Font(None, 21)
+        self.font_eliminations = pygame.font.Font(
+            None,
+            max(12, int(getattr(config, "FOLLOWERS_IO_ELIMINATION_TEXT_SIZE", 18))),
+        )
+        self.font_club_panel = pygame.font.Font(
+            None,
+            int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16)),
+        )
 
         self.day_counter_offset = int(getattr(config, "FOLLOWERS_IO_DAY_COUNTER_OFFSET", 18))
         self.elimination_list_size = int(getattr(config, "FOLLOWERS_IO_ELIMINATION_LIST_SIZE", 0))
-        self.elimination_name_length = int(getattr(config, "FOLLOWERS_IO_ELIMINATION_NAME_LENGTH", 16))
-        self.elimination_label = str(getattr(config, "FOLLOWERS_IO_ELIMINATION_LABEL", "Consumed:"))
-        self.elimination_list_x_offset = int(getattr(config, "FOLLOWERS_IO_ELIMINATION_LIST_X_OFFSET", 0))
-        elimination_text_size = int(getattr(config, "FOLLOWERS_IO_ELIMINATION_TEXT_SIZE", 18))
-        self.font_eliminations = pygame.font.Font(None, max(12, elimination_text_size))
-        club_text_size = int(getattr(config, "CLUB_PANEL_TEXT_SIZE", 16))
-        self.font_club_panel = pygame.font.Font(None, club_text_size)
+        self.elimination_name_length = int(
+            getattr(config, "FOLLOWERS_IO_ELIMINATION_NAME_LENGTH", 16)
+        )
+        self.elimination_label = str(
+            getattr(config, "FOLLOWERS_IO_ELIMINATION_LABEL", "Consumed:")
+        )
+        self.elimination_list_x_offset = int(
+            getattr(config, "FOLLOWERS_IO_ELIMINATION_LIST_X_OFFSET", 0)
+        )
         self._club_panel_bottom = None
 
         self._background_surface = None
         self._build_background()
 
     def _build_background(self):
-        width = int(self.game_right - self.game_left)
-        height = int(self.game_bottom - self.game_top)
+        width = int(self.world_width)
+        height = int(self.world_height)
         if width <= 0 or height <= 0:
             return
 
@@ -59,16 +91,13 @@ class FollowersIORenderer(RendererTemplate):
         surface = pygame.Surface((width, height), pygame.SRCALPHA)
         surface.fill(self.bg_color)
 
-        # Petri-dish style subtle circles.
-        for _ in range(18):
-            radius = rng.randint(18, 85)
+        for _ in range(22):
+            radius = rng.randint(18, 88)
             cx = rng.randint(0, width)
             cy = rng.randint(0, height)
-            alpha = rng.randint(12, 26)
-            circle_color = (255, 255, 255, alpha)
-            pygame.draw.circle(surface, circle_color, (cx, cy), radius)
+            alpha = rng.randint(10, 28)
+            pygame.draw.circle(surface, (255, 255, 255, alpha), (cx, cy), radius)
 
-        # Grid.
         grid_step = max(24, int(getattr(config, "FOLLOWERS_IO_GRID_STEP", 32)))
         for x in range(0, width, grid_step):
             pygame.draw.line(surface, self.grid_color, (x, 0), (x, height), 1)
@@ -92,16 +121,72 @@ class FollowersIORenderer(RendererTemplate):
                 game_state.get("winner"),
             )
 
+    def _get_area_rect(self) -> pygame.Rect:
+        return pygame.Rect(
+            self.game_left,
+            self.game_top,
+            self.game_right - self.game_left,
+            self.game_bottom - self.game_top,
+        )
+
+    def _get_camera_rect(self, game_state: dict) -> tuple[float, float, float, float]:
+        camera_rect = game_state.get("camera_rect")
+        if camera_rect and len(camera_rect) == 4:
+            return tuple(float(value) for value in camera_rect)
+        return (
+            self.world_left,
+            self.world_top,
+            self.world_width,
+            self.world_height,
+        )
+
+    def _get_camera_scales(self, camera_rect: tuple[float, float, float, float]) -> tuple[float, float]:
+        cam_w = max(1.0, float(camera_rect[2]))
+        cam_h = max(1.0, float(camera_rect[3]))
+        area_rect = self._get_area_rect()
+        return (area_rect.width / cam_w, area_rect.height / cam_h)
+
+    def _world_to_screen(
+        self,
+        x: float,
+        y: float,
+        camera_rect: tuple[float, float, float, float],
+    ) -> tuple[int, int]:
+        cam_x, cam_y, _, _ = camera_rect
+        scale_x, scale_y = self._get_camera_scales(camera_rect)
+        sx = self.game_left + ((x - cam_x) * scale_x)
+        sy = self.game_top + ((y - cam_y) * scale_y)
+        return (int(round(sx)), int(round(sy)))
+
+    def _world_to_screen_radius(
+        self,
+        radius: float,
+        camera_rect: tuple[float, float, float, float],
+    ) -> float:
+        scale_x, scale_y = self._get_camera_scales(camera_rect)
+        return max(1.0, radius * min(scale_x, scale_y))
+
+    def _player_in_camera(
+        self,
+        player,
+        camera_rect: tuple[float, float, float, float],
+        margin: float = 16.0,
+    ) -> bool:
+        cam_x, cam_y, cam_w, cam_h = camera_rect
+        return (
+            (player.x + player.radius) >= (cam_x - margin)
+            and (player.x - player.radius) <= (cam_x + cam_w + margin)
+            and (player.y + player.radius) >= (cam_y - margin)
+            and (player.y - player.radius) <= (cam_y + cam_h + margin)
+        )
+
     def _draw_title_and_subtitle(self):
         arena_top = self.game_top
-
-        title_font = pygame.font.Font(None, 56)
-        title_text = title_font.render(self.GAME_TITLE, True, config.COLOR_TEXT)
+        title_text = self.font_title.render(self.GAME_TITLE, True, config.COLOR_TEXT)
         title_rect = title_text.get_rect(center=(self.width // 2, arena_top - 70))
         self.screen.blit(title_text, title_rect)
 
-        subtitle_font = pygame.font.Font(None, 32)
-        subtitle_text = subtitle_font.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
+        subtitle_text = self.font_subtitle.render(self.GAME_SUBTITLE, True, config.COLOR_TEXT)
         subtitle_rect = subtitle_text.get_rect(center=(self.width // 2, arena_top - 40))
         self.screen.blit(subtitle_text, subtitle_rect)
 
@@ -113,112 +198,214 @@ class FollowersIORenderer(RendererTemplate):
             self.screen.blit(prompt_surface, prompt_rect)
 
     def _draw_game_area(self, players, game_state: dict):
-        area_rect = pygame.Rect(
-            self.game_left,
-            self.game_top,
-            self.game_right - self.game_left,
-            self.game_bottom - self.game_top,
-        )
+        area_rect = self._get_area_rect()
+        camera_rect = self._get_camera_rect(game_state)
 
         if self._background_surface is not None:
-            self.screen.blit(self._background_surface, (self.game_left, self.game_top))
+            cam_x, cam_y, cam_w, cam_h = camera_rect
+            src_left = int(math.floor(cam_x - self.world_left))
+            src_top = int(math.floor(cam_y - self.world_top))
+            src_right = int(math.ceil((cam_x + cam_w) - self.world_left))
+            src_bottom = int(math.ceil((cam_y + cam_h) - self.world_top))
+
+            src_left = max(0, min(self._background_surface.get_width() - 1, src_left))
+            src_top = max(0, min(self._background_surface.get_height() - 1, src_top))
+            src_right = max(src_left + 1, min(self._background_surface.get_width(), src_right))
+            src_bottom = max(src_top + 1, min(self._background_surface.get_height(), src_bottom))
+
+            src_rect = pygame.Rect(
+                src_left,
+                src_top,
+                src_right - src_left,
+                src_bottom - src_top,
+            )
+            crop = self._background_surface.subsurface(src_rect).copy()
+            if crop.get_size() != area_rect.size:
+                crop = pygame.transform.smoothscale(crop, area_rect.size)
+            self.screen.blit(crop, area_rect.topleft)
         else:
             pygame.draw.rect(self.screen, self.bg_color, area_rect)
 
-        food_particles = game_state.get("food_particles", []) or []
-        if food_particles:
-            max_food = self.food_draw_limit
-            food_list = food_particles if len(food_particles) <= max_food else food_particles[:max_food]
-            for food in food_list:
-                radius = max(1, min(4, int(food.mass ** 0.5)))
-                pygame.draw.circle(
-                    self.screen,
-                    self.food_color,
-                    (int(food.x), int(food.y)),
-                    radius,
-                )
-
         pygame.draw.rect(self.screen, self.border_color, area_rect, 3)
 
-    def _draw_players(self, players, game_state: dict):
+    def _collect_renderable_players(self, players: Iterable) -> list:
         fade_duration = float(getattr(config, "FADE_DURATION", 0.5))
         renderable = []
         for player in players:
             if player.alive:
+                player.alpha = 255
                 renderable.append(player)
                 continue
             if player.is_fading(fade_duration):
                 player.update_fade(fade_duration)
                 renderable.append(player)
+        return renderable
 
-        total_count = int(game_state.get("total_count", len(players)))
-        render_limit = self.render_max_players
-        if render_limit > 0 and total_count >= self.render_high_pop_threshold:
-            ratio = self.render_high_pop_threshold / max(1.0, float(total_count))
-            scaled_limit = int(round(render_limit * (ratio ** 0.5)))
-            render_limit = max(self.render_min_players, min(render_limit, scaled_limit))
+    def _draw_food(self, food_particles, camera_rect: tuple[float, float, float, float]):
+        if not food_particles:
+            return
 
-        if len(renderable) > render_limit > 0:
-            keep_ratio = render_limit / float(len(renderable))
-            hash_threshold = int(max(1.0, min(65535.0, 65535.0 * keep_ratio)))
-            sampled = []
-            club_sampled = []
-            for player in renderable:
-                if getattr(player, "is_club_member", False):
-                    club_sampled.append(player)
-                    continue
-                if (int(getattr(player, "render_hash", 0)) & 0xFFFF) <= hash_threshold:
-                    sampled.append(player)
+        food_list = list(food_particles)
+        if len(food_list) > self.food_draw_limit > 0:
+            step = len(food_list) / float(self.food_draw_limit)
+            food_list = [food_list[int(idx * step)] for idx in range(self.food_draw_limit)]
 
-            keep_slots = max(0, render_limit - len(club_sampled))
-            if len(sampled) > keep_slots > 0:
-                step = len(sampled) / float(keep_slots)
-                trimmed = []
-                idx = 0.0
-                while len(trimmed) < keep_slots and int(idx) < len(sampled):
-                    trimmed.append(sampled[int(idx)])
-                    idx += step
-                sampled = trimmed
-            elif keep_slots <= 0:
-                sampled = []
-            renderable = sampled + club_sampled
+        for orb in food_list:
+            sx, sy = self._world_to_screen(orb.x, orb.y, camera_rect)
+            radius = int(
+                max(
+                    1.0,
+                    min(
+                        6.0,
+                        self._world_to_screen_radius(max(0.9, math.sqrt(max(0.0, orb.mass)) * 0.55), camera_rect),
+                    ),
+                )
+            )
+            pygame.draw.circle(self.screen, self.food_color, (sx, sy), radius)
 
-        simple_mode = total_count >= self.simple_render_threshold
-        club_players = [p for p in renderable if getattr(p, "is_club_member", False)]
-        normal_players = [p for p in renderable if not getattr(p, "is_club_member", False)]
+    def _draw_cull_players(self, players, camera_rect: tuple[float, float, float, float]):
+        for player in players:
+            if not self._player_in_camera(player, camera_rect):
+                continue
+            sx, sy = self._world_to_screen(player.x, player.y, camera_rect)
+            radius = max(1, min(4, int(round(self._world_to_screen_radius(player.radius * 0.9, camera_rect)))))
+            if getattr(player, "is_club_member", False):
+                self._draw_club_glow(player, size=max(10, radius * 4), pos=(sx, sy))
+            pygame.draw.circle(self.screen, tuple(getattr(player, "color", (100, 100, 255))), (sx, sy), radius)
+            pygame.draw.circle(self.screen, (0, 0, 0), (sx, sy), radius, 1)
 
-        for player in normal_players:
-            if simple_mode:
-                self._draw_dot_player(player)
-            else:
-                size = max(6, min(42, int(player.radius * 2.0)))
-                self._draw_player_avatar(player, size=size)
-
-        for player in club_players:
-            size = max(8, min(48, int(player.radius * 2.0)))
-            if simple_mode:
-                self._draw_club_glow(player, size=size)
-                self._draw_dot_player(player)
-            else:
-                self._draw_club_glow(player, size=size)
-                self._draw_player_avatar(player, size=size)
-
-    def _draw_dot_player(self, player):
-        radius = max(1, min(8, int(player.radius)))
+    def _draw_player_circle(self, player, pos: tuple[int, int], radius: int):
+        radius = max(1, int(radius))
         color = tuple(getattr(player, "color", (100, 100, 255)))
         alpha = int(getattr(player, "alpha", 255))
+        if alpha >= 255:
+            pygame.draw.circle(self.screen, color, pos, radius)
+            pygame.draw.circle(self.screen, (0, 0, 0), pos, radius, 1)
+            return
+
+        surface = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+        center = (radius + 2, radius + 2)
+        pygame.draw.circle(surface, (*color, alpha), center, radius)
+        pygame.draw.circle(surface, (0, 0, 0, alpha), center, radius, 1)
+        rect = surface.get_rect(center=pos)
+        self.screen.blit(surface, rect)
+
+    def _draw_highlight_ring(self, pos: tuple[int, int], radius: int, alpha: int = 255):
+        ring_radius = max(6, radius + 5)
+        ring_surface = pygame.Surface((ring_radius * 2 + 8, ring_radius * 2 + 8), pygame.SRCALPHA)
+        center = (ring_radius + 4, ring_radius + 4)
+        pygame.draw.circle(
+            ring_surface,
+            (*self.highlight_ring_color, min(255, alpha)),
+            center,
+            ring_radius,
+            3,
+        )
+        self.screen.blit(ring_surface, ring_surface.get_rect(center=pos))
+
+    def _draw_avatar_at(self, player, pos: tuple[int, int], size: int):
+        size = max(1, int(round(size)))
+        avatar_surface = self._get_avatar_surface(player, size)
+        alpha = int(getattr(player, "alpha", 255))
         if alpha < 255:
-            dot_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
-            pygame.draw.circle(dot_surface, (*color, alpha), (radius + 1, radius + 1), radius)
-            pygame.draw.circle(dot_surface, (0, 0, 0, alpha), (radius + 1, radius + 1), radius, 1)
-            self.screen.blit(dot_surface, (int(player.x - radius - 1), int(player.y - radius - 1)))
-        else:
-            pygame.draw.circle(self.screen, color, (int(player.x), int(player.y)), radius)
-            pygame.draw.circle(self.screen, (0, 0, 0), (int(player.x), int(player.y)), radius, 1)
+            avatar_surface = avatar_surface.copy()
+            avatar_surface.set_alpha(alpha)
+        self.screen.blit(avatar_surface, avatar_surface.get_rect(center=pos))
+
+    def _draw_leader_label(
+        self,
+        player,
+        pos: tuple[int, int],
+        radius: int,
+        rank: int,
+    ):
+        display_name = player.username
+        if len(display_name) > 12:
+            display_name = display_name[:12] + "..."
+        label_text = f"{rank}. {display_name}  {int(player.mass)}"
+        label_surface = self.font_leader_label.render(label_text, True, self.highlight_text_color)
+        pad_x = 8
+        pad_y = 5
+        bubble = pygame.Surface(
+            (label_surface.get_width() + pad_x * 2, label_surface.get_height() + pad_y * 2),
+            pygame.SRCALPHA,
+        )
+        bubble.fill((255, 246, 224, 225))
+        pygame.draw.rect(
+            bubble,
+            self.highlight_ring_color,
+            bubble.get_rect(),
+            2,
+            border_radius=10,
+        )
+        bubble.blit(label_surface, (pad_x, pad_y))
+
+        label_x = pos[0] - (bubble.get_width() // 2)
+        label_y = pos[1] - radius - bubble.get_height() - 8
+        label_x = max(self.game_left + 4, min(self.game_right - bubble.get_width() - 4, label_x))
+        label_y = max(self.game_top + 4, min(self.game_bottom - bubble.get_height() - 4, label_y))
+        self.screen.blit(bubble, (label_x, label_y))
+
+    def _draw_readable_players(self, players, game_state: dict, camera_rect: tuple[float, float, float, float]):
+        alive_count = int(game_state.get("alive_count", len(players)))
+        live_leaders = list(game_state.get("live_leaders") or [])
+        leader_lookup = {id(player): rank + 1 for rank, player in enumerate(live_leaders)}
+        full_avatar_mode = alive_count <= self.full_avatar_alive_threshold
+
+        renderable = [player for player in players if self._player_in_camera(player, camera_rect)]
+        renderable.sort(key=lambda player: (not player.alive, player.radius, player.username))
+
+        for player in renderable:
+            pos = self._world_to_screen(player.x, player.y, camera_rect)
+            radius = int(round(self._world_to_screen_radius(player.radius, camera_rect)))
+            radius = max(2, min(72, radius))
+
+            is_leader = id(player) in leader_lookup
+            is_club_member = bool(getattr(player, "is_club_member", False))
+            use_avatar = full_avatar_mode or is_leader or is_club_member
+
+            if is_leader:
+                self._draw_highlight_ring(pos, radius, alpha=int(getattr(player, "alpha", 255)))
+            if is_club_member:
+                glow_size = max(self.leader_avatar_min_size, radius * 2 + 8)
+                self._draw_club_glow(player, size=glow_size, pos=pos)
+
+            if use_avatar:
+                avatar_size = max(
+                    self.leader_avatar_min_size if is_leader else 12,
+                    min(84, radius * 2),
+                )
+                self._draw_avatar_at(player, pos, avatar_size)
+            else:
+                self._draw_player_circle(player, pos, radius)
+
+        for player in live_leaders:
+            if not player.alive or not self._player_in_camera(player, camera_rect, margin=6.0):
+                continue
+            pos = self._world_to_screen(player.x, player.y, camera_rect)
+            radius = int(round(self._world_to_screen_radius(player.radius, camera_rect)))
+            self._draw_leader_label(player, pos, max(2, radius), leader_lookup[id(player)])
+
+    def _draw_players(self, players, game_state: dict):
+        renderable = self._collect_renderable_players(players)
+        camera_rect = self._get_camera_rect(game_state)
+        area_rect = self._get_area_rect()
+
+        previous_clip = self.screen.get_clip()
+        self.screen.set_clip(area_rect)
+        try:
+            phase_name = str(game_state.get("phase_name", "playing") or "playing")
+            if phase_name in ("readable", "showdown"):
+                self._draw_food(game_state.get("food_particles", []) or [], camera_rect)
+                self._draw_readable_players(renderable, game_state, camera_rect)
+            else:
+                self._draw_cull_players(renderable, camera_rect)
+        finally:
+            self.screen.set_clip(previous_clip)
 
     def _draw_day_counter(self, players, game_state: dict):
         total_count = int(game_state.get("total_count", len(players)))
-        day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
+        day_text = f"Day {config.DAY_NUMBER}: {total_count:,} {self.PLAYER_LABEL}"
         y_pos = int(self.game_bottom + self.day_counter_offset)
         day_surface = self.font_day.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, y_pos))
@@ -238,85 +425,115 @@ class FollowersIORenderer(RendererTemplate):
         self._club_panel_bottom = anchor_y
 
         eliminations = game_state.get("recent_eliminations") or []
-        if eliminations:
-            list_center_x = self.width // 2 + self.elimination_list_x_offset
-            label_surface = self.font_eliminations.render(self.elimination_label, True, config.COLOR_TEXT)
-            label_rect = label_surface.get_rect(center=(list_center_x, anchor_y + 8))
-            self.screen.blit(label_surface, label_rect)
-
-            line_height = self.font_eliminations.get_linesize()
-            start_y = label_rect.bottom + 4
-            max_entries = self.elimination_list_size
-            if max_entries <= 0:
-                available_height = max(0, self.height - start_y - 6)
-                max_entries = max(0, available_height // line_height)
-
-            for idx, username in enumerate(eliminations[:max_entries]):
-                display_name = username
-                if len(display_name) > self.elimination_name_length:
-                    display_name = display_name[:self.elimination_name_length] + "..."
-                entry_surface = self.font_eliminations.render(display_name, True, config.COLOR_TEXT)
-                entry_rect = entry_surface.get_rect(
-                    center=(list_center_x, start_y + idx * line_height)
-                )
-                self.screen.blit(entry_surface, entry_rect)
-
-    def _draw_game_ui(self, players, game_state: dict):
-        alive_count = game_state.get("alive_count")
-        elapsed_time = game_state.get("elapsed_time")
-        consumptions = game_state.get("total_consumptions")
-        detail_stride = int(game_state.get("detail_stride", 1) or 1)
-        speedup_active = bool(game_state.get("speedup_active", False))
-        speedup_factor = float(game_state.get("speedup_factor", 1.0) or 1.0)
-
-        record = game_state.get("highscore") or {}
-        record_score = float(record.get("score", 0) or 0)
-        record_name = str(record.get("username", "") or "")
-
-        lines = []
-        if alive_count is not None:
-            lines.append(("stat", f"Alive: {alive_count:,}"))
-        if consumptions is not None:
-            lines.append(("stat", f"Consumed: {int(consumptions):,}"))
-        if elapsed_time is not None:
-            lines.append(("small", f"Time: {elapsed_time:.1f}s"))
-        if detail_stride > 1:
-            lines.append(("small", f"Perf mode: 1/{detail_stride} detailed"))
-        if speedup_active and speedup_factor > 1.0:
-            lines.append(("small", f"Export speedup: {speedup_factor:.1f}x"))
-        if record_score > 0:
-            display_name = record_name
-            if len(display_name) > 12:
-                display_name = display_name[:12] + "..."
-            record_text = f"Highscore: {int(record_score)} mass"
-            if display_name:
-                record_text = f"{record_text} - {display_name}"
-            lines.append(("small", record_text))
-
-        if not lines:
+        if not eliminations:
             return
 
-        rendered = []
-        max_w = 0
-        for kind, text in lines:
-            font = self.font_stats if kind == "stat" else self.font_small
-            surface = font.render(text, True, (255, 255, 255))
-            rendered.append(surface)
-            max_w = max(max_w, surface.get_width())
+        list_center_x = self.width // 2 + self.elimination_list_x_offset
+        label_surface = self.font_eliminations.render(self.elimination_label, True, config.COLOR_TEXT)
+        label_rect = label_surface.get_rect(center=(list_center_x, anchor_y + 8))
+        self.screen.blit(label_surface, label_rect)
 
-        pad_x = 12
-        pad_y = 8
-        line_h = 21
-        panel_w = max(170, max_w + pad_x * 2)
-        panel_h = pad_y * 2 + line_h * len(rendered)
-        panel_x = self.game_left + 10
-        panel_y = self.game_top + 10
+        line_height = self.font_eliminations.get_linesize()
+        start_y = label_rect.bottom + 4
+        max_entries = self.elimination_list_size
+        if max_entries <= 0:
+            available_height = max(0, self.height - start_y - 6)
+            max_entries = max(0, available_height // line_height)
 
-        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 115))
-        self.screen.blit(panel, (panel_x, panel_y))
+        for idx, username in enumerate(eliminations[:max_entries]):
+            display_name = username
+            if len(display_name) > self.elimination_name_length:
+                display_name = display_name[:self.elimination_name_length] + "..."
+            entry_surface = self.font_eliminations.render(display_name, True, config.COLOR_TEXT)
+            entry_rect = entry_surface.get_rect(center=(list_center_x, start_y + idx * line_height))
+            self.screen.blit(entry_surface, entry_rect)
 
-        y = panel_y + pad_y
-        for surface in rendered:
-            self.screen.blit(surface, (panel_x + pad_x, y))
-            y += line_h
+    def _draw_status_panel(self, game_state: dict):
+        phase_name = str(game_state.get("phase_name", "playing") or "playing")
+        pretty_phase = phase_name.upper()
+        phase_progress = float(game_state.get("phase_progress", 0.0) or 0.0)
+        alive_count = int(game_state.get("alive_count", 0) or 0)
+        consumed = int(game_state.get("total_consumptions", 0) or 0)
+        recorded_time = float(game_state.get("recorded_time", 0.0) or 0.0)
+        detail_stride = int(game_state.get("detail_stride", 1) or 1)
+
+        phase_copy = {
+            "cull": "Random early cull to reach a readable field",
+            "readable": "Food, hunting, fleeing, and live growth",
+            "showdown": "Camera tracks the top contenders",
+            "countdown": "Final seconds before the start",
+            "finished": "Match complete",
+        }.get(phase_name, "Simulation running")
+
+        lines = [
+            (self.font_phase, pretty_phase),
+            (self.font_phase_small, phase_copy),
+            (self.font_phase_small, f"Alive: {alive_count:,}"),
+            (self.font_phase_small, f"Consumed: {consumed:,}"),
+            (self.font_phase_small, f"Video time: {recorded_time:.1f}s"),
+        ]
+        if detail_stride > 1:
+            lines.append((self.font_phase_small, f"Detailed updates: 1/{detail_stride}"))
+
+        rendered = [font.render(text, True, (255, 255, 255)) for font, text in lines]
+        panel_w = max(surface.get_width() for surface in rendered) + 24
+        panel_h = sum(surface.get_height() for surface in rendered) + 20 + (len(rendered) - 1) * 4 + 20
+        panel_rect = pygame.Rect(self.game_left + 10, self.game_top + 10, panel_w, panel_h)
+
+        panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 130))
+        self.screen.blit(panel, panel_rect.topleft)
+
+        y = panel_rect.y + 10
+        for index, surface in enumerate(rendered):
+            self.screen.blit(surface, (panel_rect.x + 12, y))
+            y += surface.get_height()
+            if index < len(rendered) - 1:
+                y += 4
+
+        bar_rect = pygame.Rect(panel_rect.x + 12, panel_rect.bottom - 16, panel_rect.width - 24, 8)
+        pygame.draw.rect(self.screen, (70, 70, 70), bar_rect, border_radius=4)
+        fill_width = max(0, min(bar_rect.width, int(round(bar_rect.width * phase_progress))))
+        if fill_width > 0:
+            fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, fill_width, bar_rect.height)
+            pygame.draw.rect(self.screen, self.highlight_ring_color, fill_rect, border_radius=4)
+
+    def _draw_live_leaderboard(self, game_state: dict):
+        live_leaders = list(game_state.get("live_leaders") or [])[: self.live_leader_count]
+        if not live_leaders:
+            return
+
+        line_surfaces = []
+        title_surface = self.font_phase.render("LIVE TOP 5", True, (255, 255, 255))
+        max_width = title_surface.get_width()
+        for rank, player in enumerate(live_leaders, start=1):
+            username = player.username
+            if len(username) > 14:
+                username = username[:14] + "..."
+            text = f"{rank}. {username}"
+            mass = f"{int(player.mass):,}"
+            left_surface = self.font_leaderboard.render(text, True, (255, 255, 255))
+            right_surface = self.font_leaderboard.render(mass, True, self.highlight_ring_color)
+            line_surfaces.append((left_surface, right_surface))
+            max_width = max(max_width, left_surface.get_width() + right_surface.get_width() + 22)
+
+        panel_w = max_width + 24
+        row_h = max(title_surface.get_height(), self.font_leaderboard.get_height()) + 4
+        panel_h = 18 + title_surface.get_height() + (len(line_surfaces) * row_h)
+        panel_rect = pygame.Rect(self.game_right - panel_w - 10, self.game_top + 10, panel_w, panel_h)
+
+        panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 135))
+        self.screen.blit(panel, panel_rect.topleft)
+        self.screen.blit(title_surface, (panel_rect.x + 12, panel_rect.y + 10))
+
+        y = panel_rect.y + 14 + title_surface.get_height()
+        for left_surface, right_surface in line_surfaces:
+            self.screen.blit(left_surface, (panel_rect.x + 12, y))
+            right_rect = right_surface.get_rect(right=panel_rect.right - 12, top=y)
+            self.screen.blit(right_surface, right_rect)
+            y += row_h
+
+    def _draw_game_ui(self, players, game_state: dict):
+        self._draw_status_panel(game_state)
+        self._draw_live_leaderboard(game_state)

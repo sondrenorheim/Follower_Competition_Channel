@@ -2,14 +2,12 @@ import math
 import random
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import pygame
 
 import config
 from shared import GameHistory, GameTemplate, auto_push
-from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
 
 from .arena import CrossyFollowersArena
 from .player import CrossyFollower
@@ -32,23 +30,25 @@ class CrossyRow:
     row_type: str
     entities: List[CrossyEntity] = field(default_factory=list)
     blocked_lanes: Set[int] = field(default_factory=set)
+    path_lanes: Set[int] = field(default_factory=set)
     variant: int = 0
+    recipe: str = ""
 
 
 class CrossyFollowersGame(GameTemplate):
     GAME_TITLE = "CROSSY FOLLOWERS"
-    GAME_SUBTITLE = "Making my club members cross every day"
-    PLAYER_LABEL = "club members"
+    GAME_SUBTITLE = "Making my followers cross every day"
+    PLAYER_LABEL = "followers"
 
     def __init__(self):
         super().__init__()
 
         self.game_time = 0.0
         self.game_history = GameHistory()
-        self.club_spotlight = None
         self.recent_eliminations: List[str] = []
 
         self.rows: Dict[int, CrossyRow] = {}
+        self.row_recipe_cache: Dict[int, str] = {}
         self.start_row = int(getattr(config, "CROSSY_START_ROW", 8))
         self.camera_row = max(0.0, float(self.start_row - float(getattr(config, "CROSSY_CAMERA_ROW_OFFSET", 6.0))))
         self.current_leader_row = float(self.start_row)
@@ -56,7 +56,8 @@ class CrossyFollowersGame(GameTemplate):
         self.seed = int(getattr(config, "DAY_NUMBER", 1)) * 10007 + 1777
         self.root_rng = random.Random(self.seed)
 
-        self.max_game_time = float(getattr(config, "CROSSY_MAX_GAME_TIME", 85.0))
+        configured_max_game_time = float(getattr(config, "CROSSY_MAX_GAME_TIME", 0.0))
+        self.max_game_time = configured_max_game_time if configured_max_game_time > 0 else None
         self.rows_ahead = int(getattr(config, "CROSSY_ROWS_AHEAD", 34))
         self.rows_behind = max(18, int(getattr(config, "CROSSY_ROWS_BEHIND", 10)))
         self.initial_rows = int(getattr(config, "CROSSY_INITIAL_ROWS", 32))
@@ -80,12 +81,24 @@ class CrossyFollowersGame(GameTemplate):
         self.stall_force_move_time = float(getattr(config, "CROSSY_STALL_FORCE_MOVE_TIME", 1.75))
         self.stall_hard_force_time = float(getattr(config, "CROSSY_STALL_HARD_FORCE_TIME", 4.5))
         self.max_recent_eliminations = int(getattr(config, "CROSSY_ELIMINATION_TRACK_LIMIT", 400))
-        self.club_import_file = str(
-            getattr(config, "FOLLOWER_IMPORT_FILE_BY_MODE", {}).get(
-                "crossy_followers",
-                "Followers/club_members_followers.json",
-            )
-        )
+        self.road_cluster_min = max(2, int(getattr(config, "CROSSY_ROAD_CLUSTER_MIN", 2)))
+        self.road_cluster_max = max(self.road_cluster_min, int(getattr(config, "CROSSY_ROAD_CLUSTER_MAX", 3)))
+        self.water_sequence_extend_chance = float(getattr(config, "CROSSY_WATER_SEQUENCE_EXTEND_CHANCE", 0.38))
+        self.path_lookahead_rows = max(1, int(getattr(config, "CROSSY_PATH_LOOKAHEAD_ROWS", 2)))
+        self.random_forward_weight = max(0.0, float(getattr(config, "CROSSY_RANDOM_FORWARD_WEIGHT", 0.78)))
+        self.random_wait_weight = max(0.0, float(getattr(config, "CROSSY_RANDOM_WAIT_WEIGHT", 0.16)))
+        self.random_side_weight = max(0.0, float(getattr(config, "CROSSY_RANDOM_SIDE_WEIGHT", 0.03)))
+        self.pacing_group_fraction = max(0.0, min(0.49, float(getattr(config, "CROSSY_PACING_GROUP_FRACTION", 0.10))))
+        self.pacing_top_slow_multiplier = max(1.0, float(getattr(config, "CROSSY_PACING_TOP_SLOW_MULTIPLIER", 1.16)))
+        self.pacing_bottom_fast_multiplier = max(0.4, min(1.0, float(getattr(config, "CROSSY_PACING_BOTTOM_FAST_MULTIPLIER", 0.86))))
+        self.forward_bias = float(getattr(config, "CROSSY_FORWARD_BIAS", 2.4))
+        self.side_step_cost = float(getattr(config, "CROSSY_SIDE_STEP_COST", 0.12))
+        self.backtrack_penalty = float(getattr(config, "CROSSY_BACKTRACK_PENALTY", 5.5))
+        self.wait_penalty = float(getattr(config, "CROSSY_WAIT_PENALTY", 1.6))
+        self.future_alignment_weight = float(getattr(config, "CROSSY_FUTURE_ALIGNMENT_WEIGHT", 1.15))
+        self.last_planned_row = -1
+        self.last_segment_kind = "spawn"
+        self._future_lane_cache: Dict[Tuple[int, int, int], Tuple[int, ...]] = {}
 
         self.car_sprites = list(
             getattr(
@@ -126,10 +139,6 @@ class CrossyFollowersGame(GameTemplate):
             target_count = int(getattr(config, "TEST_MINIMAL_PLAYER_COUNT", 12))
             follower_data = self.api.fetch_followers(target_count)
         else:
-            # Crossy Followers is always club-members-only.
-            if self.club_import_file:
-                self.api.import_file = self.club_import_file
-
             configured_count = getattr(config, "FOLLOWER_COUNT", None)
             if configured_count is not None and int(configured_count) > 0:
                 target_count = int(configured_count)
@@ -142,23 +151,6 @@ class CrossyFollowersGame(GameTemplate):
                 max_count = max(min_count, max_count)
                 target_count = self.root_rng.randint(min_count, max_count)
             follower_data = self.api.fetch_followers(target_count)
-
-        club_members = load_club_member_set()
-        if not config.TEST_MINIMAL_PLAYERS and club_members:
-            filtered_followers = [
-                data for data in follower_data
-                if normalize_username(data.get("username")) in club_members
-            ]
-            if filtered_followers:
-                follower_data = filtered_followers
-            elif self.club_import_file:
-                fallback_data = self._load_follower_import_file(self.club_import_file)
-                fallback_filtered = [
-                    data for data in fallback_data
-                    if normalize_username(data.get("username")) in club_members
-                ]
-                if fallback_filtered:
-                    follower_data = fallback_filtered
 
         self.root_rng.shuffle(follower_data)
         if target_count > 0 and len(follower_data) > target_count:
@@ -177,43 +169,18 @@ class CrossyFollowersGame(GameTemplate):
             player.set_grid_position(lane, self.start_row, self.arena)
             player.move_cooldown_min = self.move_cooldown_min
             player.move_cooldown_max = self.move_cooldown_max
+            player.base_move_cooldown_min = self.move_cooldown_min
+            player.base_move_cooldown_max = self.move_cooldown_max
+            player.move_pace_multiplier = 1.0
             player.move_cooldown = self.move_cooldown
             player.next_move_time = self.root_rng.uniform(0.0, self.move_cooldown_max)
             player.last_progress_time = self.game_time
-
-            username = normalize_username(payload.get("username"))
-            player.is_club_member = username in club_members
             self.players.append(player)
-
-        self.club_spotlight = select_club_spotlight(self.players)
 
         max_initial_row = self.start_row + max(self.initial_rows, 12)
         self._ensure_rows_until(max_initial_row)
 
         print(f"{len(self.players)} {self.PLAYER_LABEL} ready!\n")
-
-    @staticmethod
-    def _load_follower_import_file(path_value: str) -> List[dict]:
-        path = Path(path_value)
-        if not path.exists():
-            return []
-
-        try:
-            import json
-
-            with path.open("r", encoding="utf-8") as handle:
-                raw = json.load(handle)
-        except Exception:
-            return []
-
-        if not isinstance(raw, list):
-            return []
-
-        rows: List[dict] = []
-        for entry in raw:
-            if isinstance(entry, dict):
-                rows.append(entry)
-        return rows
 
     def _row_rng(self, row_index: int) -> random.Random:
         row_seed = (self.seed * 73856093 + int(row_index) * 19349663) & 0xFFFFFFFF
@@ -230,25 +197,90 @@ class CrossyFollowersGame(GameTemplate):
     def _ensure_rows_until(self, row_index: int):
         if row_index < 0:
             return
+        self._plan_row_recipes_until(row_index)
         for idx in range(0, int(row_index) + 1):
             self._ensure_row(idx)
 
+    @staticmethod
+    def _recipe_group(recipe: str) -> str:
+        if recipe.startswith("road"):
+            return "road"
+        if recipe.startswith("water"):
+            return "water"
+        if recipe.startswith("rail"):
+            return "rail"
+        return "grass"
+
+    def _plan_row_recipes_until(self, row_index: int):
+        target = max(0, int(row_index))
+        if self.last_planned_row < 0:
+            safe_end = self.start_row + self.spawn_safe_rows
+            for idx in range(0, safe_end + 1):
+                self.row_recipe_cache[idx] = "grass_safe"
+            self.last_planned_row = safe_end
+
+        while self.last_planned_row < target:
+            start_row = self.last_planned_row + 1
+            recipes, segment_kind = self._build_segment(start_row)
+            for recipe in recipes:
+                self.last_planned_row += 1
+                self.row_recipe_cache[self.last_planned_row] = recipe
+                if self.last_planned_row >= target:
+                    break
+            self.last_segment_kind = segment_kind
+
+    def _build_segment(self, start_row: int) -> Tuple[List[str], str]:
+        rng = self._row_rng(start_row * 17 + 11)
+        difficulty = self._row_difficulty(start_row)
+        weights = {
+            "grass": self._lerp(0.34, 0.20, difficulty),
+            "road": self._lerp(0.66, 0.80, difficulty),
+        }
+
+        if self.last_segment_kind == "road":
+            weights["road"] *= 0.38
+            weights["grass"] += 0.18
+
+        weighted = [
+            ("grass", max(0.0, weights["grass"])),
+            ("road", max(0.0, weights["road"])),
+        ]
+        segment_kind = self._weighted_choice(rng, weighted)
+
+        if segment_kind == "grass":
+            length = 1 if difficulty > 0.45 else rng.randint(1, 2)
+            recipe = "grass_dense" if difficulty > 0.60 else "grass_sparse"
+            return [recipe] * length, segment_kind
+
+        if segment_kind == "road":
+            max_len = self.road_cluster_max + (1 if difficulty > 0.8 else 0)
+            cluster_len = rng.randint(self.road_cluster_min, max(self.road_cluster_min, max_len))
+            recipes: List[str] = []
+            for idx in range(cluster_len):
+                if difficulty < 0.25:
+                    recipe = "road_light" if idx == 0 else "road_medium"
+                elif difficulty < 0.65:
+                    recipe = "road_medium"
+                else:
+                    recipe = "road_fast" if idx > 0 else "road_medium"
+                recipes.append(recipe)
+            recipes.append("grass_sparse")
+            return recipes, segment_kind
+        return ["grass_sparse"], segment_kind
+
     def _generate_row(self, row_index: int) -> CrossyRow:
         rng = self._row_rng(row_index)
+        self._plan_row_recipes_until(row_index)
         previous = self.rows.get(row_index - 1)
+        recipe = self.row_recipe_cache.get(row_index, "grass_sparse")
 
-        if row_index <= self.start_row + self.spawn_safe_rows:
-            row_type = "grass"
-        else:
-            row_type = self._choose_row_type(rng, previous, row_index)
-
-        if row_type == "road":
-            return self._generate_road_row(row_index, rng)
-        if row_type == "water":
-            return self._generate_water_row(row_index, rng, previous)
-        if row_type == "rail":
-            return self._generate_rail_row(row_index, rng)
-        return self._generate_grass_row(row_index, rng, previous)
+        if recipe.startswith("road"):
+            return self._generate_road_row(row_index, rng, recipe)
+        if recipe.startswith("water"):
+            return self._generate_water_row(row_index, rng, previous, recipe)
+        if recipe.startswith("rail"):
+            return self._generate_rail_row(row_index, rng, recipe)
+        return self._generate_grass_row(row_index, rng, previous, recipe)
 
     @staticmethod
     def _weighted_choice(rng: random.Random, weighted: List[Tuple[str, float]]) -> str:
@@ -276,112 +308,45 @@ class CrossyFollowersGame(GameTemplate):
         progress = max(0, int(row_index) - start)
         return self._clamp01(progress / float(max(1, self.difficulty_ramp_rows)))
 
-    def _choose_row_type(self, rng: random.Random, previous: Optional[CrossyRow], row_index: int) -> str:
-        difficulty = self._row_difficulty(row_index)
-        weights = {
-            "grass": self._lerp(0.68, 0.20, difficulty),
-            "road": self._lerp(0.24, 0.42, difficulty),
-            "water": self._lerp(0.08, 0.26, difficulty),
-            "rail": self._lerp(0.00, 0.12, difficulty),
-        }
-
-        if row_index < self.start_row + self.water_unlock_rows:
-            weights["water"] = 0.0
-        if row_index < self.start_row + self.rail_unlock_rows:
-            weights["rail"] = 0.0
-
-        if previous is not None:
-            if previous.row_type == "rail":
-                weights["rail"] = 0.0
-                weights["grass"] += 0.18
-                weights["road"] += 0.05
-            elif previous.row_type == "water":
-                weights["water"] *= 0.45
-                weights["grass"] += 0.12
-            elif previous.row_type == "road":
-                weights["road"] *= 1.08
-                weights["grass"] *= 0.96
-
-        weighted = [
-            ("grass", max(0.0, weights["grass"])),
-            ("road", max(0.0, weights["road"])),
-            ("water", max(0.0, weights["water"])),
-            ("rail", max(0.0, weights["rail"])),
-        ]
-        return self._weighted_choice(rng, weighted)
-
     def _grass_required_clear_lanes(self, previous: Optional[CrossyRow]) -> Set[int]:
         if previous is None:
             return set()
+        if previous.path_lanes:
+            return set(previous.path_lanes)
         if previous.row_type != "water":
             return set()
         lanes = []
         for entity in previous.entities:
-            if entity.kind == "lily":
-                lanes.append(self.arena.x_to_lane(entity.x))
+            if entity.kind in {"lily", "log"}:
+                lanes.extend(self._lanes_covered(entity.x, entity.width, entity.collision_scale))
         return set(lanes)
 
-    def _generate_grass_row(self, row_index: int, rng: random.Random, previous: Optional[CrossyRow]) -> CrossyRow:
-        # Provide a clear runway around the spawn area to reduce early deadlocks.
-        if row_index <= self.start_row + self.spawn_safe_rows:
+    def _generate_grass_row(
+        self,
+        row_index: int,
+        rng: random.Random,
+        previous: Optional[CrossyRow],
+        recipe: str,
+    ) -> CrossyRow:
+        if recipe == "grass_safe" or row_index <= self.start_row + self.spawn_safe_rows:
             return CrossyRow(
                 index=row_index,
                 row_type="grass",
                 entities=[],
                 blocked_lanes=set(),
+                path_lanes=set(range(self.arena.lane_count)),
                 variant=rng.randint(0, 1),
-            )
-
-        blocked_lanes: Set[int] = set()
-        entities: List[CrossyEntity] = []
-        required_clear = self._grass_required_clear_lanes(previous)
-        difficulty = self._row_difficulty(row_index)
-
-        edge_block_chance = self._lerp(0.60, 0.90, difficulty)
-        if 0 not in required_clear and rng.random() < edge_block_chance:
-            blocked_lanes.add(0)
-        if (self.arena.lane_count - 1) not in required_clear and rng.random() < edge_block_chance:
-            blocked_lanes.add(self.arena.lane_count - 1)
-
-        free_candidates = [
-            lane
-            for lane in range(1, self.arena.lane_count - 1)
-            if lane not in required_clear
-        ]
-        inner_lane_count = max(1, len(free_candidates))
-        min_obstacles = 0 if difficulty < 0.20 else 1
-        max_obstacles = max(
-            min_obstacles,
-            int(round(inner_lane_count * self._lerp(0.18, 0.45, difficulty))),
-        )
-        obstacle_count = rng.randint(min_obstacles, max_obstacles)
-        rng.shuffle(free_candidates)
-        for lane in free_candidates[:min(obstacle_count, len(free_candidates))]:
-            blocked_lanes.add(lane)
-
-        if len(blocked_lanes) >= self.arena.lane_count:
-            blocked_lanes.discard(rng.randrange(self.arena.lane_count))
-
-        for lane in sorted(blocked_lanes):
-            sprite = rng.choice(self.tree_sprites if rng.random() < 0.6 else self.boulder_sprites)
-            kind = "tree" if sprite.startswith("tree") else "boulder"
-            entities.append(
-                CrossyEntity(
-                    kind=kind,
-                    x=self.arena.lane_to_x(lane),
-                    width=self.arena.lane_width * (0.84 if kind == "tree" else 0.78),
-                    speed=0.0,
-                    sprite=sprite,
-                    collision_scale=0.92,
-                )
+                recipe=recipe,
             )
 
         return CrossyRow(
             index=row_index,
             row_type="grass",
-            entities=entities,
-            blocked_lanes=blocked_lanes,
+            entities=[],
+            blocked_lanes=set(),
+            path_lanes=set(range(self.arena.lane_count)),
             variant=rng.randint(0, 1),
+            recipe=recipe,
         )
 
     def _spawn_moving_row_entities(
@@ -420,23 +385,41 @@ class CrossyFollowersGame(GameTemplate):
 
         return entities
 
-    def _generate_road_row(self, row_index: int, rng: random.Random) -> CrossyRow:
+    def _generate_road_row(self, row_index: int, rng: random.Random, recipe: str) -> CrossyRow:
         difficulty = self._row_difficulty(row_index)
         direction = 1 if rng.random() < 0.5 else -1
-        speed = self.arena.lane_width * rng.uniform(
-            self._lerp(1.05, 1.85, difficulty),
-            self._lerp(1.90, 3.15, difficulty),
-        ) * direction
-        max_count = 2 if difficulty < 0.40 else 3
-        count = rng.randint(1, max_count)
+        if recipe == "road_light":
+            speed = self.arena.lane_width * rng.uniform(
+                self._lerp(1.0, 1.4, difficulty),
+                self._lerp(1.55, 2.0, difficulty),
+            ) * direction
+            min_spacing = self._lerp(4.5, 3.9, difficulty)
+            max_spacing = self._lerp(5.8, 4.8, difficulty)
+            count = rng.randint(1, 2)
+        elif recipe == "road_fast":
+            speed = self.arena.lane_width * rng.uniform(
+                self._lerp(1.75, 2.2, difficulty),
+                self._lerp(2.55, 3.2, difficulty),
+            ) * direction
+            min_spacing = self._lerp(3.2, 2.4, difficulty)
+            max_spacing = self._lerp(4.3, 3.5, difficulty)
+            count = rng.randint(2, 3)
+        else:
+            speed = self.arena.lane_width * rng.uniform(
+                self._lerp(1.35, 1.9, difficulty),
+                self._lerp(2.15, 2.7, difficulty),
+            ) * direction
+            min_spacing = self._lerp(3.8, 2.9, difficulty)
+            max_spacing = self._lerp(4.9, 4.0, difficulty)
+            count = rng.randint(2, 3 if difficulty > 0.45 else 2)
         entities = self._spawn_moving_row_entities(
             rng=rng,
             count=count,
             speed=speed,
             min_width=0.90,
             max_width=1.65,
-            spacing_min=self._lerp(3.6, 2.3, difficulty),
-            spacing_max=self._lerp(5.2, 3.8, difficulty),
+            spacing_min=min_spacing,
+            spacing_max=max_spacing,
             sprites=self.car_sprites,
             kind="car",
             collision_scale=0.80,
@@ -446,30 +429,38 @@ class CrossyFollowersGame(GameTemplate):
             row_type="road",
             entities=entities,
             blocked_lanes=set(),
+            path_lanes=set(range(self.arena.lane_count)),
             variant=rng.randint(0, 1),
+            recipe=recipe,
         )
 
-    def _generate_water_row(self, row_index: int, rng: random.Random, previous: Optional[CrossyRow]) -> CrossyRow:
+    def _generate_water_row(
+        self,
+        row_index: int,
+        rng: random.Random,
+        previous: Optional[CrossyRow],
+        recipe: str,
+    ) -> CrossyRow:
         difficulty = self._row_difficulty(row_index)
-        static_row = (row_index % 2) == 0
         entities: List[CrossyEntity] = []
-
-        if static_row:
-            lily_min = 3 if difficulty < 0.45 else 2
-            lily_max = 5 if difficulty < 0.20 else (4 if difficulty < 0.70 else 3)
+        required_lanes = self._grass_required_clear_lanes(previous)
+        if recipe == "water_lily":
+            lily_min = 4 if difficulty < 0.55 else 3
+            lily_max = 6 if difficulty < 0.20 else (5 if difficulty < 0.75 else 4)
             if lily_max < lily_min:
                 lily_max = lily_min
             lily_count = rng.randint(lily_min, lily_max)
             lanes = list(range(self.arena.lane_count))
             rng.shuffle(lanes)
-            lily_lanes = lanes[:lily_count]
+            lily_lanes = set(lanes[:lily_count])
 
-            if previous is not None and previous.row_type == "grass":
-                previous_clear = [lane for lane in range(self.arena.lane_count) if lane not in previous.blocked_lanes]
-                if previous_clear and not any(lane in previous_clear for lane in lily_lanes):
-                    lily_lanes[0] = rng.choice(previous_clear)
+            if required_lanes and not lily_lanes.intersection(required_lanes):
+                lily_lanes.add(rng.choice(sorted(required_lanes)))
 
-            for lane in sorted(set(lily_lanes)):
+            while len(lily_lanes) < lily_min:
+                lily_lanes.add(rng.randrange(self.arena.lane_count))
+
+            for lane in sorted(lily_lanes):
                 entities.append(
                     CrossyEntity(
                         kind="lily",
@@ -480,33 +471,53 @@ class CrossyFollowersGame(GameTemplate):
                         collision_scale=0.88,
                     )
                 )
+            path_lanes = set(lily_lanes)
         else:
             direction = 1 if rng.random() < 0.5 else -1
             speed = self.arena.lane_width * rng.uniform(
-                self._lerp(0.45, 0.85, difficulty),
-                self._lerp(1.00, 1.55, difficulty),
+                self._lerp(0.40, 0.60, difficulty),
+                self._lerp(0.80, 1.20, difficulty),
             ) * direction
-            max_count = 2 if difficulty < 0.35 else 3
-            count = rng.randint(2, max_count)
-            entities = self._spawn_moving_row_entities(
-                rng=rng,
-                count=count,
-                speed=speed,
-                min_width=1.7,
-                max_width=2.9,
-                spacing_min=self._lerp(3.5, 2.5, difficulty),
-                spacing_max=self._lerp(5.0, 4.0, difficulty),
-                sprites=self.log_sprites,
-                kind="log",
-                collision_scale=0.86,
+            count = 2 if difficulty < 0.65 else 3
+            guide_lane = rng.choice(sorted(required_lanes)) if required_lanes else rng.randrange(self.arena.lane_count)
+            guide_width = self.arena.lane_width * rng.uniform(2.4, 3.4 if difficulty < 0.7 else 3.8)
+            guide_x = self.arena.lane_to_x(guide_lane)
+            entities.append(
+                CrossyEntity(
+                    kind="log",
+                    x=guide_x,
+                    width=guide_width,
+                    speed=speed * 0.92,
+                    sprite=rng.choice(self.log_sprites),
+                    collision_scale=0.86,
+                )
             )
+            spacing = self.arena.lane_width * rng.uniform(3.8, 4.6)
+            for idx in range(1, count):
+                direction_sign = -1 if idx % 2 else 1
+                offset = spacing * (1 + (idx - 1) // 2)
+                entities.append(
+                    CrossyEntity(
+                        kind="log",
+                        x=guide_x + (offset * direction_sign),
+                        width=self.arena.lane_width * rng.uniform(1.8, 2.8),
+                        speed=speed * rng.uniform(0.92, 1.05),
+                        sprite=rng.choice(self.log_sprites),
+                        collision_scale=0.86,
+                    )
+                )
+            path_lanes = set()
+            for entity in entities:
+                path_lanes.update(self._lanes_covered(entity.x, entity.width, entity.collision_scale))
 
         return CrossyRow(
             index=row_index,
             row_type="water",
             entities=entities,
             blocked_lanes=set(),
+            path_lanes=path_lanes,
             variant=rng.randint(0, 1),
+            recipe=recipe,
         )
 
     def _rail_direction(self, row_index: int, rng: random.Random) -> int:
@@ -518,16 +529,16 @@ class CrossyFollowersGame(GameTemplate):
         # Expo default: trains move in one fixed direction and wrap around.
         return 1
 
-    def _generate_rail_row(self, row_index: int, rng: random.Random) -> CrossyRow:
+    def _generate_rail_row(self, row_index: int, rng: random.Random, recipe: str) -> CrossyRow:
         difficulty = self._row_difficulty(row_index)
         direction = self._rail_direction(row_index, rng)
         speed = self.arena.lane_width * rng.uniform(
-            self._lerp(4.4, 5.8, difficulty),
-            self._lerp(6.6, 8.8, difficulty),
+            self._lerp(3.9, 4.7, difficulty),
+            self._lerp(5.4, 6.4, difficulty),
         ) * direction
         width = self.arena.lane_width * rng.uniform(
-            self._lerp(3.6, 4.6, difficulty),
-            self._lerp(5.9, 7.2, difficulty),
+            self._lerp(4.1, 4.8, difficulty),
+            self._lerp(5.4, 6.4, difficulty),
         )
         left, right = self._wrap_bounds(width)
         x = left if speed > 0 else right
@@ -546,8 +557,19 @@ class CrossyFollowersGame(GameTemplate):
             row_type="rail",
             entities=entities,
             blocked_lanes=set(),
+            path_lanes=set(range(self.arena.lane_count)),
             variant=rng.randint(0, 1),
+            recipe=recipe,
         )
+
+    def _lanes_covered(self, x: float, width: float, collision_scale: float = 1.0) -> Set[int]:
+        half = width * 0.5 * max(0.35, collision_scale)
+        lanes = set()
+        for lane in range(self.arena.lane_count):
+            lane_x = self.arena.lane_to_x(lane)
+            if abs(lane_x - x) <= half:
+                lanes.add(lane)
+        return lanes
 
     def _wrap_bounds(self, width: float) -> Tuple[float, float]:
         pad = self.arena.lane_width * max(1.0, self.wrap_padding_lanes)
@@ -587,8 +609,14 @@ class CrossyFollowersGame(GameTemplate):
 
         self.current_leader_row = float(max(player.max_row for player in candidates))
         target_camera = max(0.0, self.current_leader_row - self.camera_row_offset)
-        lerp = min(1.0, max(0.0, dt * self.camera_smooth))
-        self.camera_row += (target_camera - self.camera_row) * lerp
+        if target_camera <= self.camera_row:
+            return
+
+        if self.camera_smooth > 0:
+            step = 1.0 - math.exp(-self.camera_smooth * dt)
+            self.camera_row += (target_camera - self.camera_row) * step
+        else:
+            self.camera_row = target_camera
 
     def _maintain_rows(self):
         highest_needed = int(math.ceil(self.current_leader_row + self.rows_ahead))
@@ -720,25 +748,42 @@ class CrossyFollowersGame(GameTemplate):
         last_progress = float(getattr(player, "last_progress_time", self.game_time))
         return max(0.0, self.game_time - last_progress)
 
-    def _next_row_alignment_bonus(self, lane: int, row_idx: int) -> float:
-        """Reward lateral positioning that sets up a valid forward path."""
-        base_row = self._ensure_row(row_idx)
-        next_row = self._ensure_row(row_idx + 1)
-        if next_row.row_type != "water":
-            return 0.0
-        if not next_row.entities or not all(entity.kind == "lily" for entity in next_row.entities):
-            return 0.0
+    def _future_reachable_lanes(
+        self,
+        row_idx: int,
+        now: float,
+        radius: float,
+        horizon: float,
+    ) -> Tuple[int, ...]:
+        cache_key = (int(row_idx), int(round(now * 100.0)), int(round(horizon * 100.0)))
+        cached = self._future_lane_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-        lily_lanes = sorted({
-            self.arena.x_to_lane(entity.x)
-            for entity in next_row.entities
-            if self.arena.x_to_lane(entity.x) not in base_row.blocked_lanes
-        })
-        if not lily_lanes:
-            return 0.0
+        lane_scores: List[Tuple[float, int]] = []
+        for lane in range(self.arena.lane_count):
+            x = self.arena.lane_to_x(lane)
+            safety = self._evaluate_position_safety(x, lane, row_idx, now, radius, horizon)
+            if safety > -1000.0:
+                lane_scores.append((safety, lane))
 
-        distance = min(abs(lane - lily_lane) for lily_lane in lily_lanes)
-        return max(-2.0, 4.0 - distance * 2.0)
+        lane_scores.sort(key=lambda item: (item[0], -abs(item[1] - ((self.arena.lane_count - 1) * 0.5))), reverse=True)
+        lanes = tuple(lane for _, lane in lane_scores)
+        self._future_lane_cache[cache_key] = lanes
+        return lanes
+
+    def _future_path_bonus(self, lane: int, row_idx: int, radius: float, cooldown: float) -> float:
+        bonus = 0.0
+        for step in range(1, self.path_lookahead_rows + 1):
+            future_row = row_idx + step
+            future_now = self.game_time + cooldown * step
+            reachable = self._future_reachable_lanes(future_row, future_now, radius, cooldown)
+            if not reachable:
+                continue
+            best_distance = min(abs(lane - future_lane) for future_lane in reachable)
+            weight = self.future_alignment_weight / float(step)
+            bonus += max(-1.6 * weight, 3.4 * weight - best_distance * 1.35 * weight)
+        return bonus
 
     def _score_move(self, player: CrossyFollower, target_lane: int, target_row: int, delta_lane: int, delta_row: int) -> float:
         target_x = self.arena.lane_to_x(target_lane)
@@ -769,20 +814,19 @@ class CrossyFollowersGame(GameTemplate):
         score = progress_gain * progress_weight + safety * 2.4
 
         if delta_row < 0:
-            score -= max(0.0, 4.0 - stall_time * 2.5)
+            score -= max(1.0, self.backtrack_penalty - stall_time * 1.1)
         elif delta_row > 0:
-            score += 1.5 + min(2.0, stall_time * 0.4)
+            score += self.forward_bias + min(2.5, stall_time * 0.55)
         if delta_lane != 0:
-            score -= 0.25
+            score -= self.side_step_cost
         if delta_lane == 0 and delta_row == 0:
-            score -= 1.0 + min(18.0, stall_time * 4.5)
+            score -= self.wait_penalty + min(20.0, stall_time * 5.2)
 
         center_lane = (self.arena.lane_count - 1) * 0.5
         center_bias = 1.0 - abs(target_lane - center_lane) / max(1.0, center_lane)
         score += center_bias * 0.35
 
-        if delta_row == 0:
-            score += self._next_row_alignment_bonus(target_lane, target_row)
+        score += self._future_path_bonus(target_lane, target_row, player.radius, player_cooldown)
 
         score += player.decision_jitter * 0.25
         return score
@@ -840,6 +884,70 @@ class CrossyFollowersGame(GameTemplate):
 
         return best_lane, best_row
 
+    def _choose_forward_random_move(self, player: CrossyFollower) -> Tuple[int, int]:
+        current_lane = self.arena.x_to_lane(player.x)
+        current_row = player.grid_row
+        weighted_moves: List[Tuple[float, int, int]] = []
+
+        move_weights = [
+            (self.random_forward_weight, 0, 1),   # up
+            (self.random_side_weight, -1, 0),     # left
+            (self.random_side_weight, 1, 0),      # right
+            (self.random_wait_weight, 0, 0),      # wait
+        ]
+
+        for weight, dl, dr in move_weights:
+            if weight <= 0:
+                continue
+            lane = current_lane + dl
+            row = current_row + dr
+            if lane < 0 or lane >= self.arena.lane_count:
+                continue
+            if row < 0:
+                continue
+            weighted_moves.append((weight, lane, row))
+
+        if not weighted_moves:
+            return current_lane, current_row
+
+        total_weight = sum(weight for weight, _, _ in weighted_moves)
+        if total_weight <= 0:
+            return current_lane, current_row
+
+        roll = player.rng.uniform(0.0, total_weight)
+        acc = 0.0
+        for weight, lane, row in weighted_moves:
+            acc += weight
+            if roll <= acc:
+                return lane, row
+        return weighted_moves[-1][1], weighted_moves[-1][2]
+
+    def _update_group_pacing(self, alive_players: List[CrossyFollower]):
+        if not alive_players:
+            return
+
+        for player in alive_players:
+            player.move_pace_multiplier = 1.0
+
+        group_fraction = self.pacing_group_fraction
+        if group_fraction <= 0:
+            return
+
+        ordered = sorted(
+            alive_players,
+            key=lambda player: (player.grid_row, player.max_row, -player.grid_lane, player.username),
+        )
+        band_count = int(round(len(ordered) * group_fraction))
+        band_count = min(len(ordered) // 2, max(0, band_count))
+        if band_count <= 0:
+            return
+
+        for player in ordered[:band_count]:
+            player.move_pace_multiplier = self.pacing_bottom_fast_multiplier
+
+        for player in ordered[-band_count:]:
+            player.move_pace_multiplier = self.pacing_top_slow_multiplier
+
     def update(self, dt: float):
         if self.game_over or self.phase != "playing":
             return
@@ -849,12 +957,14 @@ class CrossyFollowersGame(GameTemplate):
             dt *= config.EXPORT_TIME_SCALE
 
         self.game_time += dt
+        self._future_lane_cache.clear()
 
         self._update_camera(dt)
         self._maintain_rows()
         self._update_rows(dt)
 
         alive_players = [player for player in self.players if player.alive]
+        self._update_group_pacing(alive_players)
 
         for player in alive_players:
             self._apply_environment(player, dt)
@@ -863,7 +973,7 @@ class CrossyFollowersGame(GameTemplate):
             if not player.alive:
                 continue
             if player.can_move(self.game_time):
-                lane, row = self._choose_move(player)
+                lane, row = self._choose_forward_random_move(player)
                 player.apply_move(lane, row, self.arena, self.game_time)
 
         for player in alive_players:
@@ -881,7 +991,8 @@ class CrossyFollowersGame(GameTemplate):
                 player.update_fade()
 
         alive_count = sum(1 for player in self.players if player.alive)
-        if alive_count <= 1 or self.game_time >= self.max_game_time:
+        timed_out = self.max_game_time is not None and self.game_time >= self.max_game_time
+        if alive_count <= 1 or timed_out:
             self._finish_game()
 
     def _finish_game(self):
@@ -932,6 +1043,17 @@ class CrossyFollowersGame(GameTemplate):
 
         self._calculate_and_save_scores(sorted_players)
 
+    def _display_day(self) -> int:
+        global_day = int(getattr(config, "DAY_NUMBER", 1))
+        day_offset = int(
+            getattr(
+                config,
+                "CROSSY_FOLLOWERS_DAY_OFFSET",
+                getattr(config, "JETPACK_FOLLOWERS_DAY_OFFSET", getattr(config, "SUPER_FOLLOWER_BROS_DAY_OFFSET", 71)),
+            )
+        )
+        return max(1, global_day - day_offset)
+
     def render(self):
         alive_count = sum(1 for player in self.players if player.alive)
         highest_progress = 0
@@ -944,14 +1066,6 @@ class CrossyFollowersGame(GameTemplate):
         visible_rows.sort(key=lambda row: row.index)
 
         global_day = int(getattr(config, "DAY_NUMBER", 1))
-        day_offset = int(
-            getattr(
-                config,
-                "CROSSY_FOLLOWERS_DAY_OFFSET",
-                getattr(config, "JETPACK_FOLLOWERS_DAY_OFFSET", getattr(config, "SUPER_FOLLOWER_BROS_DAY_OFFSET", 71)),
-            )
-        )
-        club_day = max(1, global_day - day_offset)
 
         game_state = {
             "phase": self.phase,
@@ -959,6 +1073,7 @@ class CrossyFollowersGame(GameTemplate):
             "camera_row": self.camera_row,
             "row_height": self.arena.row_height,
             "alive_count": alive_count,
+            "participant_count": len(self.players),
             "elapsed_time": self.game_time,
             "leader_progress": highest_progress,
             "highscore": self.statistics.get_game_highscore("crossy_followers"),
@@ -967,8 +1082,7 @@ class CrossyFollowersGame(GameTemplate):
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
             "winner": self.winner,
-            "club_spotlight": self.club_spotlight,
-            "club_day_number": club_day,
+            "display_day_number": self._display_day(),
             "global_day_number": global_day,
         }
 

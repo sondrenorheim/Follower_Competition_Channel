@@ -15,6 +15,67 @@ class ScoringSystem:
 
     # Scoring constants
     MAX_POINTS = 10000
+    DEFAULT_CLUB_MEMBER_POINTS_MULTIPLIER = 0.10
+    CLUB_MEMBER_IMPORT_SUFFIX = "club_members_followers.json"
+
+    @staticmethod
+    def _get_runtime_config():
+        try:
+            import config  # Imported lazily to avoid hard coupling at module import time.
+        except Exception:
+            return None
+        return config
+
+    @staticmethod
+    def _get_club_member_points_multiplier() -> float:
+        runtime_config = ScoringSystem._get_runtime_config()
+        raw_multiplier = getattr(
+            runtime_config,
+            "CLUB_MEMBER_GAME_POINTS_MULTIPLIER",
+            ScoringSystem.DEFAULT_CLUB_MEMBER_POINTS_MULTIPLIER,
+        ) if runtime_config is not None else ScoringSystem.DEFAULT_CLUB_MEMBER_POINTS_MULTIPLIER
+        try:
+            return max(0.0, float(raw_multiplier))
+        except Exception:
+            return ScoringSystem.DEFAULT_CLUB_MEMBER_POINTS_MULTIPLIER
+
+    @staticmethod
+    def _uses_club_member_import(game_mode: str | None = None) -> bool:
+        runtime_config = ScoringSystem._get_runtime_config()
+        if runtime_config is None:
+            return False
+
+        current_import = str(getattr(runtime_config, "FOLLOWER_IMPORT_FILE", "") or "")
+        normalized_import = current_import.replace("\\", "/").lower()
+        if normalized_import.endswith(ScoringSystem.CLUB_MEMBER_IMPORT_SUFFIX):
+            return True
+
+        overrides = getattr(runtime_config, "FOLLOWER_IMPORT_FILE_BY_MODE", {})
+        if not isinstance(overrides, dict):
+            return False
+
+        active_mode = str(game_mode or getattr(runtime_config, "GAME_MODE", "") or "").strip().lower()
+        if not active_mode:
+            return False
+
+        mode_candidates = {active_mode}
+        if active_mode.startswith("super_follower_bros"):
+            mode_candidates.add("super_follower_bros")
+            mode_candidates.add("super_follower_bros_1_2")
+
+        for mode_candidate in mode_candidates:
+            override = str(overrides.get(mode_candidate, "") or "").replace("\\", "/").lower()
+            if override.endswith(ScoringSystem.CLUB_MEMBER_IMPORT_SUFFIX):
+                return True
+
+        return False
+
+    @staticmethod
+    def _apply_game_mode_points_multiplier(points: float, game_mode: str | None = None) -> tuple[float, float]:
+        multiplier = 1.0
+        if ScoringSystem._uses_club_member_import(game_mode):
+            multiplier = ScoringSystem._get_club_member_points_multiplier()
+        return points * multiplier, multiplier
 
     @staticmethod
     def calculate_placement_points(placement: int, total_participants: int) -> float:
@@ -42,7 +103,8 @@ class ScoringSystem:
         placement: int,
         total_participants: int,
         survival_time: float = 0,
-        games_played: int = 0
+        games_played: int = 0,
+        game_mode: str | None = None,
     ) -> Dict[str, float]:
         """
         Calculate total points for a participant.
@@ -53,17 +115,23 @@ class ScoringSystem:
             total_participants: Total number of participants
             survival_time: Not used (kept for compatibility)
             games_played: Not used (kept for compatibility)
+            game_mode: Optional explicit game mode override for mode-based scoring rules
 
         Returns:
             Dictionary with point breakdown
         """
-        points = ScoringSystem.calculate_placement_points(placement, total_participants)
+        raw_points = ScoringSystem.calculate_placement_points(placement, total_participants)
+        points, mode_multiplier = ScoringSystem._apply_game_mode_points_multiplier(
+            raw_points,
+            game_mode=game_mode,
+        )
 
         return {
             "base_points": round(points, 2),
             "placement_points": round(points, 2),
             "survival_bonus": 0,
             "longevity_multiplier": 1.0,
+            "mode_multiplier": round(mode_multiplier, 4),
             "total_points": round(points, 2)
         }
 
@@ -88,7 +156,11 @@ class ScoringSystem:
         scored_results = []
         for result in results:
             placement = result['placement']
-            points = ScoringSystem.calculate_placement_points(placement, total_participants)
+            raw_points = ScoringSystem.calculate_placement_points(placement, total_participants)
+            points, _ = ScoringSystem._apply_game_mode_points_multiplier(
+                raw_points,
+                game_mode=game_mode,
+            )
 
             scored_results.append({
                 'username': result['username'],

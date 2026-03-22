@@ -274,27 +274,114 @@ class SafeXUploader:
 
     def _find_post_buttons(self):
         selectors = [
+            (By.CSS_SELECTOR, "[data-testid='tweetButton']"),
+            (By.CSS_SELECTOR, "[data-testid='tweetButtonInline']"),
             (By.CSS_SELECTOR, "button[data-testid='tweetButton']"),
             (By.CSS_SELECTOR, "button[data-testid='tweetButtonInline']"),
         ]
         buttons = []
+        seen_ids = set()
         for by, selector in selectors:
             try:
-                buttons.extend(self.driver.find_elements(by, selector))
+                elements = self.driver.find_elements(by, selector)
             except Exception:
                 continue
+            for element in elements:
+                target = self._resolve_post_button_target(element)
+                if target is None:
+                    continue
+                element_id = getattr(target, "id", None)
+                if element_id and element_id in seen_ids:
+                    continue
+                if element_id:
+                    seen_ids.add(element_id)
+                buttons.append(target)
         return buttons
 
-    @staticmethod
-    def _button_is_enabled(button) -> bool:
+    def _resolve_post_button_target(self, element):
+        if element is None or not self.driver:
+            return element
+        try:
+            return self.driver.execute_script(
+                """
+                const el = arguments[0];
+                if (!el) return null;
+                return el.closest('button,[role="button"]') || el;
+                """,
+                element,
+            )
+        except Exception:
+            return element
+
+    def _button_is_enabled(self, button) -> bool:
         if button is None:
             return False
+        if not self.driver:
+            return False
+        try:
+            return bool(
+                self.driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    if (!el) return false;
+                    const target = el.closest('button,[role="button"]') || el;
+                    const disabledAttr = String(
+                        target.getAttribute('aria-disabled') ||
+                        el.getAttribute('aria-disabled') ||
+                        ''
+                    ).trim().toLowerCase();
+                    if (disabledAttr === 'true') return false;
+                    if (target.hasAttribute('disabled') || el.hasAttribute('disabled')) return false;
+                    const combinedClasses = `${target.className || ''} ${el.className || ''}`.toLowerCase();
+                    if (combinedClasses.includes('disabled')) return false;
+                    return true;
+                    """,
+                    button,
+                )
+            )
+        except Exception:
+            pass
         disabled_attr = str(button.get_attribute("aria-disabled") or "").strip().lower()
         if disabled_attr == "true":
             return False
         if button.get_attribute("disabled") is not None:
             return False
         return True
+
+    def _describe_post_button(self, button) -> str:
+        if button is None or not self.driver:
+            return "button=?"
+        try:
+            data = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                if (!el) return null;
+                const rect = el.getBoundingClientRect();
+                return {
+                    tag: el.tagName,
+                    testid: el.getAttribute('data-testid') || '',
+                    role: el.getAttribute('role') || '',
+                    ariaDisabled: el.getAttribute('aria-disabled') || '',
+                    disabled: el.getAttribute('disabled') || '',
+                    text: (el.innerText || el.textContent || '').trim().slice(0, 48),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                };
+                """,
+                button,
+            ) or {}
+        except Exception:
+            return "button=?"
+        tag = str(data.get("tag") or "?").lower()
+        testid = str(data.get("testid") or "-")
+        role = str(data.get("role") or "-")
+        aria_disabled = str(data.get("ariaDisabled") or "-")
+        text = str(data.get("text") or "-")
+        size = f"{data.get('width') or 0}x{data.get('height') or 0}"
+        return (
+            f"{tag}[testid={testid},role={role},aria-disabled={aria_disabled},"
+            f"size={size},text={text}]"
+        )
 
     def _element_is_unobstructed(self, element) -> bool:
         if not self.driver:
@@ -322,26 +409,50 @@ class SafeXUploader:
         end = time.time() + max(20, timeout)
         stable_hits = 0
         last_ready = None
+        next_status_log = time.time()
+        last_status = "no candidates"
         while time.time() < end:
             ready_button = None
+            fallback_enabled_button = None
+            visible_count = 0
+            enabled_count = 0
+            unobstructed_count = 0
+            descriptions = []
             for button in self._find_post_buttons():
                 try:
                     if not button.is_displayed():
                         continue
+                    visible_count += 1
+                    if len(descriptions) < 3:
+                        descriptions.append(self._describe_post_button(button))
                     if not self._button_is_enabled(button):
                         continue
+                    enabled_count += 1
                     self.driver.execute_script(
                         "arguments[0].scrollIntoView({block:'center', inline:'center'});",
                         button,
                     )
-                    if not self._element_is_unobstructed(button):
-                        continue
-                    ready_button = button
-                    break
+                    if fallback_enabled_button is None:
+                        fallback_enabled_button = button
+                    if self._element_is_unobstructed(button):
+                        unobstructed_count += 1
+                        ready_button = button
+                        break
                 except StaleElementReferenceException:
                     continue
                 except Exception:
                     continue
+
+            if ready_button is None:
+                ready_button = fallback_enabled_button
+
+            if descriptions:
+                last_status = (
+                    f"visible={visible_count}, enabled={enabled_count}, "
+                    f"unobstructed={unobstructed_count}, candidates={descriptions}"
+                )
+            else:
+                last_status = "no visible post-button candidates"
 
             if ready_button is not None:
                 stable_hits += 1
@@ -351,8 +462,14 @@ class SafeXUploader:
             else:
                 stable_hits = 0
                 last_ready = None
+            if time.time() >= next_status_log:
+                self._log(f"Waiting for X post button: {last_status}")
+                next_status_log = time.time() + 10.0
             time.sleep(1.2)
-        raise TimeoutException("X post button did not become ready in time (upload still processing?).")
+        raise TimeoutException(
+            "X post button did not become ready in time. "
+            f"Last observed state: {last_status}"
+        )
 
     def _click_post_button_with_retry(self, timeout: int = 360, attempts: int = 8):
         deadline = time.time() + max(30, timeout)
@@ -373,6 +490,23 @@ class SafeXUploader:
                 return
             except ElementClickInterceptedException as exc:
                 last_error = exc
+                try:
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        if (!el) return;
+                        el.click();
+                        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                        """,
+                        button,
+                    )
+                    self._log(
+                        f"Post click intercepted; JS click fallback succeeded "
+                        f"(attempt {attempt_index}/{max_attempts})."
+                    )
+                    return
+                except Exception as js_exc:
+                    last_error = js_exc
                 self._log(
                     f"Post click intercepted (attempt {attempt_index}/{max_attempts}); "
                     "waiting for processing overlay to clear...",
@@ -384,6 +518,32 @@ class SafeXUploader:
                 time.sleep(0.8)
             except Exception as exc:
                 last_error = exc
+                try:
+                    button.send_keys(Keys.ENTER)
+                    self._log(
+                        f"Standard click failed; Enter-key fallback submitted the post "
+                        f"(attempt {attempt_index}/{max_attempts})."
+                    )
+                    return
+                except Exception:
+                    pass
+                try:
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        if (!el) return;
+                        el.click();
+                        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                        """,
+                        button,
+                    )
+                    self._log(
+                        f"Standard click failed; JS click fallback submitted the post "
+                        f"(attempt {attempt_index}/{max_attempts})."
+                    )
+                    return
+                except Exception:
+                    pass
                 if attempt_index >= max_attempts:
                     raise
                 time.sleep(1.2)

@@ -33,6 +33,65 @@ from shared import (
     AudioLogger,
     VideoRecorder
 )
+from .platform_targets import (
+    get_platform_target,
+    is_native_youtube_game,
+    resolve_record_game_display_name,
+    resolve_record_game_type,
+)
+
+
+class _NoOpVideoRecorder:
+    def __init__(self):
+        self.background_music_path = ""
+
+    def set_greenscreen_overlay(self, *args, **kwargs):
+        return None
+
+    def capture_frame(self, *args, **kwargs):
+        return None
+
+    def get_frame_count(self) -> int:
+        return 0
+
+    def get_video_duration(self) -> float:
+        return 0.0
+
+    def export_video(self):
+        return None
+
+
+class _MinimalPlayerStatistics:
+    def __init__(self):
+        self._game_highscores: Dict[str, Dict[str, Any]] = {}
+        print("TEST_MINIMAL_PLAYERS: Skipping player statistics load.")
+
+    def get_game_highscore(self, game_type: str) -> Dict[str, Any]:
+        return dict(self._game_highscores.get(game_type, {}))
+
+    def update_game_highscore(self, game_type: str, score: float, username: str, label: str = "Score"):
+        current = self._game_highscores.get(game_type) or {}
+        if float(score or 0.0) >= float(current.get("score", 0.0) or 0.0):
+            self._game_highscores[game_type] = {
+                "score": float(score or 0.0),
+                "username": username,
+                "label": label,
+            }
+
+    def get_games_played(self, username: str) -> int:
+        return 0
+
+    def update_player_stats(self, **kwargs):
+        return None
+
+    def save_statistics(self):
+        print("TEST_MINIMAL_PLAYERS: Statistics not saved")
+
+    def get_current_game_leaderboard(self, game_results: List[Any]):
+        return sorted(game_results, key=lambda item: (item[2], -item[1]), reverse=True)[:10]
+
+    def get_all_time_leaderboard(self, top_n: int = 10):
+        return []
 
 # TODO: Import your custom modules
 # from .player import Player
@@ -93,6 +152,20 @@ class GameTemplate:
         print("=" * 60)
         print(f"  {self.GAME_TITLE}")
         print("=" * 60)
+        self.minimal_test_startup = bool(getattr(config, "TEST_MINIMAL_PLAYERS", False))
+        self.platform_target = get_platform_target()
+        self.record_game_type = resolve_record_game_type(
+            getattr(config, "GAME_MODE", ""),
+            self.platform_target,
+        )
+        self.record_game_display_name = resolve_record_game_display_name(
+            getattr(config, "GAME_MODE", ""),
+            self.platform_target,
+        )
+        self.native_youtube_mode = is_native_youtube_game(
+            getattr(config, "GAME_MODE", ""),
+            self.platform_target,
+        )
 
         # Initialize Pygame
         pygame.init()
@@ -111,21 +184,30 @@ class GameTemplate:
         self.api = InstagramAPI()
         self.audio_logger = AudioLogger()
         self.sound = SoundManager(audio_logger=self.audio_logger)
-        self.recorder = VideoRecorder(
-            audio_logger=self.audio_logger,
-            countdown_audio_path='assets/smash_countdown_audio.wav'
-        )
-        # Set green screen overlay for video export
-        self.recorder.set_greenscreen_overlay(
-            video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
-            scale=1.5,
-            offset_y=70
-        )
-        self.statistics = PlayerStatistics()
+        if self.minimal_test_startup:
+            print(
+                "TEST_MINIMAL_PLAYERS: Skipping recorder setup, statistics load, "
+                "audio preload, and countdown video."
+            )
+            self.recorder = _NoOpVideoRecorder()
+            self.statistics = _MinimalPlayerStatistics()
+        else:
+            self.recorder = VideoRecorder(
+                audio_logger=self.audio_logger,
+                countdown_audio_path='assets/smash_countdown_audio.wav'
+            )
+            # Set green screen overlay for video export
+            self.recorder.set_greenscreen_overlay(
+                video_path='assets/smash ultimate 3 2 1 go green screen.mp4',
+                scale=1.5,
+                offset_y=70
+            )
+            self.statistics = PlayerStatistics()
         self.scoring = ScoringSystem()
 
         # Preload audio
-        self.sound.preload_audio()
+        if not self.minimal_test_startup:
+            self.sound.preload_audio()
         self.recorder.background_music_path = self.sound.background_music_path
 
         # Game state
@@ -149,7 +231,8 @@ class GameTemplate:
         self.countdown_fps = 30
         self.countdown_duration = 0
         self.countdown_start_time = None
-        self._load_countdown_video()
+        if not self.minimal_test_startup:
+            self._load_countdown_video()
 
         # Initialize game-specific components
         self._init_game_components()
@@ -274,42 +357,51 @@ class GameTemplate:
         # Setup players
         self.setup_players()
 
-        # Countdown phase
-        print("\nStarting countdown...")
-        self.countdown_start_time = time.time()
-        self.phase = "countdown"
+        if self.minimal_test_startup:
+            print("\nTEST_MINIMAL_PLAYERS: Skipping countdown and starting simulation immediately.")
+            self.phase = "playing"
+        elif self.native_youtube_mode:
+            print("\nStarting native YouTube run...")
+            self.phase = "playing"
+            self.sound.start_background_music()
+            self.sound.set_music_volume_high()
+        else:
+            # Countdown phase
+            print("\nStarting countdown...")
+            self.countdown_start_time = time.time()
+            self.phase = "countdown"
 
-        # Start background music at low volume
-        self.sound.start_background_music()
-        self.sound.set_music_volume_low()
+            # Start background music at low volume
+            self.sound.start_background_music()
+            self.sound.set_music_volume_low()
 
-        # Play the countdown audio
-        self.sound.play_smash_countdown_audio()
+            # Play the countdown audio
+            self.sound.play_smash_countdown_audio()
 
-        # Countdown loop - players wait at starting positions
-        countdown_active = True
-        while countdown_active and self.running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.running = False
-                    return
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+            # Countdown loop - players wait at starting positions
+            countdown_active = True
+            while countdown_active and self.running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
                         self.running = False
                         return
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            self.running = False
+                            return
 
-            dt = self.clock.tick(config.FPS) / 1000.0
+                dt = self.clock.tick(config.FPS) / 1000.0
 
-            # Check if countdown finished
-            elapsed = time.time() - self.countdown_start_time
-            if elapsed >= self.countdown_duration:
-                countdown_active = False
-                self.phase = "playing"
-                print("\nGO! Game started!")
-                self.sound.set_music_volume_high()
+                # Check if countdown finished
+                elapsed = time.time() - self.countdown_start_time
+                if elapsed >= self.countdown_duration:
+                    countdown_active = False
+                    self.phase = "playing"
+                    print("\nGO! Game started!")
+                    self.sound.set_music_volume_high()
 
-            # Render (countdown frame will be added during video export)
-            self.render()
+                # Render (countdown frame will be added during video export)
+                self.render()
 
         # Reset countdown start time
         self.countdown_start_time = None

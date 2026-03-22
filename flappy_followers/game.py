@@ -8,6 +8,12 @@ import pygame
 import config
 from shared import GameTemplate, GameHistory, auto_push
 from shared.club_members import load_club_member_set, normalize_username, select_club_spotlight
+from shared.participant_resolver import resolve_participants
+from shared.platform_targets import (
+    format_profile_text,
+    get_youtube_game_profile,
+    write_video_meta_sidecar,
+)
 
 from .arena import FlappyArena
 from .player import FlappyFollower
@@ -37,6 +43,8 @@ class FlappyFollowersGame(GameTemplate):
         self.game_history = GameHistory()
         self.recent_eliminations = []
         self.club_spotlight = None
+        self.participant_source_info = {}
+        self.youtube_profile = get_youtube_game_profile("flappy_followers")
 
         self.pipe_width = float(getattr(config, "FLAPPY_PIPE_WIDTH", 70.0))
         self.pipe_spacing = float(getattr(config, "FLAPPY_PIPE_SPACING", 220.0))
@@ -55,6 +63,9 @@ class FlappyFollowersGame(GameTemplate):
         self.player_x_ratio = float(getattr(config, "FLAPPY_PLAYER_X_RATIO", 0.32))
         self.player_x_variance = float(getattr(config, "FLAPPY_PLAYER_X_VARIANCE", 18.0))
 
+        if self.native_youtube_mode:
+            self._apply_native_youtube_profile()
+
         self.current_gap_size = self.base_gap_size
         self.current_pipe_speed = self.base_pipe_speed
         self.player_x = self.arena.left + self.arena.width * self.player_x_ratio
@@ -65,16 +76,31 @@ class FlappyFollowersGame(GameTemplate):
         self.arena = FlappyArena()
         self.renderer = FlappyFollowersRenderer(self.screen)
 
+    def _apply_native_youtube_profile(self):
+        speed_multiplier = float(self.youtube_profile.get("speed_multiplier", 1.12) or 1.12)
+        gap_scale = float(self.youtube_profile.get("gap_scale", 0.94) or 0.94)
+        start_offset_scale = float(self.youtube_profile.get("start_offset_scale", 0.55) or 0.55)
+        max_duration_seconds = float(self.youtube_profile.get("max_duration_seconds", 30.0) or 30.0)
+
+        self.base_pipe_speed *= max(0.5, speed_multiplier)
+        self.pipe_speed_boost *= max(0.5, speed_multiplier)
+        self.base_gap_size *= max(0.5, gap_scale)
+        self.min_gap_size *= max(0.5, gap_scale)
+        self.pipe_start_offset *= max(0.2, start_offset_scale)
+        self.max_game_time = max(6.0, min(self.max_game_time, max_duration_seconds))
+
     def setup_players(self):
         print(f"Setting up {self.PLAYER_LABEL}...")
 
-        if config.TEST_MINIMAL_PLAYERS:
-            follower_data = self.api.fetch_followers(config.TEST_MINIMAL_PLAYER_COUNT)
-        else:
-            follower_data = self.api.fetch_followers(config.FOLLOWER_COUNT)
+        participant_bundle = resolve_participants(
+            "flappy_followers",
+            platform_target=self.platform_target,
+        )
+        self.participant_source_info = dict(participant_bundle)
+        follower_data = list(participant_bundle.get("participants") or [])
 
         random.shuffle(follower_data)
-        club_members = load_club_member_set()
+        club_members = set() if self.native_youtube_mode else load_club_member_set()
 
         for data in follower_data:
             payload = dict(data)
@@ -90,8 +116,39 @@ class FlappyFollowersGame(GameTemplate):
             player.is_club_member = username in club_members
             self.players.append(player)
 
-        self.club_spotlight = select_club_spotlight(self.players)
+        self.club_spotlight = None if self.native_youtube_mode else select_club_spotlight(self.players)
+        self._write_platform_sidecar()
         print(f"{len(self.players)} {self.PLAYER_LABEL} ready!\n")
+
+    def _write_platform_sidecar(self) -> None:
+        if not self.native_youtube_mode:
+            return
+        try:
+            requested_count = int(
+                self.participant_source_info.get("requested_count")
+                or len(self.players)
+                or 0
+            )
+        except Exception:
+            requested_count = len(self.players)
+
+        payload = {
+            "platform_target": self.platform_target,
+            "game_mode": "flappy_followers",
+            "record_game_type": self.record_game_type,
+            "record_game_display_name": self.record_game_display_name,
+            "requested_count": requested_count,
+            "participant_count": len(self.players),
+            "youtube_count": int(self.participant_source_info.get("youtube_count") or 0),
+            "instagram_top_up_count": int(self.participant_source_info.get("instagram_top_up_count") or 0),
+            "used_fallback": bool(self.participant_source_info.get("used_fallback")),
+            "hook_text": format_profile_text(self.youtube_profile.get("hook_primary"), requested_count),
+            "hook_secondary": format_profile_text(self.youtube_profile.get("hook_secondary"), requested_count),
+            "cta_text": str(self.youtube_profile.get("cta_text", "") or ""),
+            "ending_text": str(self.youtube_profile.get("ending_text", "") or ""),
+        }
+        sidecar_path = write_video_meta_sidecar(config.OUTPUT_VIDEO_PATH, payload)
+        print(f"[INFO] Wrote native YouTube sidecar: {sidecar_path}")
 
     def _init_pipes(self):
         self.pipes = []
@@ -280,8 +337,14 @@ class FlappyFollowersGame(GameTemplate):
             "alive_count": alive_count,
             "pipes_cleared": self.pipes_cleared,
             "elapsed_time": self.game_time,
-            "highscore": self.statistics.get_game_highscore("flappy_followers"),
+            "highscore": self.statistics.get_game_highscore(self.record_game_type),
             "recent_eliminations": self.recent_eliminations,
+            "platform_target": self.platform_target,
+            "native_youtube_mode": self.native_youtube_mode,
+            "participant_count": len(self.players),
+            "requested_count": int(self.participant_source_info.get("requested_count") or len(self.players) or 0),
+            "youtube_profile": self.youtube_profile,
+            "current_pipe_speed": self.current_pipe_speed,
             "show_leaderboards": self.show_leaderboards,
             "current_game_leaderboard": self.current_game_leaderboard,
             "all_time_leaderboard": self.all_time_leaderboard,
@@ -300,8 +363,8 @@ class FlappyFollowersGame(GameTemplate):
         game_results = []
         game_history_results = []
 
-        game_type = "flappy_followers"
-        game_display_name = "Flappy Followers"
+        game_type = self.record_game_type
+        game_display_name = self.record_game_display_name
         day_number = getattr(config, "DAY_NUMBER", 1)
 
         for player in sorted_players:
@@ -343,6 +406,12 @@ class FlappyFollowersGame(GameTemplate):
             game_display_name=game_display_name,
             day_number=day_number,
             results=game_history_results,
+            extra_data={
+                "platform_target": self.platform_target,
+                "youtube_participant_count": int(self.participant_source_info.get("youtube_count") or 0),
+                "instagram_top_up_count": int(self.participant_source_info.get("instagram_top_up_count") or 0),
+                "used_fallback": bool(self.participant_source_info.get("used_fallback")),
+            },
         )
 
         record_player = None

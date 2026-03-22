@@ -5,7 +5,7 @@ import config
 
 class FollowersIOArena:
     def __init__(self):
-        self.x, self.y, self.width, self.height = config.FIGHTER_ARENA_RECT
+        self.x, self.y, self.width, self.height = config.FOLLOWERS_IO_ARENA_RECT
         self.left = self.x
         self.top = self.y
         self.right = self.x + self.width

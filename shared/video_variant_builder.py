@@ -1,5 +1,5 @@
 """
-Build non-Instagram video variants with JOIN prompt overlays.
+Build platform-specific video variants without touching the Instagram base export.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from pathlib import Path
 import config
 
 _SIGNATURE_VERSION = 6
+_YOUTUBE_VARIANT_SIGNATURE_VERSION = 1
 _LAST_VARIANT_BUILD_INFO = None
+_LAST_YOUTUBE_VARIANT_BUILD_INFO = None
 
 
 def _safe_int(value, default: int) -> int:
@@ -571,6 +573,82 @@ def _build_filter_expression(base_video_path: Path) -> tuple[str, int, str]:
     )
 
 
+def _build_youtube_short_filter_expression(base_video_path: Path) -> tuple[str, dict]:
+    context_text = str(getattr(config, "YOUTUBE_SHORTS_CONTEXT_TEXT", "") or "").strip()
+    stakes_text = str(getattr(config, "YOUTUBE_SHORTS_STAKES_TEXT", "") or "").strip()
+    if not context_text or not stakes_text:
+        return "", {}
+
+    _, frame_height, _ = _probe_video_dimensions(base_video_path)
+    screen_height = max(1, _safe_int(getattr(config, "SCREEN_HEIGHT", 1920), 1920))
+    scale = float(max(1, frame_height)) / float(screen_height)
+
+    duration = max(
+        0.25,
+        _safe_float(getattr(config, "YOUTUBE_SHORTS_HOOK_DURATION_SECONDS", 3.0), 3.0),
+    )
+    overlay_opacity = _clamp(
+        _safe_float(getattr(config, "YOUTUBE_SHORTS_HOOK_OVERLAY_OPACITY", 0.38), 0.38),
+        0.0,
+        1.0,
+    )
+    context_font_size = max(
+        14,
+        int(round(_safe_int(getattr(config, "YOUTUBE_SHORTS_CONTEXT_FONT_SIZE", 26), 26) * scale)),
+    )
+    stakes_font_size = max(
+        18,
+        int(round(_safe_int(getattr(config, "YOUTUBE_SHORTS_STAKES_FONT_SIZE", 40), 40) * scale)),
+    )
+    context_color = str(getattr(config, "YOUTUBE_SHORTS_CONTEXT_COLOR", "white") or "white").strip() or "white"
+    stakes_color = str(getattr(config, "YOUTUBE_SHORTS_STAKES_COLOR", "white") or "white").strip() or "white"
+    border_color = str(
+        getattr(config, "YOUTUBE_SHORTS_TEXT_BORDER_COLOR", "black@0.75") or "black@0.75"
+    ).strip() or "black@0.75"
+    border_width = max(
+        1,
+        _safe_int(getattr(config, "YOUTUBE_SHORTS_TEXT_BORDER_WIDTH", 3), 3),
+    )
+    context_center_y = int(round(frame_height * 0.43))
+    stakes_center_y = int(round(frame_height * 0.50))
+    enable_expr = f"between(t,0,{duration:.2f})"
+
+    escaped_context = _escape_drawtext_text(context_text)
+    escaped_stakes = _escape_drawtext_text(stakes_text)
+    filter_expression = ",".join(
+        [
+            (
+                "drawbox="
+                f"x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity}:t=fill:"
+                f"enable='{enable_expr}'"
+            ),
+            (
+                "drawtext="
+                f"text='{escaped_context}':x=(w-text_w)/2:y={context_center_y}-(text_h/2):"
+                f"fontsize={context_font_size}:fontcolor={context_color}:"
+                f"borderw={border_width}:bordercolor={border_color}:"
+                f"enable='{enable_expr}'"
+            ),
+            (
+                "drawtext="
+                f"text='{escaped_stakes}':x=(w-text_w)/2:y={stakes_center_y}-(text_h/2):"
+                f"fontsize={stakes_font_size}:fontcolor={stakes_color}:"
+                f"borderw={border_width}:bordercolor={border_color}:"
+                f"enable='{enable_expr}'"
+            ),
+        ]
+    )
+    build_meta = {
+        "context_text": context_text,
+        "stakes_text": stakes_text,
+        "duration_seconds": duration,
+        "overlay_opacity": overlay_opacity,
+        "context_font_size": context_font_size,
+        "stakes_font_size": stakes_font_size,
+    }
+    return filter_expression, build_meta
+
+
 def _meta_path(output_video_path: Path) -> Path:
     output_path = Path(output_video_path)
     return output_path.with_suffix(f"{output_path.suffix}.meta.json")
@@ -691,10 +769,72 @@ def _build_variant_signature(base_video_path: Path) -> dict:
     return {"hash": digest, "payload": payload}
 
 
+def _build_youtube_variant_signature(base_video_path: Path) -> dict:
+    base_path = Path(base_video_path)
+    try:
+        base_stat = base_path.stat()
+        base_size = int(base_stat.st_size)
+        base_mtime_ns = int(base_stat.st_mtime_ns)
+    except Exception:
+        base_size = 0
+        base_mtime_ns = 0
+
+    payload = {
+        "signature_version": _YOUTUBE_VARIANT_SIGNATURE_VERSION,
+        "base_video": {
+            "filename": base_path.name,
+            "size": base_size,
+            "mtime_ns": base_mtime_ns,
+        },
+        "config": {
+            "YOUTUBE_SHORTS_CONTEXT_TEXT": str(
+                getattr(config, "YOUTUBE_SHORTS_CONTEXT_TEXT", "") or ""
+            ),
+            "YOUTUBE_SHORTS_STAKES_TEXT": str(
+                getattr(config, "YOUTUBE_SHORTS_STAKES_TEXT", "") or ""
+            ),
+            "YOUTUBE_SHORTS_HOOK_DURATION_SECONDS": _safe_float(
+                getattr(config, "YOUTUBE_SHORTS_HOOK_DURATION_SECONDS", 3.0), 3.0
+            ),
+            "YOUTUBE_SHORTS_HOOK_OVERLAY_OPACITY": _safe_float(
+                getattr(config, "YOUTUBE_SHORTS_HOOK_OVERLAY_OPACITY", 0.38), 0.38
+            ),
+            "YOUTUBE_SHORTS_CONTEXT_FONT_SIZE": _safe_int(
+                getattr(config, "YOUTUBE_SHORTS_CONTEXT_FONT_SIZE", 26), 26
+            ),
+            "YOUTUBE_SHORTS_STAKES_FONT_SIZE": _safe_int(
+                getattr(config, "YOUTUBE_SHORTS_STAKES_FONT_SIZE", 40), 40
+            ),
+            "YOUTUBE_SHORTS_CONTEXT_COLOR": str(
+                getattr(config, "YOUTUBE_SHORTS_CONTEXT_COLOR", "white") or "white"
+            ),
+            "YOUTUBE_SHORTS_STAKES_COLOR": str(
+                getattr(config, "YOUTUBE_SHORTS_STAKES_COLOR", "white") or "white"
+            ),
+            "YOUTUBE_SHORTS_TEXT_BORDER_COLOR": str(
+                getattr(config, "YOUTUBE_SHORTS_TEXT_BORDER_COLOR", "black@0.75")
+                or "black@0.75"
+            ),
+            "YOUTUBE_SHORTS_TEXT_BORDER_WIDTH": _safe_int(
+                getattr(config, "YOUTUBE_SHORTS_TEXT_BORDER_WIDTH", 3), 3
+            ),
+        },
+    }
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    return {"hash": digest, "payload": payload}
+
+
 def get_last_non_ig_variant_build_info() -> dict | None:
     if not isinstance(_LAST_VARIANT_BUILD_INFO, dict):
         return None
     return dict(_LAST_VARIANT_BUILD_INFO)
+
+
+def get_last_youtube_variant_build_info() -> dict | None:
+    if not isinstance(_LAST_YOUTUBE_VARIANT_BUILD_INFO, dict):
+        return None
+    return dict(_LAST_YOUTUBE_VARIANT_BUILD_INFO)
 
 
 def build_non_ig_join_variant(base_video_path: Path, output_video_path: Path) -> bool:
@@ -896,4 +1036,190 @@ def ensure_non_ig_join_variant(base_video_path: Path, output_video_path: Path) -
     info = dict(_LAST_VARIANT_BUILD_INFO or {})
     info["rebuild_reasons"] = list(dict.fromkeys(rebuild_reasons))
     _LAST_VARIANT_BUILD_INFO = info
+    return base_path
+
+
+def build_youtube_short_variant(base_video_path: Path, output_video_path: Path) -> bool:
+    """
+    Build a YouTube-specific Shorts variant from a base export.
+    The overlay masks the IG-centric intro and replaces it with clear context
+    and stakes for cold Shorts viewers.
+    """
+    global _LAST_YOUTUBE_VARIANT_BUILD_INFO
+
+    base_path = Path(base_video_path)
+    output_path = Path(output_video_path)
+
+    if not base_path.exists():
+        print(f"[WARN] YouTube variant generation skipped: missing base video {base_path}")
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "missing_base",
+            "output_path": str(output_path),
+        }
+        return False
+
+    if not _safe_bool(getattr(config, "YOUTUBE_VARIANT_ENABLED", True), True):
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "variant_disabled",
+            "output_path": str(output_path),
+        }
+        return False
+
+    filter_expression, build_meta = _build_youtube_short_filter_expression(base_path)
+    if not filter_expression:
+        print("[WARN] YouTube variant generation skipped: hook text is empty.")
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "empty_hook_text",
+            "output_path": str(output_path),
+        }
+        return False
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        print("[WARN] YouTube variant generation failed: ffmpeg is not available on PATH.")
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "missing_ffmpeg",
+            "output_path": str(output_path),
+        }
+        return False
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(base_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        filter_expression,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except Exception as exc:
+        print(f"[WARN] YouTube variant generation failed: {exc}")
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "ffmpeg_exec_error",
+            "error": str(exc),
+            "output_path": str(output_path),
+        }
+        return False
+
+    if result.returncode != 0:
+        stderr_tail = (result.stderr or "").strip()
+        if len(stderr_tail) > 500:
+            stderr_tail = stderr_tail[-500:]
+        print(
+            f"[WARN] YouTube variant generation failed (ffmpeg exit {result.returncode}): {stderr_tail}"
+        )
+        try:
+            if output_path.exists():
+                output_path.unlink()
+        except Exception:
+            pass
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "ffmpeg_failed",
+            "output_path": str(output_path),
+        }
+        return False
+
+    signature = _build_youtube_variant_signature(base_path)
+    meta_payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "output_path": str(output_path),
+        "base_video_path": str(base_path),
+        "signature": signature.get("hash"),
+        "signature_payload": signature.get("payload"),
+        "build_meta": build_meta,
+        "variant_type": "youtube_short",
+    }
+    try:
+        _write_variant_meta(output_path, meta_payload)
+    except Exception as exc:
+        print(f"[WARN] Failed to write YouTube variant metadata for {output_path.name}: {exc}")
+
+    _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+        "generated": True,
+        "status": "generated",
+        "output_path": str(output_path),
+        "build_meta": build_meta,
+    }
+    return output_path.exists()
+
+
+def ensure_youtube_short_variant(base_video_path: Path, output_video_path: Path) -> Path:
+    """
+    Ensure the YouTube Shorts variant exists and matches the current config.
+    Returns the variant path on success, otherwise the base path.
+    """
+    global _LAST_YOUTUBE_VARIANT_BUILD_INFO
+
+    base_path = Path(base_video_path)
+    output_path = Path(output_video_path)
+
+    if not base_path.exists():
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "missing_base",
+            "output_path": str(output_path),
+        }
+        return base_path
+
+    rebuild_reasons: list[str] = []
+    signature = _build_youtube_variant_signature(base_path)
+
+    if not output_path.exists():
+        rebuild_reasons.append("variant_missing")
+    else:
+        meta = _read_variant_meta(output_path)
+        if meta is None:
+            rebuild_reasons.append("meta_missing")
+        else:
+            existing_sig = str(meta.get("signature") or "").strip()
+            expected_sig = str(signature.get("hash") or "").strip()
+            if not existing_sig or existing_sig != expected_sig:
+                rebuild_reasons.append("signature_mismatch")
+        try:
+            if output_path.stat().st_mtime < base_path.stat().st_mtime:
+                rebuild_reasons.append("base_newer")
+        except Exception:
+            rebuild_reasons.append("mtime_check_failed")
+
+    if not rebuild_reasons:
+        meta = _read_variant_meta(output_path) or {}
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = {
+            "generated": False,
+            "status": "up_to_date",
+            "output_path": str(output_path),
+            "build_meta": meta.get("build_meta"),
+        }
+        return output_path
+
+    if build_youtube_short_variant(base_path, output_path):
+        info = dict(_LAST_YOUTUBE_VARIANT_BUILD_INFO or {})
+        info["rebuild_reasons"] = list(dict.fromkeys(rebuild_reasons))
+        _LAST_YOUTUBE_VARIANT_BUILD_INFO = info
+        return output_path
+
+    info = dict(_LAST_YOUTUBE_VARIANT_BUILD_INFO or {})
+    info["rebuild_reasons"] = list(dict.fromkeys(rebuild_reasons))
+    _LAST_YOUTUBE_VARIANT_BUILD_INFO = info
     return base_path

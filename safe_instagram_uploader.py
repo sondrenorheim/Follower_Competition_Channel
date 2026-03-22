@@ -33,7 +33,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 try:
     import config
@@ -76,6 +76,20 @@ class SafeInstagramUploader:
         self.mute_browser_audio = bool(
             getattr(config, "MUTE_BROWSER_AUDIO_DURING_UPLOADS", False)
         )
+        try:
+            self.page_load_timeout_seconds = max(
+                30,
+                int(getattr(config, "INSTAGRAM_PAGE_LOAD_TIMEOUT_SECONDS", 60) or 60),
+            )
+        except Exception:
+            self.page_load_timeout_seconds = 60
+        try:
+            self.dom_ready_timeout_seconds = max(
+                5,
+                int(getattr(config, "INSTAGRAM_DOM_READY_TIMEOUT_SECONDS", 20) or 20),
+            )
+        except Exception:
+            self.dom_ready_timeout_seconds = 20
 
     def _log(self, message: str, level: str = "INFO"):
         """Log message with timestamp and elapsed time"""
@@ -95,6 +109,7 @@ class SafeInstagramUploader:
 
         for attempt in range(1, attempts + 1):
             chrome_options = Options()
+            chrome_options.page_load_strategy = "eager"
 
             if self.headless:
                 chrome_options.add_argument("--headless=new")
@@ -125,7 +140,7 @@ class SafeInstagramUploader:
 
             try:
                 self.driver = webdriver.Chrome(options=chrome_options)
-                self.driver.set_page_load_timeout(90)
+                self.driver.set_page_load_timeout(self.page_load_timeout_seconds)
                 # Execute script to avoid detection
                 self.driver.execute_script(
                     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -182,6 +197,88 @@ class SafeInstagramUploader:
         """Random delay to mimic human behavior"""
         delay = random.uniform(min_seconds, max_seconds)
         time.sleep(delay)
+
+    def _stop_page_load(self):
+        """Best-effort stop for pages that keep loading indefinitely."""
+        if not self.driver:
+            return
+
+        try:
+            self.driver.execute_cdp_cmd("Page.stopLoading", {})
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script("window.stop();")
+        except Exception:
+            pass
+
+    def _wait_for_dom_ready(self, timeout_seconds: Optional[int] = None) -> bool:
+        """Treat Instagram as usable once the DOM is interactive."""
+        if not self.driver:
+            return False
+
+        timeout = timeout_seconds or self.dom_ready_timeout_seconds
+        deadline = time.time() + timeout
+        last_state = None
+
+        while time.time() < deadline:
+            try:
+                last_state = str(
+                    self.driver.execute_script("return document.readyState") or ""
+                ).strip().lower()
+            except Exception:
+                last_state = None
+
+            if last_state in {"interactive", "complete"}:
+                return True
+            time.sleep(0.25)
+
+        if last_state:
+            self._log(
+                f"Document readyState stayed at '{last_state}' for {timeout}s.",
+                "WARN",
+            )
+        return False
+
+    def _run_page_load_action(self, action, label: str) -> bool:
+        """Run a navigation/refresh action without requiring a full network-idle load."""
+        if not self.driver:
+            raise RuntimeError("Chrome driver is not initialized.")
+
+        timed_out = False
+        try:
+            action()
+        except TimeoutException:
+            timed_out = True
+        except WebDriverException as exc:
+            message = str(exc)
+            if "Timed out receiving message from renderer" in message or "timeout:" in message.lower():
+                timed_out = True
+            else:
+                raise
+
+        if timed_out:
+            self._log(
+                f"{label} hit the Selenium page-load timeout; stopping the load and continuing.",
+                "WARN",
+            )
+            self._stop_page_load()
+
+        ready = self._wait_for_dom_ready()
+        if not ready:
+            self._log(
+                f"{label} never reached an interactive DOM state; continuing with best-effort page state.",
+                "WARN",
+            )
+        return ready
+
+    def _navigate_to(self, url: str, label: str) -> bool:
+        return self._run_page_load_action(lambda: self.driver.get(url), label)
+
+    def _refresh_page(self, label: str) -> bool:
+        return self._run_page_load_action(self.driver.refresh, label)
 
     def _human_type(self, element, text: str):
         """Type text character by character with random delays (like a human)"""
@@ -673,7 +770,7 @@ class SafeInstagramUploader:
         print()
 
         self._setup_driver()
-        self.driver.get("https://www.instagram.com")
+        self._navigate_to("https://www.instagram.com", "Instagram login page")
 
         # Wait for user to login manually
         input("Press Enter after you've logged in successfully...")
@@ -707,7 +804,7 @@ class SafeInstagramUploader:
 
             # Load Instagram first
             self._log("Opening Instagram page to attach cookies...")
-            self.driver.get("https://www.instagram.com")
+            self._navigate_to("https://www.instagram.com", "Instagram cookie attach page")
             self._human_delay(2, 3)
 
             # Add cookies
@@ -722,7 +819,7 @@ class SafeInstagramUploader:
                     self._log(f"Could not add cookie {cookie.get('name')}: {e}", "WARN")
 
             # Refresh to apply cookies
-            self.driver.refresh()
+            self._refresh_page("Instagram cookie refresh")
             self._human_delay(2, 4)
 
             # Verify we're logged in (check if we can see profile icon or similar)
@@ -773,7 +870,7 @@ class SafeInstagramUploader:
                 return False
 
             self._log("Navigating to Instagram home...")
-            self.driver.get("https://www.instagram.com/")
+            self._navigate_to("https://www.instagram.com/", "Instagram home navigation")
             self._human_delay(3, 5)
             self.session_active = True
             return True
@@ -851,7 +948,7 @@ class SafeInstagramUploader:
 
             # Navigate to create page
             self._log("STEP 3: Navigating to Instagram home...")
-            self.driver.get("https://www.instagram.com/")
+            self._navigate_to("https://www.instagram.com/", "Instagram upload home navigation")
             self._log("Waiting for page to load...")
             self._human_delay(3, 5)
             self._log("Page loaded")

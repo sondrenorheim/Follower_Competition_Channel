@@ -422,6 +422,8 @@ GAME_MODE_ALIASES = {
     "anime_fighting": "anime_fighting",
     "maze rush": "maze_rush",
     "maze_rush": "maze_rush",
+    "youtube maze rush": "youtube_maze_rush",
+    "youtube_maze_rush": "youtube_maze_rush",
     "beacon blitz": "beacon_blitz",
     "beacon_blitz": "beacon_blitz",
     "lane rush": "lane_rush",
@@ -439,6 +441,8 @@ GAME_MODE_ALIASES = {
     "flappy follower": "flappy_followers",
     "flappy_followers": "flappy_followers",
     "flappy": "flappy_followers",
+    "youtube flappy followers": "youtube_flappy_followers",
+    "youtube_flappy_followers": "youtube_flappy_followers",
     "tiny followers": "tiny_followers",
     "tiny follower": "tiny_followers",
     "tiny_followers": "tiny_followers",
@@ -495,11 +499,13 @@ GAME_DISPLAY_NAMES = {
     "meteor_mayhem": "Meteor Mayhem",
     "anime_fighting": "Anime Fighting",
     "maze_rush": "Maze Rush",
+    "youtube_maze_rush": "Maze Rush (YouTube)",
     "math_drop": "Math Drop",
     "plinko": "Plinko",
     "mini_golf": "Mini Golf",
     "lava_platform": "Lava Escape",
     "flappy_followers": "Flappy Followers",
+    "youtube_flappy_followers": "Flappy Followers (YouTube)",
     "tiny_followers": "Tiny Followers",
     "jetpack_followers": "Jetpack Followers",
     "crossy_followers": "Crossy Followers",
@@ -833,6 +839,11 @@ PROCESSED_COMMENT_IDS_MAX = int(os.getenv("FACEBOOK_PROCESSED_COMMENT_IDS_MAX", 
 FOLLOWER_STORE_PATH = Path(getattr(config, "FOLLOWER_IMPORT_FILE", "Followers/new_followers_fresh.json"))
 if not FOLLOWER_STORE_PATH.is_absolute():
     FOLLOWER_STORE_PATH = BASE_DIR / FOLLOWER_STORE_PATH
+YOUTUBE_PARTICIPANT_STORE_PATH = Path(
+    getattr(config, "YOUTUBE_PARTICIPANT_FILE", "Followers/youtube_join_participants.json")
+)
+if not YOUTUBE_PARTICIPANT_STORE_PATH.is_absolute():
+    YOUTUBE_PARTICIPANT_STORE_PATH = BASE_DIR / YOUTUBE_PARTICIPANT_STORE_PATH
 MEDIA_GAME_MAP_PATH = Path(
     os.getenv("WEBHOOK_MEDIA_GAME_MAP_PATH", str(LOG_DIR / "media_game_mapping.json"))
 )
@@ -1442,11 +1453,16 @@ def handle_youtube_comment(comment_data):
             else:
                 try:
                     join_result = upsert_youtube_join(
-                        FOLLOWER_STORE_PATH,
+                        YOUTUBE_PARTICIPANT_STORE_PATH,
                         youtube_channel_id=commenter_id or None,
                         youtube_display_name=commenter_name or None,
                         comment_id=comment_id,
                         video_id=comment_data.get("video_id"),
+                        mirror_follower_file=(
+                            FOLLOWER_STORE_PATH
+                            if bool(getattr(config, "YOUTUBE_PARTICIPANT_MIRROR_TO_MAIN_STORE", True))
+                            else None
+                        ),
                     )
                     if join_result and join_result.get("ok"):
                         _invalidate_follower_username_cache()
@@ -2081,7 +2097,10 @@ def load_day_summary(day_number):
         payload = _load_day_summary_from_events(key)
         if payload:
             print(f"Loaded day {key} summary from events fallback")
-    _DAY_SUMMARY_CACHE[key] = payload
+    if payload is not None:
+        _DAY_SUMMARY_CACHE[key] = payload
+    else:
+        _DAY_SUMMARY_CACHE.pop(key, None)
     return payload
 
 
@@ -2357,6 +2376,28 @@ def _latest_available_day_number():
     _LATEST_DAY_CACHE_VALUE = day_numbers[-1] if day_numbers else None
     _LATEST_DAY_CACHE_AT = now
     return _LATEST_DAY_CACHE_VALUE
+
+
+def _should_defer_latest_day_fallback(day_number, game_type=None):
+    candidate = _coerce_int(day_number)
+    if candidate is None:
+        return False
+    latest = _latest_available_day_number()
+    if latest is None:
+        return False
+    if candidate >= int(latest):
+        if game_type:
+            print(
+                f"Deferring nearby-day fallback for day {candidate} game {game_type}; "
+                f"latest available day is {latest}"
+            )
+        else:
+            print(
+                f"Deferring nearby-day fallback for day {candidate}; "
+                f"latest available day is {latest}"
+            )
+        return True
+    return False
 
 
 def _is_recent_cache_day(day_number):
@@ -3847,6 +3888,8 @@ def build_youtube_results_message(comment_data, comment_text=None):
 
     day_summary = load_day_summary(day_number)
     if not day_summary:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             day_number = nearby_day
@@ -3857,6 +3900,8 @@ def build_youtube_results_message(comment_data, comment_text=None):
 
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             day_number = nearby_day
@@ -3887,6 +3932,11 @@ def build_youtube_results_message(comment_data, comment_text=None):
             FOLLOWER_STORE_PATH,
             commenter_id,
         )
+        if mapped_username is None:
+            mapped_username = lookup_username_by_youtube_channel_id(
+                YOUTUBE_PARTICIPANT_STORE_PATH,
+                commenter_id,
+            )
         if mapped_username and mapped_username.lower() != str(commenter_name or "").strip().lower():
             mapped_lookup = _lookup_placement_for_candidates(game_entry.get("game_id"), [mapped_username])
             if not mapped_lookup.get("data_ready"):
@@ -3936,6 +3986,8 @@ def build_facebook_results_message(comment_data, comment_text=None):
 
     day_summary = load_day_summary(day_number)
     if not day_summary:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             day_number = nearby_day
@@ -3946,6 +3998,8 @@ def build_facebook_results_message(comment_data, comment_text=None):
 
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             day_number = nearby_day
@@ -4078,6 +4132,8 @@ def build_results_message(comment_data, comment_text=None):
     day_summary = load_day_summary(day_number)
     if not day_summary:
         media_ts = _parse_timestamp((media_meta or {}).get("timestamp"))
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, _ = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day:
             print(f"No day summary for day {day_number}; using nearest day {nearby_day}")
@@ -4090,6 +4146,8 @@ def build_results_message(comment_data, comment_text=None):
     game_entry = find_game_entry(day_summary, game_type)
     if not game_entry:
         media_ts = _parse_timestamp((media_meta or {}).get("timestamp"))
+        if _should_defer_latest_day_fallback(day_number, game_type):
+            return format_results_not_ready_message()
         nearby_day, nearby_game_id = _find_nearby_day_with_game(game_type, day_number, media_ts)
         if nearby_day and nearby_game_id:
             print(

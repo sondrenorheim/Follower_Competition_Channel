@@ -2,9 +2,43 @@
 Configuration file for Follower Battle Royale & Fighter Arena
 Modify these values to customize game behavior
 """
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _strip_env_value(raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _load_project_env_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        os.environ.setdefault(key, _strip_env_value(value))
+
+
+_load_project_env_file(PROJECT_ROOT / ".env")
 
 
 def project_path(*parts: str) -> str:
@@ -73,8 +107,8 @@ SIMULATION_FPS_DURING_EXPORT = 30  # FPS during video export (should match VIDEO
 MAX_DELTA_TIME = 1.0 / 20.0  # Cap dt at 50ms (20 FPS minimum) to prevent chaos
 # ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner"] 
 
-ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "mini_golf", "snake_escape", "flappy_followers", "discord_signal", "doodle_followers"] 
-# ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner", "jetpack_followers", "flappy_followers", "super_follower_bros_1_2", "discord_signal", "doodle_followers", "mini_golf", "snake_escape"] 
+# ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "mini_golf", "snake_escape", "flappy_followers", "discord_signal", "doodle_followers"]
+ALL_GAME_MODES = ["math_drop", "heads_or_tails", "fighter_arena", "maze_rush", "wheel_spinner", "flappy_followers", "super_follower_bros_1_2", "discord_signal", "doodle_followers", "mini_golf", "snake_escape", "crossy_followers", "jetpack_followers"]
 
 # ALL_GAME_MODES = ["beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic",] 
 # ALL_GAME_MODES = ["discord_signal"]
@@ -85,18 +119,19 @@ TOP10_SKIP_GAME_MODES = ["super_follower_bros", "super_follower_bros_1_2", "jetp
 
 # Test mode - when True, game results won't be saved to the all-time leaderboard
 GAME_MODE = "ALL" # Options: "battle_royale", "fighter_arena", "followers_io", "maze_rush", "math_drop", "plinko", "obstacle_course", "snake_escape", "team_battle", "platformer_race", "anime_fighting", "mingle", "heads_or_tails", "wheel_spinner", "lava_platform", "mini_golf", "flappy_followers", "tiny_followers", "jetpack_followers", "doodle_followers", "crossy_followers", "super_follower_bros", "subway_followers", "subway_followers_3d", "beacon_blitz", "lane_rush", "discord_signal", "club_duel", "club_relic", "moon_stack", "ALL"
+PLATFORM_TARGET = "instagram"  # instagram | youtube
 TEST_MODE = False  # Set to True to enable test mode (won't save results to leaderboard)
 EXPORT_VIDEO = True
-DAY_NUMBER = 112 # Increment  this each time you record a new video
+DAY_NUMBER = 120 # Increment  this each time you record a new video
 COMMENT_RESULT_PROMPT_TEXT = 'Comment "RESULT" to see how you did'
 WEB_RESULTS_PREVIEW_LIMIT = 200  # Top N results to include in web preview files
 
-DOWNLOAD_PROFILE_PICTURES = True  # Deprecated - use download_all_profile_pics.py instead
+DOWNLOAD_PROFILE_PICTURES = False  # Keep main runs cache-only; use download_all_profile_pics.py to refresh misses separately
 LOAD_PROFILE_PICTURES = True  # Set to True to load from avatar_cache/, False to skip entirely (faster testing)
 HEADLESS_MODE = False
 SHOW_NAMETAGS = False
 TEST_MINIMAL_PLAYERS = False # Set True to use test users, False to use real followers
-TEST_MINIMAL_PLAYER_COUNT = 10
+TEST_MINIMAL_PLAYER_COUNT = 10000
 
 SUPER_FOLLOWER_BROS_DAY_OFFSET = 71
 # Jetpack captions/results can use a mode-specific displayed day like SMB.
@@ -220,6 +255,9 @@ AUTO_PUSH_SYNC_R2_FROM_LOCAL = True
 AUTO_PUSH_SYNC_EVENTS_TO_R2_FROM_LOCAL = True
 # Pull Mac-owned follower/webhook state before the next render run starts.
 AUTO_PULL_MAC_STATE_BEFORE_RUN = True
+# Keep the local render follower import file authoritative on the Windows box.
+# The Mac state snapshot may contain a much smaller webhook join store.
+AUTO_PULL_PRESERVE_LOCAL_FOLLOWER_IMPORT = True
 # Optional AWS CLI override for Windows or macOS.
 AWS_CLI_PATH = ""
 # Shared Cloudflare R2 configuration for API/events/state sync.
@@ -245,10 +283,24 @@ AUTO_PUSH_ALL_MODE_SUPPRESS_PER_GAME_PUSH = True
 # - Still append per-game event backups to backups/game_results/events/.
 # - Run a separate rebuild step later to regenerate canonical history/stat files.
 SIMULATION_LIGHT_MODE = False
+# Force simulation-light internals for normal production ALL runs to avoid
+# repeatedly rewriting the giant canonical history/stat files mid-render.
+SIMULATION_LIGHT_FORCE_FOR_ALL_MODE = True
 # Auto-enable simulation-light when running `main.py --day-range ...`.
 SIMULATION_LIGHT_AUTO_FOR_DAY_RANGE = True
 # In simulation-light mode, skip in-memory all-time stats updates to reduce RAM.
 SIMULATION_LIGHT_DISABLE_STATS_UPDATES = True
+# Disable scheduled uploads during normal ALL runs because canonical webhook/API
+# data is rebuilt and published only after the render pass completes.
+SIMULATION_LIGHT_START_SCHEDULED_UPLOAD_FOR_ALL_MODE = False
+# Sync append-only event logs to R2 during simulation-light ALL runs so the Mac
+# webhook can answer result lookups from events before the final rebuild finishes.
+SIMULATION_LIGHT_SYNC_EVENTS_DURING_ALL_MODE = True
+SIMULATION_LIGHT_SYNC_EVENTS_BATCH_SIZE = 1
+# Rebuild canonical history/stat/API outputs after a simulation-light ALL run,
+# then publish/sync the rebuilt outputs.
+SIMULATION_LIGHT_REBUILD_AFTER_ALL_MODE = True
+SIMULATION_LIGHT_PUSH_AFTER_ALL_MODE_REBUILD = True
 
 # Local audio controls:
 # Keep gameplay audio in exported videos, but mute local live playback while processing.
@@ -300,6 +352,9 @@ SHOW_FOLLOWER_NAMES = False  # Show usernames below profile pictures during batt
 # Only render profile pictures when radius is large enough to actually see them
 # When smaller, use colored circles instead (saves massive rendering overhead with 40k players)
 PROFILE_PICTURE_MIN_RADIUS = 8  # Pixels - only render profile pics when radius >= this value
+AVATAR_LAZY_LOAD = True
+AVATAR_CACHE_MAX_SIZE = 48
+AVATAR_LAZY_IMAGE_CACHE_LIMIT = 1024
 
 # Club member highlight (glow ring)
 CLUB_GLOW_COLOR = (255, 240, 190)
@@ -421,6 +476,26 @@ def get_non_ig_variant_video_path(
     return str(day_folder / f"{gm}_day_{day}{suffix}.mp4")
 
 
+def get_youtube_variant_video_path(
+    game_mode: str = None,
+    day_number: int | None = None,
+    test_mode: bool = None,
+) -> str:
+    """
+    Build output path for the dedicated YouTube Shorts variant.
+    Example: maze_rush_day_102_youtube_short.mp4
+    """
+    gm = (game_mode or GAME_MODE) if (game_mode or GAME_MODE) else "battle_royale"
+    day = day_number if day_number is not None else DAY_NUMBER
+    is_test = TEST_MODE if test_mode is None else test_mode
+    suffix = str(globals().get("YOUTUBE_VARIANT_SUFFIX", "_youtube_short") or "_youtube_short")
+    day_folder = VIDEO_OUTPUT_BASE / f"Day_{day}"
+    day_folder.mkdir(parents=True, exist_ok=True)
+    if is_test:
+        return str(day_folder / f"{gm}_test_video{suffix}.mp4")
+    return str(day_folder / f"{gm}_day_{day}{suffix}.mp4")
+
+
 OUTPUT_VIDEO_PATH = get_output_video_path()
 
 VIDEO_CODEC = "libx264"
@@ -454,6 +529,67 @@ NON_IG_VARIANT_AUTO_ROUTE_PLATFORMS = ["facebook", "tiktok", "youtube", "snapcha
 NON_IG_VARIANT_GENERATE_AFTER_EXPORT = True
 NON_IG_VARIANT_GENERATE_ON_UPLOAD_IF_MISSING = False
 
+# Dedicated YouTube Shorts variant: preserve the IG export, but overlay a
+# standalone cold-open so YouTube viewers understand the format immediately.
+YOUTUBE_VARIANT_ENABLED = True
+YOUTUBE_VARIANT_SUFFIX = "_youtube_short"
+YOUTUBE_VARIANT_GENERATE_ON_UPLOAD_IF_MISSING = True
+YOUTUBE_SHORTS_CONTEXT_TEXT = "Every dot = a real follower"
+YOUTUBE_SHORTS_STAKES_TEXT = "Only one survives"
+YOUTUBE_SHORTS_HOOK_DURATION_SECONDS = 3.0
+YOUTUBE_SHORTS_HOOK_OVERLAY_OPACITY = 0.38
+YOUTUBE_SHORTS_CONTEXT_FONT_SIZE = 26
+YOUTUBE_SHORTS_STAKES_FONT_SIZE = 40
+YOUTUBE_SHORTS_CONTEXT_COLOR = "white"
+YOUTUBE_SHORTS_STAKES_COLOR = "white"
+YOUTUBE_SHORTS_TEXT_BORDER_COLOR = "black@0.75"
+YOUTUBE_SHORTS_TEXT_BORDER_WIDTH = 3
+YOUTUBE_NATIVE_GAME_MODES = ["maze_rush", "flappy_followers"]
+AUTO_RUN_NATIVE_YOUTUBE_COMPANIONS = True
+YOUTUBE_PARTICIPANT_FILE = "Followers/youtube_join_participants.json"
+YOUTUBE_PARTICIPANT_MIRROR_TO_MAIN_STORE = True
+YOUTUBE_DEFAULT_PARTICIPANT_COUNT = 1000
+YOUTUBE_TOP_UP_WITH_INSTAGRAM = True
+YOUTUBE_TOP_UP_IMPORT_FILE = ""
+YOUTUBE_GAME_PROFILES = {
+    "maze_rush": {
+        "hook_primary": "{count} players try to escape this maze",
+        "hook_secondary": "Only a few will make it out",
+        "mid_overlay_labels": {
+            "remaining": "Remaining",
+            "escaped": "Escaped",
+            "timer": "Time",
+        },
+        "cta_text": "Comment JOIN to be in the next maze",
+        "ending_text": "Comment JOIN to play the next maze",
+        "hook_start_seconds": 0.0,
+        "hook_end_seconds": 1.8,
+        "cta_final_window_seconds": 4.0,
+        "result_hold_seconds": 2.0,
+        "max_duration_seconds": 26.0,
+        "escape_target": 8,
+    },
+    "flappy_followers": {
+        "hook_primary": "{count} players try to survive this Flappy run",
+        "hook_secondary": "Last bird alive wins",
+        "mid_overlay_labels": {
+            "alive": "Alive",
+            "difficulty": "Speed",
+            "timer": "Time",
+        },
+        "cta_text": "Comment JOIN to be in the next flappy run",
+        "ending_text": "Comment JOIN to play the next flappy run",
+        "hook_start_seconds": 0.0,
+        "hook_end_seconds": 1.8,
+        "cta_final_window_seconds": 4.0,
+        "result_hold_seconds": 2.0,
+        "max_duration_seconds": 30.0,
+        "speed_multiplier": 1.12,
+        "gap_scale": 0.94,
+        "start_offset_scale": 0.55,
+    },
+}
+
 # Streaming mode - write frames directly to disk (prevents memory errors for long videos)
 VIDEO_STREAMING_MODE = True  # True = low memory (unlimited length), False = high quality (limited length)
 
@@ -467,7 +603,6 @@ FOLLOWER_IMPORT_FILE_BY_MODE = {
     "subway_followers": "Followers/subway_followers.json",
     "subway_followers_3d": "Followers/subway_followers.json",
     "jetpack_followers": "Followers/club_members_followers.json",
-    "crossy_followers": "Followers/club_members_followers.json",
     "super_follower_bros": "Followers/club_members_followers.json",
     "super_follower_bros_1_2": "Followers/club_members_followers.json",
     "club_duel": "Followers/club_members_followers.json",
@@ -578,6 +713,12 @@ WEBHOOK_LOOKUP_WORKER_TIMEOUT_SECONDS = 60
 WEBHOOK_RESULT_LOOKUP_MAX_CONCURRENCY = 1
 WEBHOOK_LOG_FULL_EVENTS = False
 WEBHOOK_MAX_CONTENT_LENGTH_MB = 1
+
+# Runtime backup behavior:
+# Keep lightweight stats snapshots, but avoid copying giant game_history.json
+# after every completed game.
+STATS_SAVE_CREATE_SNAPSHOT = True
+STATS_SAVE_SNAPSHOT_INCLUDE_GAME_HISTORY = False
 WEBHOOK_THREADED = False
 WEBHOOK_EVENT_QUEUE_MAX = 2000
 WEBHOOK_EVENT_WORKERS = 1
@@ -621,7 +762,7 @@ X_UPLOADER = "api"  # "api" or "safe"
 X_COOKIES_FILE = "x_cookies.json"
 X_HEADLESS = False
 X_USE_NON_IG_VARIANT = True
-X_SAFE_POST_READY_TIMEOUT_SECONDS = 60
+X_SAFE_POST_READY_TIMEOUT_SECONDS = 180
 X_SAFE_POST_CLICK_ATTEMPTS = 4
 X_RETRY_COUNT = 3
 X_TIMEOUT_SECONDS = 120
@@ -748,44 +889,55 @@ FIGHTER_ARENA_LATE_GAME_HP = 40
 
 # ===== FOLLOWERS.IO SETTINGS =====
 FOLLOWERS_IO_ARENA_RECT = FIGHTER_ARENA_RECT
-FOLLOWERS_IO_MAX_GAME_TIME = 720.0
+FOLLOWERS_IO_MAX_GAME_TIME = 240.0
+FOLLOWERS_IO_MAX_RECORDED_PLAY_TIME = 46.0
 
-FOLLOWERS_IO_INITIAL_MASS = 36.0
-FOLLOWERS_IO_MIN_MASS = 8.0
+FOLLOWERS_IO_INITIAL_MASS = 10.0
+FOLLOWERS_IO_MIN_MASS = 4.0
 FOLLOWERS_IO_RADIUS_SCALE = 0.62
-FOLLOWERS_IO_BASE_SPEED = 6.0
-FOLLOWERS_IO_SPEED_EXPONENT = 0.34
-FOLLOWERS_IO_MASS_DECAY_RATE = 0.016
-FOLLOWERS_IO_FOOD_GAIN_RATE = 0.20
+FOLLOWERS_IO_BASE_SPEED = 6.4
+FOLLOWERS_IO_SPEED_EXPONENT = 0.28
+FOLLOWERS_IO_MASS_DECAY_RATE = 0.018
+FOLLOWERS_IO_DECAY_FREE_MASS_MULTIPLIER = 1.25
+FOLLOWERS_IO_FOOD_ORB_MASS = 0.75
 FOLLOWERS_IO_ABSORB_RATIO = 0.90
-FOLLOWERS_IO_EAT_RATIO = 1.12
+FOLLOWERS_IO_EAT_RATIO = 1.10
+FOLLOWERS_IO_CONSUME_OVERLAP_RATIO = 0.22
+FOLLOWERS_IO_PLAYER_GAP = 0.80
 
-FOLLOWERS_IO_SIMPLIFIED_THRESHOLD = 12000
-FOLLOWERS_IO_COLLISION_FULL_THRESHOLD = 6500
-FOLLOWERS_IO_TARGET_DETAILED_UPDATES = 16000
-FOLLOWERS_IO_RANDOM_CONSUMPTION_RATE = 0.020
-FOLLOWERS_IO_RANDOM_CONSUMPTION_MIN = 16
-FOLLOWERS_IO_RANDOM_CONSUMPTION_MAX = 1300
-FOLLOWERS_IO_MAX_DETAILED_CONSUMPTIONS = 1800
+FOLLOWERS_IO_CULL_VIDEO_SECONDS = 8.5
+FOLLOWERS_IO_CULL_PROGRESS_CURVE = 0.72
+FOLLOWERS_IO_CULL_TARGET_ALIVE = 8500
+FOLLOWERS_IO_READABLE_MIN_ALIVE = 5000
+FOLLOWERS_IO_READABLE_MAX_ALIVE = 12000
+FOLLOWERS_IO_READABLE_VISIBILITY_RADIUS = 5.0
+FOLLOWERS_IO_READABLE_ESTIMATE_SCALE = 1.15
+FOLLOWERS_IO_SHOWDOWN_ALIVE = 250
 
-FOLLOWERS_IO_SPLIT_MIN_MASS = 92.0
-FOLLOWERS_IO_SPLIT_COOLDOWN = 2.0
-FOLLOWERS_IO_SPLIT_BOOST_DURATION = 0.55
-FOLLOWERS_IO_SPLIT_BOOST_MULTIPLIER = 1.9
-FOLLOWERS_IO_SPLIT_MASS_COST_RATIO = 0.18
-FOLLOWERS_IO_SPLIT_CHANCE_PER_SECOND = 0.10
+FOLLOWERS_IO_RESEED_MASS_MIN_MULTIPLIER = 0.90
+FOLLOWERS_IO_RESEED_MASS_MAX_MULTIPLIER = 1.25
+FOLLOWERS_IO_RESEED_CLUSTER_MIN_SCALE = 0.62
+FOLLOWERS_IO_RESEED_CLUSTER_MAX_SCALE = 0.94
+FOLLOWERS_IO_RESEED_JITTER = 0.18
 
-FOLLOWERS_IO_EJECT_MIN_MASS = 64.0
-FOLLOWERS_IO_EJECT_MASS_AMOUNT = 2.0
-FOLLOWERS_IO_EJECT_CHANCE_PER_SECOND = 0.35
-FOLLOWERS_IO_EJECT_SPEED = 7.0
+FOLLOWERS_IO_FOOD_DENSITY = 0.35
+FOLLOWERS_IO_FOOD_MIN_COUNT = 600
+FOLLOWERS_IO_FOOD_MAX_COUNT = 1800
 
-FOLLOWERS_IO_MAX_FOOD_PARTICLES = 3000
-FOLLOWERS_IO_FOOD_TTL = 10.0
-FOLLOWERS_IO_FOOD_BANK_RELEASE_RATE = 90.0
+FOLLOWERS_IO_COLLISION_FULL_THRESHOLD = 5000
+FOLLOWERS_IO_TARGET_DETAILED_UPDATES = 6000
+FOLLOWERS_IO_MAX_DETAILED_CONSUMPTIONS = 2200
 
-FOLLOWERS_IO_EXPORT_SPEEDUP_FACTOR = 8.0
-FOLLOWERS_IO_EXPORT_SPEEDUP_END_ALIVE = 500
+FOLLOWERS_IO_CULL_CAPTURE_SPEED = 1.0
+FOLLOWERS_IO_READABLE_CAPTURE_SPEED = 1.0
+FOLLOWERS_IO_SHOWDOWN_CAPTURE_SPEED = 1.0
+
+FOLLOWERS_IO_CAMERA_PADDING = 34
+FOLLOWERS_IO_CAMERA_FOCUS_PADDING = 52
+FOLLOWERS_IO_CAMERA_SMOOTHING = 0.18
+FOLLOWERS_IO_CAMERA_ZOOM_MIN = 1.0
+FOLLOWERS_IO_CAMERA_ZOOM_MAX = 2.2
+FOLLOWERS_IO_LIVE_LEADER_COUNT = 5
 
 FOLLOWERS_IO_BG_COLOR = (232, 239, 244)
 FOLLOWERS_IO_GRID_COLOR = (202, 216, 225)
@@ -794,10 +946,13 @@ FOLLOWERS_IO_FOOD_COLOR = (115, 168, 121)
 FOLLOWERS_IO_GRID_STEP = 32
 
 FOLLOWERS_IO_RENDER_MAX_PLAYERS = 8000
-FOLLOWERS_IO_RENDER_MIN_PLAYERS = 1800
-FOLLOWERS_IO_RENDER_HIGH_POP_THRESHOLD = 50000
-FOLLOWERS_IO_SIMPLE_RENDER_THRESHOLD = 12000
-FOLLOWERS_IO_FOOD_DRAW_LIMIT = 1600
+FOLLOWERS_IO_CULL_RENDER_LIMIT = 3200
+FOLLOWERS_IO_FULL_AVATAR_ALIVE_THRESHOLD = 700
+FOLLOWERS_IO_FOOD_DRAW_LIMIT = 1800
+FOLLOWERS_IO_LEADER_AVATAR_MIN_SIZE = 16
+FOLLOWERS_IO_LEADER_LABEL_FONT_SIZE = 18
+FOLLOWERS_IO_HIGHLIGHT_RING_COLOR = (255, 188, 67)
+FOLLOWERS_IO_HIGHLIGHT_TEXT_COLOR = (20, 20, 20)
 
 FOLLOWERS_IO_DAY_COUNTER_OFFSET = 18
 FOLLOWERS_IO_ELIMINATION_TRACK_LIMIT = 400
@@ -1199,28 +1354,58 @@ CROSSY_ROWS_BEHIND = 10
 CROSSY_CAMERA_ROW_OFFSET = 6.0
 CROSSY_CAMERA_SMOOTH = 7.0
 CROSSY_FALL_BEHIND_ROWS = 4
-CROSSY_MAX_GAME_TIME = 85.0
+CROSSY_MAX_GAME_TIME = 0.0  # <= 0 means no timeout; run until one follower remains
 CROSSY_MOVE_COOLDOWN = 0.25
+CROSSY_MOVE_COOLDOWN_MIN = 0.18
+CROSSY_MOVE_COOLDOWN_MAX = 0.29
 CROSSY_PLAYER_COUNT_MIN = 10
 CROSSY_PLAYER_COUNT_MAX = 20
 CROSSY_PLAYER_RADIUS = 15.0
 CROSSY_PLAYER_SIZE = 30.0
+CROSSY_WRAP_PADDING_LANES = 5.0
+CROSSY_SPAWN_SAFE_ROWS = 4
+CROSSY_DIFFICULTY_RAMP_ROWS = 54
+CROSSY_WATER_UNLOCK_ROWS = 5
+CROSSY_RAIL_UNLOCK_ROWS = 12
+CROSSY_PROGRESS_WEIGHT = 20.0
+CROSSY_PROGRESS_WEIGHT_MIN = 11.0
+CROSSY_STALL_FORCE_MOVE_TIME = 1.0
+CROSSY_STALL_HARD_FORCE_TIME = 2.6
+CROSSY_ROAD_CLUSTER_MIN = 2
+CROSSY_ROAD_CLUSTER_MAX = 3
+CROSSY_WATER_SEQUENCE_EXTEND_CHANCE = 0.42
+CROSSY_PATH_LOOKAHEAD_ROWS = 2
+CROSSY_PATHFINDER_RATIO = 0.05
+CROSSY_FORWARD_BIAS = 2.8
+CROSSY_SIDE_STEP_COST = 0.08
+CROSSY_BACKTRACK_PENALTY = 6.0
+CROSSY_WAIT_PENALTY = 1.9
+CROSSY_FUTURE_ALIGNMENT_WEIGHT = 1.2
+CROSSY_RANDOM_FORWARD_WEIGHT = 0.78
+CROSSY_RANDOM_WAIT_WEIGHT = 0.16
+CROSSY_RANDOM_SIDE_WEIGHT = 0.03
+CROSSY_PACING_GROUP_FRACTION = 0.10
+CROSSY_PACING_TOP_SLOW_MULTIPLIER = 1.16
+CROSSY_PACING_BOTTOM_FAST_MULTIPLIER = 0.86
 
 # Enable true 3D Panda renderer that uses Expo-Crossy-Road OBJ assets.
 # Set False to use the legacy 2D pygame renderer.
 CROSSY_USE_3D_RENDERER = True
-CROSSY_3D_CAMERA_POS = (0.0, -2.9, 2.8)
-CROSSY_3D_CAMERA_LOOK_AT = (0.0, 0.0, 0.0)
-CROSSY_3D_ORTHO_VIEW_HEIGHT = 26.0
-CROSSY_3D_WORLD_EASING = 0.03
-CROSSY_3D_WORLD_X_MIN = -1.0
-CROSSY_3D_WORLD_X_MAX = 1.0
-CROSSY_3D_WORLD_BASE_OFFSET = -3.5
+CROSSY_3D_CAMERA_POS = (0.0, -3.1, 3.05)
+CROSSY_3D_CAMERA_LOOK_AT = (0.0, 0.15, 0.0)
+CROSSY_3D_ORTHO_VIEW_HEIGHT = 23.5
+CROSSY_3D_WORLD_EASING = 0.045
+CROSSY_3D_WORLD_X_MIN = -1.45
+CROSSY_3D_WORLD_X_MAX = 1.45
+CROSSY_3D_WORLD_BASE_OFFSET = -3.9
 CROSSY_3D_ROW_VISUAL_WIDTH = 25.0
 CROSSY_3D_AMBIENT_INTENSITY = 1.8
 CROSSY_3D_DIRECTIONAL_INTENSITY = 1.0
 CROSSY_3D_LIGHT_POS = (20.0, 0.05, 30.0)
 CROSSY_3D_END_SCREEN_DURATION = 5.0
+CROSSY_3D_SYNC_ROWS_BEHIND = 16
+CROSSY_3D_SYNC_ROWS_AHEAD = 36
+CROSSY_3D_SCREEN_CULL_MARGIN = 0.08
 
 CROSSY_BG_COLOR = (164, 197, 226)
 CROSSY_DAY_COUNTER_OFFSET = 60
@@ -1818,6 +2003,12 @@ RACER_STAT_BOOSTS = {
 SNAKE_COUNT = 2                          # Number of snakes in the game
 SNAKE_INITIAL_SPEED = BASE_SPEED * 1.25  # Snake starts ~25% faster than followers
 SNAKE_MAX_SPEED_MULTIPLIER = 2.0         # Maximum speed multiplier (at end of game)
+SNAKE_ESCAPE_SIMPLIFIED_MODE_THRESHOLD = 12000  # Use approximate simulation above this many survivors
+SNAKE_ESCAPE_RANDOM_ELIMINATION_RATE = 0.08     # Fraction of alive followers eliminated per second in simplified mode
+SNAKE_ESCAPE_RENDER_MAX_PLAYERS = 12000         # Render a sampled crowd above this count to keep frames responsive
+SNAKE_ESCAPE_AVATAR_MAX_ALIVE = 1500            # Only show normal avatars once the field is small enough
+SNAKE_ESCAPE_SIMPLE_DOT_RADIUS = 4              # Draw plain dots instead of detailed avatars below this radius
+SNAKE_ESCAPE_SETUP_PROGRESS_INTERVAL = 5000     # Pump events and update loading UI every N spawned followers
 
 # Follower flee behavior
 SNAKE_FLEE_DISTANCE = 150    # Distance at which followers start fleeing from snake

@@ -3,6 +3,12 @@ import math
 
 import config
 from shared import RendererTemplate
+from shared.platform_targets import (
+    format_profile_text,
+    get_youtube_game_profile,
+    is_native_youtube_game,
+    normalize_platform_target,
+)
 
 
 class MazeRushRenderer(RendererTemplate):
@@ -39,6 +45,13 @@ class MazeRushRenderer(RendererTemplate):
         self.header_y_shift = int(getattr(config, "SQUARE_ARENA_HEADER_Y_SHIFT", -4))
         self.prompt_above_arena_margin = int(getattr(config, "MAZE_RUSH_PROMPT_ABOVE_ARENA_MARGIN", 8))
         self.endscreen_y_offset = int(getattr(config, "MAZE_RUSH_ENDSCREEN_Y_OFFSET", 24))
+        self.platform_target = normalize_platform_target(getattr(config, "PLATFORM_TARGET", "instagram"))
+        self.native_youtube_mode = is_native_youtube_game("maze_rush", self.platform_target)
+        self.youtube_profile = get_youtube_game_profile("maze_rush")
+        self.font_youtube_hook = pygame.font.Font(None, 42)
+        self.font_youtube_subhook = pygame.font.Font(None, 28)
+        self.font_youtube_cta = pygame.font.Font(None, 30)
+        self.font_youtube_result = pygame.font.Font(None, 34)
 
         self.club_glow_color = getattr(config, "MAZE_RUSH_CLUB_GLOW_COLOR", (255, 240, 190))
         self.club_glow_alpha = int(getattr(config, "MAZE_RUSH_CLUB_GLOW_ALPHA", 180))
@@ -63,13 +76,18 @@ class MazeRushRenderer(RendererTemplate):
         self._maze_signature = None
 
     def render_frame(self, players, game_state: dict):
+        self._latest_game_state = dict(game_state)
         self.screen.fill(config.COLOR_BACKGROUND)
         self._draw_game_area(players, game_state)
         self._draw_players(players)
-        self._draw_title_and_subtitle()
+        if self.native_youtube_mode:
+            self._draw_youtube_hook(players, game_state)
+        else:
+            self._draw_title_and_subtitle()
         self._draw_day_counter(players, game_state)
         self._draw_game_ui(players, game_state)
-        self._draw_club_panel(game_state)
+        if not self.native_youtube_mode:
+            self._draw_club_panel(game_state)
 
         if game_state.get('show_leaderboards'):
             self._draw_end_game_display(
@@ -77,6 +95,33 @@ class MazeRushRenderer(RendererTemplate):
                 game_state.get('all_time_leaderboard', []),
                 game_state.get('winner')
             )
+
+    def _draw_youtube_hook(self, players, game_state: dict):
+        elapsed = float(game_state.get("elapsed_time") or 0.0)
+        hook_end = float(self.youtube_profile.get("hook_end_seconds", 1.8) or 1.8)
+        if elapsed > hook_end:
+            return
+
+        participant_count = int(game_state.get("requested_count") or len(players) or 0)
+        primary_text = format_profile_text(self.youtube_profile.get("hook_primary"), participant_count)
+        secondary_text = format_profile_text(self.youtube_profile.get("hook_secondary"), participant_count)
+
+        panel_width = int(self.width * 0.84)
+        panel_height = 74 if secondary_text else 52
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 172))
+        panel_rect = panel.get_rect(center=(self.width // 2, max(40, self.game_top - 46)))
+        self.screen.blit(panel, panel_rect)
+
+        if primary_text:
+            primary_surface = self.font_youtube_hook.render(primary_text, True, (255, 255, 255))
+            primary_rect = primary_surface.get_rect(center=(self.width // 2, panel_rect.y + 22))
+            self.screen.blit(primary_surface, primary_rect)
+
+        if secondary_text:
+            secondary_surface = self.font_youtube_subhook.render(secondary_text, True, (255, 220, 120))
+            secondary_rect = secondary_surface.get_rect(center=(self.width // 2, panel_rect.y + panel_height - 18))
+            self.screen.blit(secondary_surface, secondary_rect)
 
     def _draw_title_and_subtitle(self):
         arena_top = self.game_top
@@ -150,7 +195,7 @@ class MazeRushRenderer(RendererTemplate):
 
     def _draw_players(self, players):
         for player in players:
-            if getattr(player, "is_club_member", False):
+            if not self.native_youtube_mode and getattr(player, "is_club_member", False):
                 self._draw_club_glow(player)
             self._draw_player_avatar(player, size=self.player_size)
 
@@ -262,8 +307,11 @@ class MazeRushRenderer(RendererTemplate):
         self.screen.blit(surface, rect)
 
     def _draw_day_counter(self, players, game_state: dict):
-        total_count = len(players)
-        day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
+        total_count = int(game_state.get("requested_count") or len(players) or 0)
+        if self.native_youtube_mode:
+            day_text = f"{total_count:,} players in this maze"
+        else:
+            day_text = f"Day {config.DAY_NUMBER}: {total_count} {self.PLAYER_LABEL}"
         y_pos = int(self.game_bottom + self.day_counter_offset)
         day_surface = self.day_counter_font.render(day_text, True, config.COLOR_TEXT)
         day_rect = day_surface.get_rect(center=(self.width // 2, y_pos))
@@ -272,6 +320,26 @@ class MazeRushRenderer(RendererTemplate):
     def _draw_game_ui(self, players, game_state: dict):
         elapsed = game_state.get("elapsed_time")
         leader_name = game_state.get("leader_name")
+        if self.native_youtube_mode:
+            remaining_count = int(game_state.get("remaining_count") or 0)
+            escaped_count = int(game_state.get("escaped_count") or 0)
+            panel_w = 220
+            panel_h = 76
+            panel_x = self.game_left + 10
+            panel_y = self.game_top + 10
+            panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 118))
+            self.screen.blit(panel, (panel_x, panel_y))
+
+            remaining_surface = self.font_stats.render(f"Remaining: {remaining_count}", True, (255, 255, 255))
+            escaped_surface = self.font_stats.render(f"Escaped: {escaped_count}", True, (255, 255, 255))
+            self.screen.blit(remaining_surface, (panel_x + 12, panel_y + 8))
+            self.screen.blit(escaped_surface, (panel_x + 12, panel_y + 30))
+            if elapsed is not None:
+                time_surface = self.font_small.render(f"Time {elapsed:.1f}s", True, (255, 255, 255))
+                self.screen.blit(time_surface, (panel_x + 12, panel_y + 54))
+            return
+
         if elapsed is None and not leader_name:
             return
 
@@ -292,6 +360,8 @@ class MazeRushRenderer(RendererTemplate):
             self.screen.blit(leader_surface, (panel_x + 12, panel_y + 30))
 
     def _draw_club_panel(self, game_state: dict):
+        if self.native_youtube_mode:
+            return
         if not self.club_panel_enabled:
             return
         spotlight = game_state.get("club_spotlight")
@@ -383,6 +453,57 @@ class MazeRushRenderer(RendererTemplate):
         Maze Rush override:
         Shift winner + leaderboard down so they fit better inside Instagram 1:1 crop.
         """
+        if self.native_youtube_mode:
+            overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 190))
+            self.screen.blit(overlay, (0, 0))
+            latest_state = getattr(self, "_latest_game_state", {}) or {}
+            escaped_count = int(latest_state.get("escaped_count") or 0)
+            participant_count = int(latest_state.get("participant_count") or 0)
+
+            title = self.font_winner.render("MAZE COMPLETE", True, (255, 255, 255))
+            title_rect = title.get_rect(center=(self.width // 2, int(self.height * 0.16)))
+            self.screen.blit(title, title_rect)
+
+            if winner:
+                avatar_size = int(self.width * 0.15)
+                avatar_surface = self._get_avatar_surface(winner, avatar_size)
+                avatar_rect = avatar_surface.get_rect(center=(self.width // 2, int(self.height * 0.31)))
+                self.screen.blit(avatar_surface, avatar_rect)
+
+                winner_surface = self.font_youtube_result.render(
+                    f"Winner: {winner.username}",
+                    True,
+                    (255, 255, 255),
+                )
+                winner_rect = winner_surface.get_rect(center=(self.width // 2, int(self.height * 0.43)))
+                self.screen.blit(winner_surface, winner_rect)
+
+            summary_surface = self.font_youtube_result.render(
+                f"Escaped: {escaped_count}/{participant_count}",
+                True,
+                (255, 255, 255),
+            )
+            summary_rect = summary_surface.get_rect(center=(self.width // 2, int(self.height * 0.50)))
+            self.screen.blit(summary_surface, summary_rect)
+
+            cta_text = str(self.youtube_profile.get("cta_text", "") or "")
+            ending_text = str(self.youtube_profile.get("ending_text", "") or "")
+            if ending_text:
+                ending_surface = self.font_youtube_result.render(ending_text, True, (255, 220, 120))
+                ending_rect = ending_surface.get_rect(center=(self.width // 2, int(self.height * 0.58)))
+                self.screen.blit(ending_surface, ending_rect)
+
+            if cta_text:
+                cta_panel = pygame.Surface((int(self.width * 0.82), 52), pygame.SRCALPHA)
+                cta_panel.fill((255, 255, 255, 24))
+                cta_rect = cta_panel.get_rect(center=(self.width // 2, int(self.height * 0.72)))
+                self.screen.blit(cta_panel, cta_rect)
+                cta_surface = self.font_youtube_cta.render(cta_text, True, (255, 255, 255))
+                cta_text_rect = cta_surface.get_rect(center=cta_rect.center)
+                self.screen.blit(cta_surface, cta_text_rect)
+            return
+
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))

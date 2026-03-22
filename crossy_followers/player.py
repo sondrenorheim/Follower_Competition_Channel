@@ -14,6 +14,9 @@ class CrossyFollower(EntityTemplate):
             self.move_cooldown_min, self.move_cooldown_max = self.move_cooldown_max, self.move_cooldown_min
         self.move_cooldown_min = max(0.05, self.move_cooldown_min)
         self.move_cooldown_max = max(self.move_cooldown_min, self.move_cooldown_max)
+        self.base_move_cooldown_min = self.move_cooldown_min
+        self.base_move_cooldown_max = self.move_cooldown_max
+        self.move_pace_multiplier = 1.0
         self.move_cooldown = (self.move_cooldown_min + self.move_cooldown_max) * 0.5
 
         self.grid_lane = 0
@@ -28,7 +31,6 @@ class CrossyFollower(EntityTemplate):
         day_seed = int(getattr(config, "DAY_NUMBER", 1))
         self.rng = random.Random(self._seed_from_id(self.id) + day_seed * 7919)
         self.decision_jitter = self.rng.uniform(-0.3, 0.3)
-
         self.is_club_member = False
 
     @staticmethod
@@ -64,7 +66,10 @@ class CrossyFollower(EntityTemplate):
         if self.max_row > previous_max:
             self.last_progress_time = float(game_time)
         self.last_move_time = game_time
-        interval = self.rng.uniform(self.move_cooldown_min, self.move_cooldown_max)
+        pace_multiplier = max(0.4, float(getattr(self, "move_pace_multiplier", 1.0)))
+        base_min = max(0.05, float(getattr(self, "base_move_cooldown_min", self.move_cooldown_min)))
+        base_max = max(base_min, float(getattr(self, "base_move_cooldown_max", self.move_cooldown_max)))
+        interval = self.rng.uniform(base_min * pace_multiplier, base_max * pace_multiplier)
         self.move_cooldown = interval
         self.next_move_time = game_time + interval
 

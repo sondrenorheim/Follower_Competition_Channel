@@ -121,7 +121,11 @@ class PlayerStatistics:
             data["players"] = self.stats
 
             results_store.atomic_write_json(self.stats_file, data)
-            results_store.create_snapshot("stats_save", ["game_history.json", self.stats_file])
+            if bool(getattr(config, "STATS_SAVE_CREATE_SNAPSHOT", True)):
+                snapshot_files = [self.stats_file]
+                if bool(getattr(config, "STATS_SAVE_SNAPSHOT_INCLUDE_GAME_HISTORY", False)):
+                    snapshot_files.insert(0, "game_history.json")
+                results_store.create_snapshot("stats_save", snapshot_files)
             print(f"Statistics saved for {len(self.stats)} players")
         except Exception as e:
             print(f"Error saving statistics: {e}")

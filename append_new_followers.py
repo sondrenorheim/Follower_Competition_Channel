@@ -18,7 +18,7 @@ except Exception:
 
 # Paths
 # Path to latest Instagram export to merge in
-NEW_EXPORT_DIR = r"C:\Users\SondreNorheim\Downloads\instagram-followerbattlegrounds-2026-03-07-k1CQRaun\connections\followers_and_following"
+NEW_EXPORT_DIR = r"C:\Users\SondreNorheim\Downloads\instagram-followerbattlegrounds-2026-03-20-LyG7QKk0\connections\followers_and_following"
 EXISTING_FILE = DEFAULT_FOLLOWER_FILE
 _base_name = Path(EXISTING_FILE).stem
 BACKUP_FILE = f"Followers/{_base_name}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
