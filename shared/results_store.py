@@ -24,6 +24,8 @@ from typing import Any, Iterable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKUP_ROOT = REPO_ROOT / "backups" / "game_results"
 EVENTS_ROOT = BACKUP_ROOT / "events"
+EVENT_GAMES_ROOT = EVENTS_ROOT / "games"
+EVENT_DAYS_ROOT = EVENTS_ROOT / "days"
 SNAPSHOTS_ROOT = BACKUP_ROOT / "snapshots"
 MANIFESTS_ROOT = BACKUP_ROOT / "manifests"
 EVENTS_INDEX_PATH = MANIFESTS_ROOT / "events_index.jsonl"
@@ -33,6 +35,8 @@ RECOVERY_LOG_PATH = REPO_ROOT / "logs" / "results_integrity" / "recovery.log"
 
 def _ensure_store_dirs() -> None:
     EVENTS_ROOT.mkdir(parents=True, exist_ok=True)
+    EVENT_GAMES_ROOT.mkdir(parents=True, exist_ok=True)
+    EVENT_DAYS_ROOT.mkdir(parents=True, exist_ok=True)
     SNAPSHOTS_ROOT.mkdir(parents=True, exist_ok=True)
     MANIFESTS_ROOT.mkdir(parents=True, exist_ok=True)
     RECOVERY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -268,7 +272,88 @@ def append_game_event(game_record: dict[str, Any]) -> Path | None:
         "line_size": len(encoded_line),
     }
     _append_jsonl(EVENTS_INDEX_PATH, manifest_entry)
+    _write_event_game_cache(game_record)
+    _update_event_day_summary(game_record)
     return event_file
+
+
+def _write_event_game_cache(game_record: dict[str, Any]) -> Path | None:
+    game_id = str(game_record.get("game_id") or "").strip()
+    if not game_id:
+        return None
+    target = EVENT_GAMES_ROOT / f"{game_id}.json"
+    atomic_write_json(target, game_record)
+    return target
+
+
+def _build_day_summary_entry(game_record: dict[str, Any]) -> dict[str, Any] | None:
+    game_id = str(game_record.get("game_id") or "").strip()
+    game_type = str(game_record.get("game_type") or "").strip()
+    if not game_id or not game_type:
+        return None
+    total_participants = game_record.get("total_participants")
+    if total_participants in (None, ""):
+        results = game_record.get("results")
+        if isinstance(results, list):
+            total_participants = len(results)
+    entry = {
+        "game_id": game_id,
+        "game_type": game_type,
+        "game_display_name": game_record.get("game_display_name"),
+        "timestamp": game_record.get("timestamp"),
+        "total_participants": total_participants,
+        "non_scoring": bool(game_record.get("non_scoring", False)),
+    }
+    return entry
+
+
+def _update_event_day_summary(game_record: dict[str, Any]) -> Path | None:
+    day_number = game_record.get("day_number")
+    try:
+        day_value = int(day_number)
+    except Exception:
+        return None
+
+    entry = _build_day_summary_entry(game_record)
+    if entry is None:
+        return None
+
+    target = EVENT_DAYS_ROOT / f"{day_value}.json"
+    existing = _load_json(target)
+    if not isinstance(existing, dict):
+        existing = {
+            "day_number": day_value,
+            "total_games": 0,
+            "games": [],
+        }
+
+    games = []
+    seen_game_ids = set()
+    replaced = False
+    for payload in list(existing.get("games") or []):
+        if not isinstance(payload, dict):
+            continue
+        existing_game_id = str(payload.get("game_id") or "").strip()
+        if not existing_game_id or existing_game_id in seen_game_ids:
+            continue
+        if existing_game_id == entry["game_id"]:
+            games.append(entry)
+            replaced = True
+        else:
+            games.append(payload)
+        seen_game_ids.add(existing_game_id)
+
+    if not replaced:
+        games.append(entry)
+
+    games.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("game_id") or "")))
+    summary = {
+        "day_number": day_value,
+        "total_games": len(games),
+        "games": games,
+    }
+    atomic_write_json(target, summary)
+    return target
 
 
 def _snapshot_file_candidates(filename: str) -> list[Path]:

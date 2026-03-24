@@ -1825,6 +1825,32 @@ def _event_files_desc() -> list[Path]:
     return files
 
 
+def _event_game_cache_path(game_id: str) -> Path:
+    return WEBHOOK_EVENTS_DIR / "games" / f"{str(game_id or '').strip()}.json"
+
+
+def _event_day_cache_path(day_number: int) -> Path:
+    return WEBHOOK_EVENTS_DIR / "days" / f"{int(day_number)}.json"
+
+
+def _load_day_summary_from_event_cache(day_number: int):
+    cache_key = int(day_number)
+    cached_payload = load_json_file(_event_day_cache_path(cache_key))
+    if isinstance(cached_payload, dict):
+        return cached_payload
+    return None
+
+
+def _load_game_results_from_event_cache(game_id: str):
+    game_key = str(game_id or "").strip()
+    if not game_key:
+        return None
+    cached_payload = load_json_file(_event_game_cache_path(game_key))
+    if isinstance(cached_payload, dict) and str(cached_payload.get("game_id") or "").strip() == game_key:
+        return cached_payload
+    return None
+
+
 def _cache_set_lru(cache: OrderedDict, key, value, max_entries: int) -> None:
     try:
         limit = int(max_entries)
@@ -1845,6 +1871,11 @@ def _load_day_summary_from_events(day_number: int):
     if cached is not None:
         _EVENT_DAY_SUMMARY_CACHE.move_to_end(cache_key)
         return cached
+
+    cached_payload = _load_day_summary_from_event_cache(cache_key)
+    if isinstance(cached_payload, dict):
+        _cache_set_lru(_EVENT_DAY_SUMMARY_CACHE, cache_key, cached_payload, WEBHOOK_EVENTS_DAY_CACHE_MAX)
+        return cached_payload
 
     files = _event_files_desc()
     if not files:
@@ -1951,6 +1982,19 @@ def _load_game_results_from_events(game_id: str):
         value = _EVENT_GAME_RESULTS_CACHE.get(game_key)
         _EVENT_GAME_RESULTS_CACHE.move_to_end(game_key)
         return value
+
+    cache_payload = _load_game_results_from_event_cache(game_key)
+    if isinstance(cache_payload, dict) and str(cache_payload.get("game_id") or "").strip() == game_key:
+        if _should_cache_game_results_payload(cache_payload):
+            compact_payload = _compact_game_payload_for_cache(cache_payload)
+            _cache_set_lru(
+                _EVENT_GAME_RESULTS_CACHE,
+                game_key,
+                compact_payload,
+                WEBHOOK_EVENTS_GAME_CACHE_MAX,
+            )
+            return compact_payload
+        return cache_payload
 
     files = _event_files_desc()
     if not files:
@@ -2091,6 +2135,8 @@ def load_day_summary(day_number):
     payload = None
     if _local_history_enabled():
         payload = _build_day_summary_from_history(key)
+    if payload is None:
+        payload = _load_day_summary_from_event_cache(key)
     if payload is None:
         payload = load_json_file(DATA_ROOT / "days" / f"{key}.json")
     if payload is None:
@@ -2701,6 +2747,9 @@ def load_game_results(game_id):
         game = _LOCAL_GAME_INDEX.get(game_id)
         if isinstance(game, dict):
             return game
+    payload = _load_game_results_from_event_cache(game_id)
+    if isinstance(payload, dict):
+        return payload
     payload = load_json_file(DATA_ROOT / "games" / f"{game_id}.json")
     if isinstance(payload, dict):
         return payload
@@ -3550,14 +3599,28 @@ def _resolve_media_game_day(media_id):
     if not media_id:
         return None, None, None, "missing_media_id"
 
-    cached = _lookup_media_mapping(media_id)
-    if cached:
+    def _cached_mapping_result(media_meta=None):
+        cached_payload = _lookup_media_mapping(media_id)
+        if not cached_payload:
+            return None
         return (
-            cached.get("game_type"),
-            cached.get("day_number"),
-            None,
-            f"cache:{cached.get('source', 'cache')}",
+            cached_payload.get("game_type"),
+            cached_payload.get("day_number"),
+            media_meta,
+            f"cache:{cached_payload.get('source', 'cache')}",
         )
+
+    cached_result = _cached_mapping_result()
+    if cached_result:
+        return cached_result
+
+    # Recent-post backfill is the most reliable fix for fresh reels whose
+    # media ids have not been seen before. The helper already self-throttles.
+    _backfill_media_mapping_from_recent_media(force=False)
+    cached_result = _cached_mapping_result()
+    if cached_result:
+        print(f"Resolved Instagram media {media_id} from recent-media backfill")
+        return cached_result
 
     media_meta = fetch_media_metadata(media_id)
     caption = media_meta.get("caption")
@@ -3611,6 +3674,15 @@ def _resolve_media_game_day(media_id):
     if game_type and day_number:
         _remember_media_mapping(media_id, game_type, day_number, source)
         return game_type, day_number, media_meta, source
+
+    # A direct metadata lookup can still miss very fresh reels. Force one more
+    # recent-media refresh before giving up so the next reply does not depend
+    # on comment-time caption fetch succeeding.
+    _backfill_media_mapping_from_recent_media(force=True)
+    cached_result = _cached_mapping_result(media_meta)
+    if cached_result:
+        print(f"Resolved Instagram media {media_id} from forced recent-media backfill")
+        return cached_result
 
     return game_type, day_number, media_meta, "unresolved"
 

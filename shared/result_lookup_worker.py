@@ -13,6 +13,10 @@ def _load_json(path: Path):
         return None
 
 
+def _event_game_cache_path(events_dir: Path, game_id: str) -> Path:
+    return events_dir / "games" / f"{str(game_id or '').strip()}.json"
+
+
 def _lookup_in_payload(payload, candidates):
     if not isinstance(payload, dict):
         return {
@@ -78,6 +82,9 @@ def _lookup_in_payload(payload, candidates):
 def _latest_game_payload_from_events(events_dir: Path, game_id: str, scan_max_files: int):
     if not events_dir.exists():
         return None
+    cache_payload = _load_json(_event_game_cache_path(events_dir, game_id))
+    if isinstance(cache_payload, dict) and str(cache_payload.get("game_id") or "").strip() == str(game_id or "").strip():
+        return cache_payload
     try:
         files = sorted(
             events_dir.rglob("*.ndjson"),
@@ -161,4 +168,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
