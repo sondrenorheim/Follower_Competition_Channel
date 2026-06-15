@@ -10,6 +10,10 @@ const staticPublicAssets = [
   'club_avatars',
 ]
 
+const staticPublicDirectoryCopies = [
+  ['api_slim', 'api'],
+]
+
 function copyStaticPublicAssets() {
   return {
     name: 'copy-static-public-assets',
@@ -20,6 +24,13 @@ function copyStaticPublicAssets() {
         const source = join('public', asset)
         if (!existsSync(source)) continue
         const target = join(outDir, asset)
+        mkdirSync(dirname(target), { recursive: true })
+        cpSync(source, target, { recursive: true })
+      }
+      for (const [sourceName, targetName] of staticPublicDirectoryCopies) {
+        const source = join('public', sourceName)
+        if (!existsSync(source)) continue
+        const target = join(outDir, targetName)
         mkdirSync(dirname(target), { recursive: true })
         cpSync(source, target, { recursive: true })
       }
